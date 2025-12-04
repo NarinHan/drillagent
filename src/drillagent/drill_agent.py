@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 from drillagent.config import AgentConfig, AnalysisState
+from drillagent.models import LLM
 
 
 class DrillAgent:
@@ -51,13 +52,18 @@ class DrillAgent:
         """Initialize all required components"""
         self.logger.info("Initializing components...")
 
-        # TODO: Initialize LLM interface
-        # self.llm = ModelFactory.create(
-        #     provider=self.config.model_provider,
-        #     model_name=self.config.model_name,
-        #     api_key=self.config.api_key
-        # )
-        self.llm = None  # Placeholder
+        # Initialize LLM interface
+        try:
+            self.logger.info(f"Initializing {self.config.model_provider} LLM...")
+            self.llm = LLM(
+                provider=self.config.model_provider,
+                model_name=self.config.model_name,
+                api_key=self.config.api_key
+            )
+            self.logger.info(f"✓ LLM initialized: {self.llm.provider}/{self.llm.model_name}")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize LLM: {e}")
+            self.llm = None
 
         # TODO: Initialize instrumentation components
         # self.coverage_instrument = CoverageInstrument() if self.config.enable_coverage else None
