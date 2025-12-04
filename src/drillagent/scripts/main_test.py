@@ -26,22 +26,26 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Analyze a repository with default settings
-  python main.py /path/to/repo --cve CVE-2024-1234
+  # Test loading all SEC-bench tasks
+  python main_test.py --test-loader datasets/sec-bench/CVE-instances
 
-  # Use OpenAI model with custom output directory
-  python main.py /path/to/repo --model openai --output ./results
+  # Test loading specific instances only
+  python main_test.py --test-loader datasets/sec-bench/CVE-instances --instances libplist.cve-2017-5545 gpac.cve-2023-4682
+
+  # Analyze a repository with default settings
+  python main_test.py /path/to/repo --cve CVE-2024-1234
 
   # Interactive mode for debugging
-  python main.py /path/to/repo --interactive
+  python main_test.py /path/to/repo --interactive
 
-For more information, see: https://github.com/yourusername/DrillAgent
+For more information, see: https://github.com/learjet5/DrillAgent
         """
     )
 
-    # Required arguments
+    # Required arguments (optional when using --test-loader)
     parser.add_argument(
         "target_repo",
+        nargs='?',
         help="Path to target repository or binary"
     )
 
@@ -133,12 +137,65 @@ For more information, see: https://github.com/yourusername/DrillAgent
         help="Start in interactive mode"
     )
 
+    # Test mode for RawSecbTaskLoader
+    parser.add_argument(
+        "--test-loader",
+        dest="test_loader_path",
+        help="Test RawSecbTaskLoader with the given dataset path (e.g., datasets/sec-bench/CVE-instances/)"
+    )
+
+    parser.add_argument(
+        "--instances",
+        nargs='+',
+        help="Specific instance IDs to load when testing loader (e.g., libplist.cve-2017-5545)"
+    )
+
     return parser.parse_args()
+
+
+def test_task_loader(dataset_path: str, instance_ids: list = None):
+    """Test the RawSecbTaskLoader functionality"""
+    print("\n" + "="*60)
+    print("Testing RawSecbTaskLoader")
+    print("="*60)
+
+    # Create loader
+    loader = RawSecbTaskLoader(dataset_path, instance_ids)
+
+    # Load tasks
+    tasks = loader.load_cve_tasks()
+
+    # Print statistics
+    print(f"\n[+] Total tasks loaded: {len(tasks)}")
+
+    if len(tasks) > 0:
+        # Show first few instance IDs
+        all_ids = loader.get_all_instance_ids()
+        print(f"[+] Instance IDs (showing first 5): {all_ids[:5]}")
+
+        # Print detailed summary for the first task
+        first_id = all_ids[0]
+        loader.print_task_summary(first_id)
+
+        # If specific instances were requested, show all of them
+        if instance_ids:
+            for instance_id in instance_ids:
+                loader.print_task_summary(instance_id)
 
 
 def main():
     """Main entry point for DrillAgent CLI"""
     args = parse_arguments()
+
+    # Test mode: just test the RawSecbTaskLoader
+    if args.test_loader_path:
+        test_task_loader(args.test_loader_path, args.instances)
+        return
+
+    # Validate required arguments for normal mode
+    if not args.target_repo:
+        print("Error: target_repo is required (unless using --test-loader)")
+        sys.exit(1)
 
     # Create configuration from arguments
     config = AgentConfig(
