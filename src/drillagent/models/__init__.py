@@ -1,10 +1,9 @@
 """
 Models Module
 
-This module contains LLM model interfaces for different providers (Claude, OpenAI, Google).
+This module contains LLM model interfaces for different providers (Claude, OpenAI).
 """
 
-# TODO: Import model factory and implementations once created
-# from .factory import ModelFactory
+from .llm import LLM
 
-__all__ = []
+__all__ = ["LLM"]

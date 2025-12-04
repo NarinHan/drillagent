@@ -17,8 +17,8 @@ class AgentConfig:
     cve_id: Optional[str] = None
 
     # LLM configuration
-    model_provider: str = "claude"  # claude, openai, google
-    model_name: str = "claude-sonnet-4"
+    model_provider: str = "claude"  # claude or openai
+    model_name: str = "claude-3-7-sonnet-20250219"
     api_key: Optional[str] = None
 
     # Instrumentation options

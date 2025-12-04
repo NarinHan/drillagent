@@ -1,0 +1,6 @@
+# LLM Providers
+anthropic>=0.18.0  # For Claude
+openai>=1.0.0      # For OpenAI
+
+# Testing
+pytest>=7.4.0
