@@ -1,3 +1,11 @@
+# Customized Items
+.claude/
+openai.key
+
+# 
+# Below contents are from the Github template
+# 
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
