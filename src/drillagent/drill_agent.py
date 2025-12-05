@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-DrillAgent Core Module
-"""
-
 import logging
 import sys
 from pathlib import Path

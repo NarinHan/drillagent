@@ -1,6 +1,7 @@
 # Customized Items
 .claude/
 openai.key
+src/drillagent/scripts/lhy_test.py
 
 # 
 # Below contents are from the Github template
