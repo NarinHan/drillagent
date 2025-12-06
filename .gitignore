@@ -3,6 +3,7 @@
 openai.key
 src/drillagent/scripts/lhy_test.py
 .env
+test_output/
 
 # AFLGO agent
 instrumented/

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from drillagent.config import AgentConfig, AnalysisState
 from drillagent.models import LLM
+from drillagent.instrumentation import ConfigGeneratorAgent
 
 
 class DrillAgent:
@@ -34,6 +35,9 @@ class DrillAgent:
     def _setup_logger(self) -> logging.Logger:
         """Setup logging for DrillAgent"""
         # TODO: Use utils.logger.setup_logger once implemented
+        # Ensure output directory exists
+        Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
+        
         logging.basicConfig(
             level=logging.DEBUG if self.config.verbose else logging.INFO,
             format='[%(asctime)s] %(levelname)s - %(message)s',
@@ -61,12 +65,32 @@ class DrillAgent:
             self.logger.error(f"Failed to initialize LLM: {e}")
             self.llm = None
 
-        # TODO: Initialize instrumentation components
-        # self.coverage_instrument = CoverageInstrument() if self.config.enable_coverage else None
-        # self.distance_calculator = DistanceCalculator() if self.config.enable_distance else None
-        # self.memory_sanitizer = MemorySanitizer() if self.config.enable_sanitizer else None
+        # Initialize instrumentation components
+        # Coverage instrumentation (TODO)
         self.coverage_instrument = None
-        self.distance_calculator = None
+        
+        # Distance calculator using ConfigGeneratorAgent
+        if self.config.enable_distance:
+            try:
+                self.logger.info("Initializing ConfigGeneratorAgent for distance calculation...")
+                # Get project root to locate SEC-bench data
+                project_root = Path(__file__).resolve().parent.parent.parent
+                secbench_dir = project_root / 'datasets' / 'sec-bench'
+                
+                self.config_generator = ConfigGeneratorAgent(
+                    llm_provider=self.config.model_provider,
+                    llm_model=self.config.model_name,
+                    api_key=self.config.api_key,
+                    secbench_dir=secbench_dir
+                )
+                self.logger.info("✓ ConfigGeneratorAgent initialized")
+            except Exception as e:
+                self.logger.error(f"Failed to initialize ConfigGeneratorAgent: {e}")
+                self.config_generator = None
+        else:
+            self.config_generator = None
+        
+        # Memory sanitizer (TODO)
         self.memory_sanitizer = None
 
         # TODO: Initialize PoV analysis components
@@ -126,10 +150,36 @@ class DrillAgent:
             self.logger.info("    TODO: Implement coverage instrumentation")
 
         # Step 2: Calculate distance file for guided fuzzing
-        if self.config.enable_distance:
-            self.logger.info("  - Calculating distance file...")
-            # distance_file = self.distance_calculator.calculate(self.config.target_repo)
-            self.logger.info("    TODO: Implement distance calculation")
+        if self.config.enable_distance and self.config_generator:
+            self.logger.info("  - Generating AFLGo configuration...")
+            try:
+                # Get project root for paths
+                project_root = Path(__file__).resolve().parent.parent.parent
+                
+                # Determine CVE instance path
+                if self.config.cve_id:
+                    # Try to find CVE instance from SEC-bench data
+                    instance_path = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f"{self.config.cve_id}.json"
+                    
+                    if instance_path.exists():
+                        # Generate config for AFLGo instrumentation
+                        output_dir = Path(self.config.output_dir) / 'configs'
+                        output_path = output_dir / f"{self.config.cve_id}.yaml"
+                        
+                        self.logger.info(f"    Generating config from: {instance_path.name}")
+                        config_yaml = self.config_generator.generate_config(instance_path, output_path)
+                        
+                        # Store config path in state for later use
+                        self.state.aflgo_config_path = str(output_path)
+                        self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
+                    else:
+                        self.logger.warning(f"    CVE instance not found: {instance_path}")
+                        self.logger.info("    Skipping config generation")
+                else:
+                    self.logger.warning("    No CVE ID provided, skipping config generation")
+            except Exception as e:
+                self.logger.error(f"    Failed to generate AFLGo config: {e}")
+                self.state.errors.append(f"Config generation failed: {e}")
 
         # Step 3: Build with memory sanitizer
         if self.config.enable_sanitizer:

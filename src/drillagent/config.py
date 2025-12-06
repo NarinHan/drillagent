@@ -53,3 +53,4 @@ class AnalysisState:
     pov_candidates: List[Dict] = field(default_factory=list)
     iteration: int = 0
     errors: List[str] = field(default_factory=list)
+    aflgo_config_path: Optional[str] = None  # Path to generated AFLGo config
