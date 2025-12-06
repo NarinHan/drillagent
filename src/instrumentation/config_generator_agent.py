@@ -23,18 +23,28 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
-try:
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    print("Warning: openai package not installed. Install with: pip install openai")
-
+# Load .env file before anything else
 try:
     from dotenv import load_dotenv
-    DOTENV_AVAILABLE = True
+    # Try multiple locations for .env file
+    project_root = Path(__file__).resolve().parent.parent.parent
+    env_paths = [
+        project_root / '.env',
+        project_root.parent / '.env',  # One level up from src
+        Path.cwd() / '.env',
+    ]
+    for env_path in env_paths:
+        if env_path.exists():
+            load_dotenv(env_path)
+            break
+    else:
+        load_dotenv()  # Try default search
 except ImportError:
-    DOTENV_AVAILABLE = False
+    pass  # python-dotenv not installed
+
+# Import DrillAgent's LLM interface
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from drillagent.models.llm import LLM
 
 
 @dataclass
@@ -43,10 +53,8 @@ class CVEInstance:
     instance_id: str
     repo: str
     project_name: str
-    lang: str
     base_commit: str
     build_sh: str
-    patch: str
     sanitizer_report: Optional[str]
     bug_description: Optional[str]
     secb_sh: Optional[str] = None
@@ -58,114 +66,12 @@ class CVEInstance:
             instance_id=data['instance_id'],
             repo=data['repo'],
             project_name=data['project_name'],
-            lang=data.get('lang', 'c++'),
             base_commit=data['base_commit'],
             build_sh=data.get('build_sh', ''),
-            patch=data.get('patch', ''),
             sanitizer_report=data.get('sanitizer_report'),
             bug_description=data.get('bug_description'),
             secb_sh=data.get('secb_sh')
         )
-
-
-class LLMInterface:
-    """Interface to LLM for config generation"""
-    
-    def __init__(self, model: str = "gpt-5.1", api_key: Optional[str] = None):
-        self.model = model
-        
-        # Load .env file if available
-        if DOTENV_AVAILABLE:
-            env_path = Path.home() / 'cs562' / '.env'
-            if env_path.exists():
-                load_dotenv(env_path)
-            else:
-                load_dotenv()
-        
-        # Get API key
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
-        self.use_openai = OPENAI_AVAILABLE and self.api_key
-        
-        if self.use_openai:
-            self.client = openai.OpenAI(api_key=self.api_key)
-            print(f"Using OpenAI model: {self.model}")
-        else:
-            self.client = None
-            if not OPENAI_AVAILABLE:
-                print("OpenAI package not available")
-            elif not self.api_key:
-                print("No OpenAI API key found. Set OPENAI_API_KEY or use .env file")
-            print("Using rule-based fallback logic")
-    
-    def query(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Query the LLM with a prompt"""
-        if self.use_openai:
-            try:
-                return self._query_openai(prompt, system_prompt)
-            except Exception as e:
-                print(f"OpenAI API error: {e}")
-                print("Falling back to rule-based logic")
-                return self._fallback_logic(prompt)
-        else:
-            return self._fallback_logic(prompt)
-    
-    def _query_openai(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Query OpenAI API"""
-        messages = []
-        
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        
-        messages.append({"role": "user", "content": prompt})
-        
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.3,  # Lower temperature for more consistent configs
-            max_completion_tokens=2048,
-        )
-        
-        return response.choices[0].message.content
-    
-    def _fallback_logic(self, prompt: str) -> str:
-        """Fallback when LLM is not available"""
-        # Extract basic info from prompt
-        config = {
-            "repo_url": "",
-            "commit_id": "",
-            "cve_id": "",
-            "binary_name": "",
-            "build_config": {},
-            "log_level": "INFO"
-        }
-        
-        # Try to extract values from prompt
-        if "repo:" in prompt:
-            repo_match = re.search(r'repo:\s*([^\s]+)', prompt)
-            if repo_match:
-                repo = repo_match.group(1)
-                config['repo_url'] = f"https://github.com/{repo}.git"
-                config['binary_name'] = repo.split('/')[-1]
-        
-        if "base_commit:" in prompt:
-            commit_match = re.search(r'base_commit:\s*([a-f0-9]+)', prompt)
-            if commit_match:
-                config['commit_id'] = commit_match.group(1)
-        
-        if "instance_id:" in prompt:
-            id_match = re.search(r'instance_id:\s*([^\s]+)', prompt)
-            if id_match:
-                instance_id = id_match.group(1)
-                cve_part = instance_id.split('.', 1)[-1]
-                config['cve_id'] = cve_part.upper().replace('.', '-')
-        
-        # Detect build system
-        if 'cmake' in prompt.lower():
-            config['build_config']['cmake_args'] = ""
-        elif 'configure' in prompt.lower() or 'autotools' in prompt.lower():
-            config['build_config']['configure_args'] = ""
-        
-        return json.dumps(config, indent=2)
 
 
 class ConfigGeneratorAgent:
@@ -186,29 +92,22 @@ repo_url: "https://github.com/<owner>/<repo>.git"
 commit_id: "<base_commit_hash>"  # The vulnerable version to instrument
 cve_id: "<CVE-YYYY-NNNNN>"
 
-# Directory paths (usually these defaults are fine)
-aflgo_dir: "/home/ray/cs562/fuzzing/aflgo"
-repos_dir: "/home/ray/cs562/repos"
-temps_dir: "/home/ray/cs562/fuzzing/temps"
+# Directory paths (relative to workspace root or absolute)
+repos_dir: "repos"           # or absolute path
+temps_dir: "fuzzing/temps"   # or absolute path
 
 # Binary name (target executable to fuzz)
 binary_name: "<executable_name>"
+binary_path: "<full_path_to_binary>"  # Full path from secb_sh
+
+# Sanitizer report for target extraction
+sanitizer_report: "<sanitizer_report_content>"
 
 # Build configuration
 build_config:
-  # For CMake projects:
-  cmake_args: "<cmake arguments>"
-  
-  # For autotools projects:
-  configure_args: "<configure arguments>"
-  
-  # Build commands from SEC-bench (for LLM guidance)
+  # Exact build commands from SEC-bench build_sh field
   build_commands: |
-    <actual build script from SEC-bench>
-  
-  # Additional flags
-  cflags: ""
-  ldflags: ""
+    <exact build script from SEC-bench build_sh field>
 
 # Logging
 log_level: "INFO"
@@ -222,22 +121,18 @@ log_file: "aflgo_<project>.log"
    - AFLGo will instrument this version directly for directed fuzzing
    - Do NOT try to find or use the patch commit
 
-2. **binary_name**: Determine from:
-   - The build script (look for what gets compiled)
-   - The repro command in secb_sh
-   - The project name (often matches)
-   - Sanitizer report paths
+2. **binary_name and binary_path**: Extract from secb_sh repro command.
+   - binary_name: just the executable name (e.g., "exiv2")
+   - binary_path: full path to the binary (e.g., "/src/exiv2/build/bin/exiv2")
+
+3. **sanitizer_report**: Copy the EXACT content from the sanitizer_report field.
+   - This contains the stack trace used for target extraction
+   - Include it verbatim as a multi-line YAML string
    
-3. **Build system detection**:
-   - CMake: Look for "cmake" in build_sh
-   - Autotools: Look for "configure", "autoreconf", "./configure" in build_sh
-   - Make: Look for just "make" in build_sh
-   
-4. **Build arguments**: Extract from build_sh script:
-   - CMake: arguments after "cmake"
-   - Configure: arguments after "./configure"
-   - Common: --with-oniguruma=builtin, -DBUILD_SHARED_LIBS=OFF, etc.
-   - Also include the FULL build_sh content in build_commands field for LLM guidance
+4. **build_commands**: Use the EXACT content from the build_sh field.
+   - Do NOT modify or analyze it
+   - Copy it verbatim into the build_config.build_commands field
+   - This is the complete build script that will be executed
 
 5. **Response format**: Return ONLY valid YAML, no markdown code blocks, no explanations.
    Start directly with the comment line.
@@ -246,12 +141,20 @@ log_file: "aflgo_<project>.log"
 """
     
     def __init__(self, 
-                 llm_model: str = "gpt-5.1",
+                 llm_provider: str = "openai",
+                 llm_model: str = "gpt-4-turbo",
                  api_key: Optional[str] = None,
                  secbench_dir: Path = None):
         
-        self.llm = LLMInterface(model=llm_model, api_key=api_key)
-        self.secbench_dir = secbench_dir or Path('/home/ray/cs562/SEC-bench-data')
+        # Initialize DrillAgent LLM interface
+        self.llm = LLM(provider=llm_provider, model_name=llm_model, api_key=api_key)
+        
+        # Default to relative path from project root
+        if secbench_dir is None:
+            project_root = Path(__file__).resolve().parent.parent.parent
+            self.secbench_dir = project_root / 'datasets' / 'sec-bench'
+        else:
+            self.secbench_dir = secbench_dir
         self.instances_dir = self.secbench_dir / 'CVE-instances'
         
         # Setup logging
@@ -267,118 +170,36 @@ log_file: "aflgo_<project>.log"
             data = json.load(f)
         return CVEInstance.from_json(data)
     
-    def find_patch_commit(self, cve: CVEInstance) -> Optional[str]:
-        """Try to extract patch commit from patch data"""
-        # Look for commit hash in patch header
-        # Git patches often have: "From <commit_hash>"
-        if cve.patch:
-            # Try to find commit hash in patch
-            commit_match = re.search(r'From ([a-f0-9]{40})', cve.patch)
-            if commit_match:
-                return commit_match.group(1)
-            
-            # Sometimes patches have commit references in comments
-            commit_match = re.search(r'commit ([a-f0-9]{40})', cve.patch, re.IGNORECASE)
-            if commit_match:
-                return commit_match.group(1)
+    def extract_binary_name(self, cve: CVEInstance) -> tuple[str, str]:
+        """Extract binary name and path from secb_sh repro script
         
-        return None
-    
-    def extract_binary_name(self, cve: CVEInstance) -> str:
-        """Extract binary name from CVE data"""
+        Returns:
+            tuple: (binary_name, binary_path) e.g., ('exiv2', '/src/exiv2/build/bin/exiv2')
+        """
         
-        # Try from secb_sh repro script - most reliable
-        if cve.secb_sh:
-            # Look for repro() function execution paths like /src/faad2/frontend/faad
-            # Pattern: /src/<project>/path/to/binary_name followed by space or args
-            match = re.search(r'/src/[^/]+/(?:frontend/|build/|bin/|\.libs/)?(\w+)(?:\s|$)', cve.secb_sh)
-            if match:
-                binary = match.group(1)
-                # Skip common directory names
-                if binary not in ['bin', 'build', 'frontend', 'libs']:
-                    return binary
+        if not cve.secb_sh:
+            raise ValueError(f"No secb_sh field found for {cve.instance_id}")
         
-        # Try from bug description - look for execution commands
-        if cve.bug_description:
-            # Look for ./binary_name pattern
-            match = re.search(r'(?:^|\s)\./([\w-]+)(?:\s|$)', cve.bug_description, re.MULTILINE)
-            if match:
-                binary = match.group(1)
-                if binary not in ['configure', 'build', 'bootstrap']:
-                    return binary
+        # Look for repro() function execution paths like /src/faad2/frontend/faad
+        # Pattern: /src/<project>/...path.../binary_name followed by space, arg, or end of line
+        # Need to handle paths that may have multiple directory levels (build/bin/, frontend/, .libs/, etc.)
+        match = re.search(r'(/src/[^/]+/(?:[^/\s]+/)*(?:frontend/|build/bin/|build/|bin/|\.libs/)?([a-zA-Z0-9_-]+))(?:\s|$)', cve.secb_sh)
+        if match:
+            full_path = match.group(1)
+            binary = match.group(2)
+            # Skip common directory names
+            if binary not in ['bin', 'build', 'frontend', 'libs', 'src']:
+                return binary, full_path
         
-        # Try from sanitizer report stack traces
-        if cve.sanitizer_report:
-            # Look for binary names in paths like /usr/local/faad-asan/bin/faad
-            match = re.search(r'/bin/([\w-]+)\+', cve.sanitizer_report)
-            if match:
-                return match.group(1)
-            # Also try frontend paths
-            match = re.search(r'/frontend/\.(libs|)/(\w+)\+', cve.sanitizer_report)
-            if match:
-                return match.group(2)
-        
-        # Try from build script
-        if cve.build_sh:
-            # Look for executable names after -o flag
-            match = re.search(r'-o\s+([^\s/]+)', cve.build_sh)
-            if match:
-                return match.group(1)
-        
-        # Default to project name
-        return cve.project_name
-    
-    def analyze_build_system(self, cve: CVEInstance) -> Dict[str, any]:
-        """Analyze build system and extract configuration"""
-        build_info = {
-            'type': 'unknown',
-            'args': {}
-        }
-        
-        if not cve.build_sh:
-            return build_info
-        
-        build_lower = cve.build_sh.lower()
-        
-        # Always include the full build script for LLM guidance
-        build_info['args']['build_commands'] = cve.build_sh.strip()
-        
-        # Detect build system
-        if 'cmake' in build_lower:
-            build_info['type'] = 'cmake'
-            # Extract cmake arguments
-            cmake_match = re.search(r'cmake\s+([^\n]+)', cve.build_sh)
-            if cmake_match:
-                args = cmake_match.group(1).strip()
-                # Remove common noise
-                args = re.sub(r'\s*\.\./?\s*', '', args)
-                if args:
-                    build_info['args']['cmake_args'] = args
-        
-        elif 'configure' in build_lower or 'autoreconf' in build_lower:
-            build_info['type'] = 'autotools'
-            # Extract configure arguments
-            configure_match = re.search(r'\./configure\s+([^\n]+)', cve.build_sh)
-            if configure_match:
-                args = configure_match.group(1).strip()
-                if args and args not in ['', '&&', '\\']:
-                    build_info['args']['configure_args'] = args
-        
-        elif 'make' in build_lower:
-            build_info['type'] = 'make'
-        
-        return build_info
+        raise ValueError(f"Could not extract binary name from secb_sh for {cve.instance_id}")
     
     def generate_config_with_llm(self, cve: CVEInstance) -> str:
         """Generate config using LLM"""
         # Use base_commit (vulnerable version)
         commit_id = cve.base_commit
         
-        # Analyze build system
-        build_info = self.analyze_build_system(cve)
-        
-        # Extract binary name
-        binary_name = self.extract_binary_name(cve)
+        # Extract binary name and path
+        binary_name, binary_path = self.extract_binary_name(cve)
         
         # Build context for LLM
         prompt = f"""Generate an AFLGo YAML configuration file for this CVE instance:
@@ -387,27 +208,24 @@ log_file: "aflgo_<project>.log"
 - instance_id: {cve.instance_id}
 - repo: {cve.repo}
 - project_name: {cve.project_name}
-- language: {cve.lang}
 - base_commit: {cve.base_commit}
 
-**Build Script (from SEC-bench):**
+**Build Script (from SEC-bench build_sh field):**
 ```bash
 {cve.build_sh}
 ```
 
-**CRITICAL: Include the FULL build script above in the build_config.build_commands field.**
-**This script shows the EXACT commands needed to build this project.**
+**CRITICAL: Copy the EXACT build script above into build_config.build_commands field verbatim.**
+**Do NOT analyze or modify it - use it exactly as provided.**
 
-**Patch (first 1500 chars):**
-```diff
-{cve.patch[:1500] if cve.patch else 'No patch data'}
+**Reproduction Script (secb_sh - for binary name detection):**
+```bash
+{cve.secb_sh[:500] if cve.secb_sh else 'No repro script'}
 ```
 
-**My Analysis:**
-- Detected build system: {build_info['type']}
-- Build arguments: {build_info['args']}
-- Likely binary name: {binary_name}
-- Commit to use: {commit_id} (base_commit - vulnerable version)
+**Extracted binary information:**
+- binary_name: {binary_name}
+- binary_path: {binary_path}
 
 **Task:**
 Generate a complete YAML configuration following the template in your instructions.
@@ -415,12 +233,20 @@ Generate a complete YAML configuration following the template in your instructio
 IMPORTANT: 
 - For commit_id, use the base_commit: {commit_id}
 - This is the VULNERABLE version that we want to instrument
+- For build_config.build_commands, use the EXACT build_sh content above (no analysis, no extraction)
+- For binary_name, use: {binary_name}
+- For binary_path, use: {binary_path}
 - Include all required fields
-- Extract actual build arguments from the build script
 - Return ONLY valid YAML with no markdown formatting
 """
         
-        response = self.llm.query(prompt, self.SYSTEM_PROMPT)
+        # Use DrillAgent's LLM interface
+        response = self.llm.generate(
+            prompt=prompt,
+            system_prompt=self.SYSTEM_PROMPT,
+            temperature=0.3,  # Lower temperature for more consistent configs
+            max_tokens=2048
+        )
         
         # Clean up response (remove markdown if present)
         response = response.strip()
@@ -433,70 +259,6 @@ IMPORTANT:
         
         return response.strip()
     
-    def generate_config_fallback(self, cve: CVEInstance) -> str:
-        """Generate config using rule-based fallback"""
-        build_info = self.analyze_build_system(cve)
-        binary_name = self.extract_binary_name(cve)
-        commit_id = cve.base_commit
-        
-        cve_id = cve.instance_id.split('.', 1)[-1].upper().replace('.', '-')
-        
-        config = {
-            'repo_url': f"https://github.com/{cve.repo}.git",
-            'commit_id': commit_id,
-            'cve_id': cve_id,
-            'aflgo_dir': '/home/ray/cs562/fuzzing/aflgo',
-            'repos_dir': '/home/ray/cs562/repos',
-            'temps_dir': '/home/ray/cs562/fuzzing/temps',
-            'binary_name': binary_name,
-            'build_config': build_info['args'],
-            'log_level': 'INFO',
-            'log_file': f"aflgo_{cve.project_name}.log"
-        }
-        
-        # Generate YAML with comments
-        lines = [
-            f"# AFLGo Configuration for {cve.project_name} {cve_id}",
-            f"# Generated from SEC-bench instance: {cve.instance_id}",
-            "",
-            "# Repository information",
-            f"repo_url: \"{config['repo_url']}\"",
-            f"commit_id: \"{config['commit_id']}\"",
-            f"cve_id: \"{config['cve_id']}\"",
-            "",
-            "# Directory paths",
-            f"aflgo_dir: \"{config['aflgo_dir']}\"",
-            f"repos_dir: \"{config['repos_dir']}\"",
-            f"temps_dir: \"{config['temps_dir']}\"",
-            "",
-            f"# Binary name",
-            f"binary_name: \"{config['binary_name']}\"",
-            "",
-            "# Build configuration",
-            "build_config:",
-        ]
-        
-        if build_info['args']:
-            for key, value in build_info['args'].items():
-                if key == 'build_commands':
-                    # Format multiline YAML string with proper indentation
-                    lines.append(f"  {key}: |")
-                    for line in value.split('\n'):
-                        lines.append(f"    {line}")
-                else:
-                    lines.append(f"  {key}: \"{value}\"")
-        else:
-            lines.append("  # No specific build arguments detected")
-        
-        lines.extend([
-            "",
-            "# Logging",
-            f"log_level: \"{config['log_level']}\"",
-            f"log_file: \"{config['log_file']}\"",
-        ])
-        
-        return "\n".join(lines)
-    
     def generate_config(self, instance_path: Path, output_path: Optional[Path] = None) -> str:
         """Generate config for a CVE instance"""
         self.logger.info(f"Generating config for {instance_path.name}")
@@ -505,18 +267,21 @@ IMPORTANT:
         cve = self.load_cve_instance(instance_path)
         
         # Generate config with LLM
-        if self.llm.use_openai:
-            config_yaml = self.generate_config_with_llm(cve)
-        else:
-            config_yaml = self.generate_config_fallback(cve)
+        config_yaml = self.generate_config_with_llm(cve)
         
         # Validate YAML
         try:
-            yaml.safe_load(config_yaml)
+            config_dict = yaml.safe_load(config_yaml)
         except yaml.YAMLError as e:
             self.logger.error(f"Generated invalid YAML: {e}")
-            self.logger.warning("Using fallback config generation")
-            config_yaml = self.generate_config_fallback(cve)
+            raise ValueError(f"LLM generated invalid YAML: {e}")
+        
+        # Add sanitizer_report directly (hardcoded, not from LLM)
+        if cve.sanitizer_report:
+            config_dict['sanitizer_report'] = cve.sanitizer_report
+        
+        # Convert back to YAML
+        config_yaml = yaml.dump(config_dict, default_flow_style=False, sort_keys=False, allow_unicode=True)
         
         # Save if output path provided
         if output_path:
@@ -565,7 +330,7 @@ def main():
         epilog="""
 Examples:
   # Generate config for a specific CVE instance
-  ./config_generator_agent.py --cve-instance SEC-bench-data/CVE-instances/jq.cve-2023-50246.json
+  ./config_generator_agent.py --cve-instance DrillAgent/datasets/sec-bench/CVE-instances/jq.cve-2023-50246.json
   
   # Generate config by CVE ID
   ./config_generator_agent.py --cve-id jq.cve-2023-50246
@@ -591,12 +356,14 @@ Examples:
     parser.add_argument('--output', type=Path,
                        help='Output file path (for single config)')
     parser.add_argument('--secbench-dir', type=Path,
-                       default=Path('/home/ray/cs562/SEC-bench-data'),
-                       help='Path to SEC-bench-data directory')
-    parser.add_argument('--llm-model', default='gpt-5.1',
-                       help='OpenAI model to use (default: gpt-5.1)')
+                       default=None,
+                       help='Path to SEC-bench data directory (default: <project_root>/datasets/sec-bench)')
+    parser.add_argument('--llm-provider', default='openai',
+                       help='LLM provider to use: "openai" or "claude" (default: openai)')
+    parser.add_argument('--llm-model', default='gpt-4-turbo',
+                       help='LLM model to use (default: gpt-4-turbo for OpenAI, claude-3-7-sonnet-20250219 for Claude)')
     parser.add_argument('--api-key',
-                       help='OpenAI API key (or set OPENAI_API_KEY env var)')
+                       help='API key (or set OPENAI_API_KEY/ANTHROPIC_API_KEY env var)')
     
     args = parser.parse_args()
     
@@ -606,6 +373,7 @@ Examples:
     
     # Create agent
     agent = ConfigGeneratorAgent(
+        llm_provider=args.llm_provider,
         llm_model=args.llm_model,
         api_key=args.api_key,
         secbench_dir=args.secbench_dir

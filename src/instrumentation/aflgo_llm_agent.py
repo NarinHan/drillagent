@@ -202,22 +202,14 @@ class LLMInterface:
     def query(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """
         Query the LLM with a prompt.
-        
-        Uses OpenAI API if available, falls back to rule-based logic otherwise.
         """
-        if self.use_openai:
-            try:
-                result = self._query_openai(prompt, system_prompt)
-                if not result or len(result.strip()) == 0:
-                    print(f"⚠️  OpenAI returned empty result. Prompt length: {len(prompt)}")
-                return result
-            except Exception as e:
-                print(f"OpenAI API error: {e}")
-                print(f"Prompt length was: {len(prompt)} characters")
-                print("Falling back to rule-based logic")
-                return self._fallback_logic(prompt)
-        else:
-            return self._fallback_logic(prompt)
+        if not self.use_openai:
+            raise RuntimeError("OpenAI API is required but not available")
+        
+        result = self._query_openai(prompt, system_prompt)
+        if not result or len(result.strip()) == 0:
+            print(f"⚠️  OpenAI returned empty result. Prompt length: {len(prompt)}")
+        return result
     
     def _query_openai(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Query OpenAI API using new client-based API (>= 1.0.0)"""
@@ -250,38 +242,6 @@ class LLMInterface:
             print(f"⚠️  Response was truncated due to length limit. Consider increasing max_completion_tokens.")
         
         return content
-    
-    def _fallback_logic(self, prompt: str) -> str:
-        """Fallback logic when LLM is not available"""
-        # This provides rule-based fallback behavior
-        if "build system" in prompt.lower():
-            if "CMakeLists.txt" in prompt:
-                return json.dumps({"reasoning": "Found CMakeLists.txt, using cmake", "action": "cmake"})
-            elif "configure.ac" in prompt or "autogen.sh" in prompt:
-                return json.dumps({"reasoning": "Found configure.ac or autogen.sh, using autotools", "action": "autotools"})
-            elif "Makefile" in prompt:
-                return json.dumps({"reasoning": "Found Makefile, using make", "action": "make"})
-            return json.dumps({"reasoning": "Unknown build system", "action": "unknown"})
-        
-        # Build commands fallback
-        if "what commands should i run" in prompt.lower():
-            if "cmake" in prompt.lower():
-                return json.dumps({
-                    "reasoning": "Standard CMake build process",
-                    "commands": ["mkdir -p build", "cd build", "cmake ..", "make -j$(nproc)"]
-                })
-            elif "autotools" in prompt.lower():
-                return json.dumps({
-                    "reasoning": "Standard autotools build process",
-                    "commands": ["autoreconf -i || ./autogen.sh || true", "./configure", "make clean || true", "make -j$(nproc)"]
-                })
-            elif "make" in prompt.lower():
-                return json.dumps({
-                    "reasoning": "Standard make build",
-                    "commands": ["make clean || true", "make -j$(nproc)"]
-                })
-        
-        return json.dumps({"reasoning": "Continuing with default behavior", "action": "continue"})
 
 
 class AFLGoLLMAgent:
@@ -422,12 +382,12 @@ Handle errors by analyzing messages and providing alternative commands in your r
         # Get the script directory (DrillAgent/src/instrumentation)
         script_dir = Path(__file__).resolve().parent
         # CS562 base directory is 3 levels up from DrillAgent/src/instrumentation
-        cs562_base = script_dir.parent.parent.parent
+        ray_base = script_dir.parent.parent.parent
         
-        # Base paths - use relative to cs562_base
-        self.aflgo_dir = Path(self.config.get('aflgo_dir', cs562_base / 'fuzzing' / 'aflgo'))
-        self.repos_dir = Path(self.config.get('repos_dir', cs562_base / 'repos'))
-        self.temps_dir = Path(self.config.get('temps_dir', cs562_base / 'fuzzing' / 'temps'))
+        # Base paths - use absolute paths with resolve()
+        self.aflgo_dir = Path(self.config.get('aflgo_dir', ray_base / 'aflgo')).resolve()
+        self.repos_dir = Path(self.config.get('repos_dir', ray_base / 'repos')).resolve()
+        self.temps_dir = Path(self.config.get('temps_dir', ray_base / 'fuzzing' / 'temps')).resolve()
         
         # Repository info
         self.repo_url = self.config['repo_url']
@@ -454,6 +414,7 @@ Handle errors by analyzing messages and providing alternative commands in your r
         os.environ['CC'] = str(self.aflgo_dir / 'instrument' / 'aflgo-clang')
         os.environ['CXX'] = str(self.aflgo_dir / 'instrument' / 'aflgo-clang++')
         os.environ['LDFLAGS'] = '-lpthread'
+        os.environ['LIB_FUZZING_ENGINE'] = ''  # Set empty to avoid unbound variable errors
         
     def log_llm_reasoning(self, prefix: str, reasoning: str):
         """Log LLM reasoning in blue color"""
@@ -480,31 +441,6 @@ Handle errors by analyzing messages and providing alternative commands in your r
         )
         
         return result.returncode, result.stdout, result.stderr
-    
-    def observe_environment(self) -> Dict[str, any]:
-        """Gather observations about the current state"""
-        observations = {
-            'subject_exists': self.subject_dir.exists(),
-            'files_in_subject': [],
-            'temp_files': [str(f) for f in self.temp_dir.glob('*')] if self.temp_dir.exists() else [],
-        }
-        
-        if self.subject_dir.exists():
-            # List important files
-            observations['files_in_subject'] = [
-                str(f.relative_to(self.subject_dir)) 
-                for f in self.subject_dir.glob('*') 
-                if f.is_file()
-            ][:20]  # Limit to first 20
-            
-            # Check for build system indicators
-            observations['has_cmake'] = (self.subject_dir / 'CMakeLists.txt').exists()
-            observations['has_configure_ac'] = (self.subject_dir / 'configure.ac').exists()
-            observations['has_configure'] = (self.subject_dir / 'configure').exists()
-            observations['has_makefile'] = (self.subject_dir / 'Makefile').exists()
-            observations['has_autogen'] = (self.subject_dir / 'autogen.sh').exists()
-            
-        return observations
     
     def ask_llm(self, question: str, context: Optional[Dict] = None) -> Dict:
         """
@@ -576,46 +512,28 @@ Handle errors by analyzing messages and providing alternative commands in your r
                 }
     
     def phase_setup_repository(self) -> bool:
-        """Phase 1: Clone/update repository with LLM guidance"""
+        """Phase 1: Clone/update repository"""
         self.logger.info("=== Phase 1: Repository Setup ===")
         self.state.phase = 'setup'
         
-        obs = self.observe_environment()
-        
-        question = f"""I need to set up the repository for AFLGo instrumentation.
-Repository URL: {self.repo_url}
-Repository exists locally: {obs['subject_exists']}
-
-What should I do?"""
-        
-        response = self.ask_llm(question, obs)
-        self.log_llm_reasoning("LLM reasoning:", response.get('reasoning', ''))
-        
-        if obs['subject_exists']:
-            self.logger.info("Repository exists, removing old copy...")
+        # Remove existing repository if it exists
+        if self.subject_dir.exists():
+            self.logger.info(f"Removing existing repository: {self.subject_dir}")
             import shutil
             shutil.rmtree(self.subject_dir)
-            self.logger.info("Cloning fresh repository...")
-            code, stdout, stderr = self.run_command(
-                f"git clone {self.repo_url} {self.subject_dir}"
-            )
-            if code != 0:
-                error_msg = f"git clone failed: {stderr}"
-                self.logger.error(error_msg)
-                self.state.errors.append(error_msg)
-                return False
-        else:
-            self.logger.info("Cloning repository...")
-            code, stdout, stderr = self.run_command(
-                f"git clone {self.repo_url} {self.subject_dir}"
-            )
-            if code != 0:
-                error_msg = f"git clone failed: {stderr}"
-                self.logger.error(error_msg)
-                self.state.errors.append(error_msg)
-                return False
         
-        # Initialize and update git submodules (many projects use them)
+        # Clone fresh repository
+        self.logger.info(f"Cloning repository: {self.repo_url}")
+        code, stdout, stderr = self.run_command(
+            f"git clone {self.repo_url} {self.subject_dir}"
+        )
+        if code != 0:
+            error_msg = f"git clone failed: {stderr}"
+            self.logger.error(error_msg)
+            self.state.errors.append(error_msg)
+            return False
+        
+        # Initialize and update git submodules
         self.logger.info("Initializing git submodules...")
         code, stdout, stderr = self.run_command(
             "git submodule update --init --recursive",
@@ -629,68 +547,19 @@ What should I do?"""
         return True
     
     def _extract_targets_from_sanitizer_report(self) -> Optional[List[str]]:
-        """Extract targets from SEC-bench sanitizer report using LLM guidance
+        """Extract targets from sanitizer report using LLM guidance
         
         Strategy: Use only the LAST point in the stack trace where the bug is triggered,
         then use LLM to read the source code and identify the whole paragraph (roughly 5 lines)
         containing that line for better instrumentation coverage.
         """
-        if not self.config.get('cve_id'):
+        # Get sanitizer report content directly from config
+        report_content = self.config.get('sanitizer_report')
+        if not report_content:
+            self.logger.warning("No sanitizer_report field in config")
             return None
         
-        cve_id = self.config['cve_id'].lower()
-        # Get cs562_base from already computed paths
-        cs562_base = self.repos_dir.parent
-        sanitizer_dir = Path(self.config.get('sanitizer_dir', cs562_base / 'SEC-bench-data' / 'CVE-sanitizer_reports'))
-        
-        if not sanitizer_dir.exists():
-            self.logger.warning(f"Sanitizer reports directory not found: {sanitizer_dir}")
-            return None
-        
-        # Ask LLM to help find the sanitizer report
-        question = f"""I need to find a sanitizer report for CVE {cve_id} and repository {self.repo_name}.
-
-Sanitizer reports directory: {sanitizer_dir}
-Repository name: {self.repo_name}
-CVE ID: {cve_id}
-
-Sanitizer reports typically follow naming patterns like:
-- <repo>.cve-yyyy-nnnnn.txt
-- <repo>.yyyy-nnnnn.txt
-
-What filename should I look for? Provide exact filenames to try.
-Respond in JSON:
-{{
-  "reasoning": "your analysis",
-  "filenames": ["filename1.txt", "filename2.txt"]
-}}"""
-        
-        response = self.ask_llm(question)
-        self.log_llm_reasoning("LLM reasoning:", response.get('reasoning', ''))
-        
-        # Try LLM suggested filenames first
-        suggested_files = response.get('filenames', [])
-        patterns = suggested_files if suggested_files else [
-            f"{self.repo_name}.{cve_id}.txt",
-            f"{self.repo_name}.{cve_id.replace('cve-', '')}.txt",
-        ]
-        
-        report_file = None
-        for pattern in patterns:
-            test_path = sanitizer_dir / pattern
-            if test_path.exists():
-                report_file = test_path
-                break
-        
-        if not report_file:
-            self.logger.warning(f"No sanitizer report found for {self.repo_name} {cve_id}")
-            return None
-        
-        self.logger.info(f"Found sanitizer report: {report_file}")
-        
-        # Ask LLM to help parse the sanitizer report
-        with open(report_file) as f:
-            report_content = f.read()
+        self.logger.info(f"Using sanitizer report from config (length: {len(report_content)} chars)")
         
         parse_question = f"""I need to extract the LAST (deepest) vulnerability target location from this sanitizer report.
 
@@ -925,6 +794,7 @@ Example: If the bug is in a for-loop at line 100, you might include lines 99-103
         # Manual targets have highest priority
         if self.config.get('targets'):
             targets = self.config['targets']
+            self.logger.info(f"Using {len(targets)} manual targets from config")
             
             # Ensure minimum of 6 targets by expanding range if needed
             MIN_TARGETS = 6
@@ -953,9 +823,12 @@ Example: If the bug is in a for-loop at line 100, you might include lines 99-103
         
         # Extract from sanitizer report (LLM-driven)
         if self.config.get('cve_id'):
+            self.logger.info(f"Extracting targets from sanitizer report for CVE {self.config['cve_id']}")
             sanitizer_targets = self._extract_targets_from_sanitizer_report()
             
             if sanitizer_targets:
+                self.log_llm_reasoning("Phase 2:", f"Successfully extracted {len(sanitizer_targets)} target lines from sanitizer report")
+                
                 # Ensure minimum of 6 targets by expanding range if needed
                 MIN_TARGETS = 6
                 if len(sanitizer_targets) < MIN_TARGETS:
@@ -996,269 +869,91 @@ Example: If the bug is in a for-loop at line 100, you might include lines 99-103
         return False
     
     def phase_build_with_llm(self, phase_num: int = 1) -> bool:
-        """Build with LLM guidance (phase 1 or 2)"""
+        """Build using exact commands from config (phase 1 or 2)"""
         phase_name = "CG/CFG Generation" if phase_num == 1 else "Distance Instrumentation"
         self.logger.info(f"=== Phase {phase_num + 2}: {phase_name} ===")
         
         targets_file = self.temp_dir / 'BBtargets.txt'
         distance_file = self.temp_dir / 'distance.cfg.txt'
         
-        max_build_attempts = 5
-        for attempt in range(max_build_attempts):
-            self.logger.info(f"Build attempt {attempt + 1}/{max_build_attempts}")
-            
-            # Show memory state for attempts > 0
-            if attempt > 0:
-                repeated = self.state.get_repeated_errors(2)
-                if repeated:
-                    self.logger.info(f"📊 Memory: Detected {len(repeated)} repeated error pattern(s)")
-                    for sig, count in repeated[:3]:  # Show top 3
-                        self.logger.info(f"   - {sig}: {count}x")
-            
-            # Reset environment to original state before each attempt
-            # This prevents flag accumulation across retries
-            for key in ['CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS']:
-                if self.original_env[key]:
-                    os.environ[key] = self.original_env[key]
-                elif key in os.environ:
-                    del os.environ[key]
-            
-            # Set compiler flags fresh for this attempt
-            if phase_num == 1:
-                additional = f"-targets={targets_file} -outdir={self.temp_dir} -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps"
-                os.environ['CFLAGS'] = f"{additional} -g"
-                os.environ['CXXFLAGS'] = f"{additional} -g"
-            else:
-                os.environ['CFLAGS'] = f"-distance={distance_file.resolve()}"
-                os.environ['CXXFLAGS'] = f"-distance={distance_file.resolve()}"
-            
-            # Add custom flags from config
-            custom_cflags = self.config.get('build_config', {}).get('cflags', '')
-            if custom_cflags:
-                os.environ['CFLAGS'] = f"{custom_cflags} {os.environ['CFLAGS']}"
-                os.environ['CXXFLAGS'] = f"{custom_cflags} {os.environ['CXXFLAGS']}"
-            
-            # Get observations
-            obs = self.observe_environment()
-            
-            # Get build commands from config if available
-            build_commands = self.config.get('build_config', {}).get('build_commands', '')
-            
-            # Ask LLM for build commands with detailed context
-            question = f"""I need to build this project for AFLGo instrumentation.
-Build phase: {phase_name}
-Attempt: {attempt + 1}
-
-Environment:
-- CC: {os.environ.get('CC')}
-- CXX: {os.environ.get('CXX')}
-- CFLAGS: {os.environ.get('CFLAGS')}
-- CXXFLAGS: {os.environ.get('CXXFLAGS')}
-- LDFLAGS: {os.environ.get('LDFLAGS')}
-- Subject directory: {self.subject_dir}
-
-Project structure:
-- Has CMakeLists.txt: {obs.get('has_cmake', False)}
-- Has configure.ac: {obs.get('has_configure_ac', False)}
-- Has configure: {obs.get('has_configure', False)}
-- Has Makefile: {obs.get('has_makefile', False)}
-- Has autogen.sh: {obs.get('has_autogen', False)}"""
-            
-            # Add SEC-bench build commands if available
-            if build_commands:
-                question += f"""
-
-**REFERENCE BUILD SCRIPT (from SEC-bench):**
-This is the KNOWN WORKING build script for this project:
-```bash
-{build_commands}
-```
-
-**IMPORTANT:** 
-- The build script above shows the EXACT commands that work for this project
-- Adapt these commands to work with AFLGo instrumentation
-- The CC, CXX, CFLAGS, CXXFLAGS environment variables are ALREADY SET for AFLGo
-- Just follow the same sequence of commands (autoreconf, configure, make, etc.)
-- Do NOT add extra compiler flags - they are already in the environment
-"""
-            
-            question += """
-
-Please provide the EXACT shell commands I should run to build this project.
-Format your response as JSON with:
-{{
-  "reasoning": "your analysis",
-  "commands": ["command1", "command2", "command3"],
-  "working_directory": "where to run commands (absolute path or 'subject_dir' or 'build_dir')"
-}}
-
-Important:
-- For CMake projects: create a build directory, cd into it, run cmake .., then make
-- For autotools: run autoreconf -i (or ./autogen.sh), then ./configure, then make
-- Always use -j$(nproc) for make commands
-- The CC, CXX, CFLAGS, CXXFLAGS are already set in the environment
-
-**CRITICAL CONSTRAINTS:**
-- AFLGo toolchain ({self.aflgo_dir}) is WORKING and must NOT be modified
-- Do NOT suggest reinstalling or rebuilding AFLGo
-- Do NOT modify aflgo-clang or aflgo-clang++ compilers
-- All fixes must target the PROJECT BEING BUILT (libredwg, jq, etc.)
-- You CAN modify: project Makefiles, configure scripts, source files, environment variables
-- You CANNOT modify: anything in {self.aflgo_dir}/
-"""
-            
-            if attempt > 0:
-                # Provide comprehensive error context with pattern analysis
-                recent_errors = self.state.errors[-min(3, len(self.state.errors)):]
-                
-                # Get diagnostic insights
-                diagnosis = self.state.diagnose_issue()
-                
-                question += "\n\n=== BUILD FAILURE ANALYSIS ==="
-                question += f"\nAttempt {attempt + 1} of {max_build_attempts}"
-                question += f"\nTotal errors encountered: {len(self.state.errors)}"
-                
-                # Show repeated error patterns
-                repeated = self.state.get_repeated_errors(2)
-                if repeated:
-                    question += "\n\nREPEATED ERROR PATTERNS (occurring 2+ times):"
-                    for sig, count in repeated[:5]:  # Show top 5
-                        # Truncate long signatures but keep meaningful info
-                        sig_preview = sig[:300] + '...' if len(sig) > 300 else sig
-                        question += f"\n  [{count}x] {sig_preview}"
-                
-                # Show recent errors
-                question += "\n\nRECENT ERRORS (last 3 attempts):"
-                for i, err in enumerate(recent_errors, 1):
-                    # Truncate long errors but keep enough context for compiler errors
-                    err_preview = err[:2000] + '\n...[truncated]' if len(err) > 2000 else err
-                    question += f"\n\nAttempt {attempt - len(recent_errors) + i + 1}:\n{err_preview}"
-                
-                question += "\n\n**YOUR TASK:**"
-                question += "\nAnalyze the error patterns above and determine what's going wrong."
-                question += "\nProvide a DIFFERENT approach than previous attempts - the same commands won't work."
-                question += "\nYou can:"
-                question += "\n  - Modify project source files or build scripts"
-                question += "\n  - Create wrapper scripts to intercept and fix build issues"
-                question += "\n  - Change environment variables or configure arguments"
-                question += "\n  - Patch Makefiles or configure scripts"
-                question += "\n  - Install missing dependencies"
-                question += "\nProvide COMPLETE implementation - your commands should be ready to execute."
-            
-            # Add configure arguments from config if present
-            configure_args = self.config.get('build_config', {}).get('configure_args', '')
-            if configure_args:
-                question += f"\n\nIMPORTANT: Use these configure arguments: {configure_args}"
-            
-            response = self.ask_llm(question, obs)
-            
-            # Log prompt statistics
-            self.logger.info(f"📝 Prompt length: {len(question)} characters")
-            
-            # Log the full response for debugging
-            reasoning = response.get('reasoning', '')
-            if not reasoning:
-                self.logger.warning(f"⚠️  LLM returned empty reasoning. Full response keys: {list(response.keys())}")
-                # Log first part of response for debugging
-                if response:
-                    self.logger.warning(f"Response preview: {str(response)[:500]}")
-                # Also log a preview of the question to diagnose
-                self.logger.warning(f"Question preview (last 500 chars): ...{question[-500:]}")
-            
-            self.log_llm_reasoning("LLM reasoning:", reasoning)
-            
-            # Record what solution approach we're trying
-            solution_type = reasoning[:100] if reasoning else "empty_response"
-            
-            # Execute build based on LLM guidance
-            success = self._execute_build(response)
-            
-            # Record the solution attempt
-            self.state.record_solution_attempt(
-                solution_type=solution_type,
-                details={'attempt': attempt + 1},
-                success=success
-            )
-            
-            if success:
-                # Validate that required artifacts were produced
-                if phase_num == 1:
-                    # Phase 1: Check for LLVM bytecode files
-                    validation_success = self._validate_cg_cfg_artifacts()
-                    if not validation_success:
-                        self.logger.warning(f"Build succeeded but required .bc files not found. Attempt {attempt + 1}")
-                        continue
-                else:
-                    # Phase 2: Check for instrumented binary
-                    validation_success = self._validate_instrumented_binary()
-                    if not validation_success:
-                        self.logger.warning(f"Build succeeded but instrumented binary not found. Attempt {attempt + 1}")
-                        continue
-                
-                self.logger.info("Build successful and artifacts validated!")
-                return True
-            else:
-                self.logger.warning(f"Build attempt {attempt + 1} failed")
-        
-        # Log final failure after all attempts
-        error_msg = f"Build phase failed after {max_build_attempts} attempts"
-        self.logger.error(error_msg)
-        self.state.errors.append(error_msg)
-        return False
-    
-    def _get_secbench_build_script(self) -> Optional[Path]:
-        """Find SEC-bench build script for this CVE if available"""
-        if not self.config.get('cve_id'):
-            return None
-        
-        cve_id = self.config['cve_id'].lower()
-        # Get cs562_base from already computed paths
-        cs562_base = self.repos_dir.parent
-        secbench_dir = Path(self.config.get('secbench_build_dir', cs562_base / 'SEC-bench-data' / 'CVE-build_sh'))
-        
-        if not secbench_dir.exists():
-            return None
-        
-        # Try different naming patterns
-        patterns = [
-            f"{self.repo_name}.{cve_id}.sh",
-            f"{self.repo_name}.{cve_id.replace('cve-', '')}.sh",
-        ]
-        
-        for pattern in patterns:
-            script_path = secbench_dir / pattern
-            if script_path.exists():
-                self.logger.info(f"Found SEC-bench build script: {script_path}")
-                return script_path
-        
-        return None
-    
-    def _execute_build(self, llm_response: Dict) -> bool:
-        """Execute the build based on LLM guidance"""
-        try:
-            # Extract commands from LLM response
-            commands = llm_response.get('commands', [])
-            
-            # If no commands, extract from reasoning or use build_commands from config
-            if not commands:
-                reasoning = llm_response.get('reasoning', '')
-                if reasoning:
-                    self.logger.info("No 'commands' field found, extracting from reasoning...")
-                    commands = self._extract_commands_from_reasoning(reasoning)
-                else:
-                    self.logger.warning("⚠️  LLM response has no commands or reasoning")
-            
-            if not commands:
-                self.logger.error("No build commands available to execute")
-                self.state.errors.append("LLM provided no actionable commands")
-                return False
-            
-            return self._execute_commands(commands)
-        except Exception as e:
-            error_msg = f"Exception in _execute_build: {str(e)}"
+        # Get build commands from config
+        build_commands_str = self.config.get('build_config', {}).get('build_commands', '')
+        if not build_commands_str:
+            error_msg = "No build_commands found in config"
             self.logger.error(error_msg)
             self.state.errors.append(error_msg)
             return False
+        
+        # Parse build commands from config (split by newlines, filter out comments and empty lines)
+        build_commands = [cmd.strip() for cmd in build_commands_str.split('\n') 
+                         if cmd.strip() and not cmd.strip().startswith('#')]
+        
+        if not build_commands:
+            error_msg = "No valid build commands found in config after parsing"
+            self.logger.error(error_msg)
+            self.state.errors.append(error_msg)
+            return False
+        
+        # For phase 1, ensure clean build to generate CFG files
+        # The repository is already freshly cloned in Phase 1, so no need to clean
+        # Just ensure we're building from scratch
+        if phase_num == 1:
+            self.logger.info("Building from fresh repository clone (Phase 1)")
+        
+        # Reset environment to original state
+        for key in ['CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS']:
+            if self.original_env[key]:
+                os.environ[key] = self.original_env[key]
+            elif key in os.environ:
+                del os.environ[key]
+        
+        # Set compiler flags for this phase
+        if phase_num == 1:
+            additional = f"-targets={targets_file} -outdir={self.temp_dir} -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps"
+            os.environ['CFLAGS'] = f"{additional} -g"
+            os.environ['CXXFLAGS'] = f"{additional} -g"
+        else:
+            os.environ['CFLAGS'] = f"-distance={distance_file.resolve()}"
+            os.environ['CXXFLAGS'] = f"-distance={distance_file.resolve()}"
+        
+        # Add custom flags from config
+        custom_cflags = self.config.get('build_config', {}).get('cflags', '')
+        if custom_cflags:
+            os.environ['CFLAGS'] = f"{custom_cflags} {os.environ['CFLAGS']}"
+            os.environ['CXXFLAGS'] = f"{custom_cflags} {os.environ['CXXFLAGS']}"
+        
+        # Log the build commands from config
+        self.logger.info(f"Using build commands from config:")
+        for i, cmd in enumerate(build_commands, 1):
+            self.logger.info(f"  [{i}] {cmd}")
+        
+        # Execute build using exact commands from config
+        success = self._execute_commands(build_commands)
+        
+        if not success:
+            error_msg = f"{phase_name} build failed. Check the error messages above."
+            self.logger.error(error_msg)
+            self.state.errors.append(error_msg)
+            return False
+        
+        # Validate that required artifacts were produced
+        if phase_num == 1:
+            # Phase 1: Check for LLVM bytecode files
+            if not self._validate_cg_cfg_artifacts():
+                error_msg = "Build succeeded but required .bc files not found"
+                self.logger.error(error_msg)
+                self.state.errors.append(error_msg)
+                return False
+        else:
+            # Phase 2: Check for instrumented binary
+            if not self._validate_instrumented_binary():
+                error_msg = "Build succeeded but instrumented binary not found"
+                self.logger.error(error_msg)
+                self.state.errors.append(error_msg)
+                return False
+        
+        self.logger.info("Build successful and artifacts validated!")
+        return True
     
     def _extract_commands_from_reasoning(self, reasoning: str) -> List[str]:
         """Extract build commands from LLM's reasoning"""
@@ -1397,10 +1092,10 @@ The build may have succeeded but placed the binary in an unexpected location."""
         
         # Build a single shell script that combines all commands
         # Set error handling: exit on error, but track which command failed
+        # Note: cwd is already set to self.subject_dir in Popen, so no cd needed
         script_lines = [
             '#!/bin/bash',
             'set -e',  # Exit on error
-            f'cd "{self.subject_dir}"',  # Start in subject directory
             ''
         ]
         
@@ -1542,10 +1237,13 @@ The build may have succeeded but placed the binary in an unexpected location."""
                 cve_suffix = self.config['cve_id'].replace('CVE-', '').replace('-', '_')
                 output_name += f"_{cve_suffix}"
             
-            # Get cs562_base from already computed paths
-            cs562_base = self.repos_dir.parent
-            default_output_dir = cs562_base / 'fuzzing' / 'instrumented'
-            output_dir = Path(self.config.get('output_dir', default_output_dir)) / output_name
+            # Get the script directory (DrillAgent/src/instrumentation)
+            script_dir = Path(__file__).resolve().parent
+            # DrillAgent root is 2 levels up from src/instrumentation
+            drillagent_root = script_dir.parent.parent
+            drillagent_default_output_dir = drillagent_root / 'instrumented'
+
+            output_dir = Path(self.config.get('output_dir', drillagent_default_output_dir)) / output_name
             output_dir.mkdir(parents=True, exist_ok=True)
             
             self.logger.info(f"Copying instrumented artifacts to: {output_dir}")
@@ -1738,13 +1436,20 @@ The build may have succeeded but placed the binary in an unexpected location."""
         return True
     
     def phase_generate_distance(self) -> bool:
-        """Generate distance file with LLM guidance and error recovery"""
+        """Generate distance file using binary_path and binary_name from config first, with LLM fallback"""
         self.logger.info("=== Phase 4: Distance Generation ===")
         self.state.phase = 'distance'
         
-        # NOTE: gen_distance_fast.py generates callgraphs internally using opt
-        # We don't need to pre-generate them here
-        # self.ensure_callgraphs_exist()
+        # Clean up any previous distance generation state to force fresh run
+        state_file = self.temp_dir / 'state-fast'
+        dot_dir = self.temp_dir / 'dot-files'
+        if state_file.exists():
+            self.logger.info("Removing previous state-fast file to force fresh distance generation")
+            state_file.unlink()
+        if dot_dir.exists():
+            self.logger.info("Removing previous dot-files directory to force fresh callgraph generation")
+            shutil.rmtree(dot_dir)
+            dot_dir.mkdir()
         
         # Clean up BB files
         bbnames = self.temp_dir / 'BBnames.txt'
@@ -1775,248 +1480,16 @@ The build may have succeeded but placed the binary in an unexpected location."""
             )
         
         binary_name = self.config.get('binary_name', self.repo_name)
-        max_attempts = 5
+        binary_path = self.config.get('binary_path')
         
-        for attempt in range(max_attempts):
-            self.logger.info(f"Distance generation attempt {attempt + 1}/{max_attempts}")
-            self.state.attempts = attempt + 1
+        # Helper function to run gen_distance_fast.py
+        def try_generate_distance(bc_dir: Path, name: str, strategy_name: str) -> bool:
+            """Try to generate distance with given parameters"""
+            cmd = f"python3 {self.aflgo_dir / 'distance' / 'gen_distance_fast.py'} {bc_dir} {self.temp_dir} {name}"
             
-            # Show memory patterns if errors accumulated
-            if attempt > 0:
-                repeated = self.state.get_repeated_errors(2)
-                if repeated:
-                    self.logger.info(f"📊 Memory: Detected {len(repeated)} repeated error pattern(s)")
-                    for sig, count in repeated:
-                        self.logger.info(f"   - {sig}: {count}x")
-            
-            # On first attempt, try intelligent extraction using config binary name first
-            if attempt == 0:
-                # Check if we have any .bc files
-                bc_files = list(self.subject_dir.glob('**/*.0.0.*.bc'))
-                if bc_files:
-                    self.logger.info(f"Found {len(bc_files)} bytecode files:")
-                    for bc_file in bc_files[:10]:  # Show first 10
-                        self.logger.info(f"  - {bc_file.relative_to(self.subject_dir)}")
-                    if len(bc_files) > 10:
-                        self.logger.info(f"  ... and {len(bc_files) - 10} more")
-                    
-                    # Find the directory containing the .bc files
-                    # Usually they are in build/bin or similar
-                    bc_dirs = set(bc_file.parent for bc_file in bc_files)
-                    
-                    # Prefer directory with most .bc files
-                    bc_dir = max(bc_dirs, key=lambda d: len(list(d.glob('*.0.0.*.bc'))))
-                    self.logger.info(f"Selected bytecode directory: {bc_dir}")
-                    
-                    # Strategy 1: Try with exact binary name from config
-                    self.logger.info(f"Strategy 1: Using config binary name '{binary_name}'")
-                    cmd = f"python3 {self.aflgo_dir / 'distance' / 'gen_distance_fast.py'} {bc_dir} {self.temp_dir} {binary_name}"
-                    
-                    # Run with real-time output
-                    import sys
-                    self.logger.info(f"Running: {cmd}")
-                    process = subprocess.Popen(
-                        cmd,
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        bufsize=1
-                    )
-                    
-                    output_lines = []
-                    for line in process.stdout:
-                        sys.stdout.write(line)
-                        sys.stdout.flush()
-                        output_lines.append(line)
-                    
-                    code = process.wait()
-                    stdout = ''.join(output_lines)
-                    stderr = ''
-                    
-                    if code == 0:
-                        # Verify distance file was created and has content
-                        distance_file = self.temp_dir / 'distance.cfg.txt'
-                        if distance_file.exists() and distance_file.stat().st_size > 0:
-                            self.logger.info("✓ Distance file generated successfully with config binary name")
-                            code, stdout, stderr = self.run_command(f"head -n5 {distance_file}")
-                            self.logger.info(f"Distance values:\n{stdout}")
-                            return True
-                    
-                    # Strategy 1 failed, try Strategy 2: auto-detect mode
-                    self.logger.warning("Strategy 1 failed, trying Strategy 2: auto-detect mode")
-                    
-                    # Auto-detect mode: let gen_distance_fast.py find the right binary
-                    cmd = f"python3 {self.aflgo_dir / 'distance' / 'gen_distance_fast.py'} {bc_dir} {self.temp_dir}"
-                    
-                    self.logger.info(f"Running: {cmd}")
-                    process = subprocess.Popen(
-                        cmd,
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        bufsize=1
-                    )
-                    
-                    output_lines = []
-                    for line in process.stdout:
-                        sys.stdout.write(line)
-                        sys.stdout.flush()
-                        output_lines.append(line)
-                    
-                    code = process.wait()
-                    stdout = ''.join(output_lines)
-                    stderr = ''
-                    
-                    if code == 0:
-                        # Verify distance file was created
-                        distance_file = self.temp_dir / 'distance.cfg.txt'
-                        if distance_file.exists() and distance_file.stat().st_size > 0:
-                            self.logger.info("✓ Distance file generated successfully with auto-detect")
-                            code, stdout, stderr = self.run_command(f"head -n5 {distance_file}")
-                            self.logger.info(f"Distance values:\n{stdout}")
-                            return True
-                    
-                    # Both strategies failed, record error and continue to LLM-based attempts
-                    error_msg = f"Intelligent extraction failed (both strategies)\nLast command: {cmd}\nStderr: {stderr}\nStdout: {stdout}"
-                    self.logger.warning("Both intelligent strategies failed, falling back to LLM guidance")
-                    self.state.record_error(error_msg, f"distance_attempt_{attempt + 1}")
-                else:
-                    self.logger.warning("No bytecode files found, falling back to LLM")
-                    self.state.record_error("No *.0.0.*.bc files found", f"distance_attempt_{attempt + 1}")
-                
-                # Continue to LLM-based approach if intelligent extraction failed
-            
-            # Build context for LLM
-            question = f"""You are generating AFLGo distance metrics.
-
-**ENVIRONMENT:**
-- Subject directory: {self.subject_dir}
-- Temp directory: {self.temp_dir}
-- Binary name from config: {binary_name}
-- Distance script: {self.aflgo_dir / 'distance' / 'gen_distance_fast.py'}
-- AFLGo directory: {self.aflgo_dir}
-
-**TASK:**
-Run gen_distance_fast.py to calculate basic block distances.
-
-**SCRIPT USAGE:**
-  python3 gen_distance_fast.py <binaries-directory> <temp-directory> [binary-name]
-
-**CRITICAL REQUIREMENTS:**
-1. <binaries-directory> must contain LLVM bytecode files with pattern *.0.0.*.bc
-   - Examples: a.out.0.0.preopt.bc, libredwg.0.0.preopt.bc, binary.0.0.preopt.bc
-2. The script does NOT search subdirectories - give exact directory path
-3. [binary-name] is optional - if omitted, script will auto-detect from .bc filename
-
-**STRATEGY:**
-- First: Find all .bc files in subject directory (search recursively)
-- Then: Use the directory containing those .bc files as <binaries-directory>
-- Note: Binary name in .bc file may differ from config (e.g., a.out vs libredwg)
-
-**CRITICAL CONSTRAINTS:**
-- AFLGo toolchain ({self.aflgo_dir}) is WORKING and must NOT be modified
-- Do NOT suggest reinstalling or rebuilding AFLGo
-- Do NOT modify gen_distance_fast.py script
-- Only find the correct .bc files and run the script properly
-- Keep commands SIMPLE - avoid multi-line commands with embedded comments
-- If you need comments, put them in the reasoning field, not in commands
-- Each command should be a single executable line
-
-Respond in JSON format:
-{{
-  "reasoning": "explain your analysis and approach",
-  "commands": ["command1", "command2", ...]
-}}
-
-**COMMAND FORMAT RULES:**
-- Return ONLY the actual gen_distance_fast.py command to execute
-- Do NOT include diagnostic commands (find, ls, etc.) - those cause syntax errors
-- Do NOT include comments (# ...) within commands
-- Do NOT put && at the end of commands
-- Return SINGLE command that runs gen_distance_fast.py
-- Example GOOD: ["python3 /path/gen_distance_fast.py /home/ray/cs562/repos/matio /tmp/temp"]
-- Example BAD: ["cd /path && find . -name '*.bc' && python3 script.py arg1 arg2"]
-- If you need to debug first, explain in reasoning, but commands should only contain the final gen_distance_fast.py call
-"""
-            
-            if attempt > 0:
-                # Provide error context similar to build phase
-                recent_errors = self.state.errors[-min(3, len(self.state.errors)):]
-                diagnosis = self.state.diagnose_issue()
-                
-                question += "\n\n=== DISTANCE GENERATION FAILURE ANALYSIS ==="
-                question += f"\nAttempt {attempt + 1} of {max_attempts}"
-                question += f"\nTotal errors encountered: {len(self.state.errors)}"
-                
-                # Show repeated patterns
-                repeated = self.state.get_repeated_errors(2)
-                if repeated:
-                    question += "\n\nREPEATED ERROR PATTERNS (occurring 2+ times):"
-                    for sig, count in repeated:
-                        question += f"\n  - {sig}: occurred {count} times"
-                
-                # Show recent errors
-                question += "\n\nRECENT ERRORS (last 3 attempts):"
-                for i, err in enumerate(recent_errors, 1):
-                    err_preview = err[:500] + '...' if len(err) > 500 else err
-                    question += f"\n\nAttempt {attempt - len(recent_errors) + i + 1}:\n{err_preview}"
-                
-                question += "\n\n**YOUR TASK:**"
-                question += "\nAnalyze the error patterns above and determine what's going wrong."
-                question += "\nProvide a DIFFERENT approach than previous attempts - the same commands won't work."
-                question += "\nYou can:"
-                question += "\n  - Search for .bc files with different patterns (*.0.0.*.bc, *.bc)"
-                question += "\n  - Check different directories (build/, src/, tools/, root)"
-                question += "\n  - Extract binary name from actual .bc filename instead of using config"
-                question += "\n  - Run gen_distance_fast.py without binary name (auto-detect mode)"
-                question += "\n  - Verify BBnames.txt and BBcalls.txt exist and are non-empty"
-                question += "\nProvide COMPLETE implementation - your commands should be ready to execute."
-            
-            response = self.ask_llm(question, "Generate distance metrics")
-            self.log_llm_reasoning("LLM reasoning:", response.get('reasoning', ''))
-            
-            commands = response.get('commands', [])
-            if not commands:
-                commands = self._extract_commands_from_reasoning(response.get('reasoning', ''), '')
-            
-            if not commands:
-                self.logger.warning("LLM provided no commands, skipping attempt")
-                self.state.record_error("No commands generated by LLM", "")
-                continue
-            
-            # Clean and validate commands
-            # If there's only one command and it already contains &&, use it as-is
-            # Otherwise, join multiple commands with &&
-            if len(commands) == 1:
-                combined_cmd = commands[0]
-            else:
-                # Clean commands: remove trailing && and whitespace
-                cleaned_commands = []
-                for cmd in commands:
-                    cmd = cmd.strip()
-                    # Remove trailing && or ||
-                    while cmd.endswith('&&') or cmd.endswith('||'):
-                        cmd = cmd[:-2].strip()
-                    if cmd:
-                        cleaned_commands.append(cmd)
-                
-                if not cleaned_commands:
-                    self.logger.warning("All commands were empty after cleaning, skipping attempt")
-                    self.state.record_error("Commands were empty after cleaning", "")
-                    continue
-                
-                combined_cmd = " && ".join(cleaned_commands)
-            
-            # Execute commands
-            success = True
-            self.logger.info(f"Executing: {combined_cmd}")
-            
-            # Run with real-time output
-            import sys
+            self.logger.info(f"Running ({strategy_name}): {cmd}")
             process = subprocess.Popen(
-                combined_cmd,
+                cmd,
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -2032,47 +1505,155 @@ Respond in JSON format:
             
             code = process.wait()
             stdout = ''.join(output_lines)
-            stderr = ''
             
-            if code != 0:
-                error_msg = f"Command failed: {combined_cmd}\nExit code: {code}\nStderr: {stderr}\nStdout: {stdout}"
-                self.logger.error(f"Distance generation command failed: {combined_cmd}")
-                if stderr:
-                    self.logger.error(f"Stderr: {stderr}")
-                if stdout:
-                    self.logger.error(f"Stdout: {stdout[:500]}")
-                self.state.record_error(error_msg, f"distance_attempt_{attempt + 1}")
-                success = False
-            
-            if success:
-                # Verify distance file was created and contains data
+            if code == 0:
                 distance_file = self.temp_dir / 'distance.cfg.txt'
                 if distance_file.exists() and distance_file.stat().st_size > 0:
-                    self.logger.info("Distance file generated successfully")
+                    self.logger.info(f"✓ Distance file generated successfully using {strategy_name}")
                     code, stdout, stderr = self.run_command(f"head -n5 {distance_file}")
                     self.logger.info(f"Distance values:\n{stdout}")
-                    
-                    # Validate that distance file contains actual distance values
-                    if stdout.strip():
-                        return True
-                    else:
-                        error_msg = "distance.cfg.txt exists but appears to be empty or contain no valid data"
-                        self.logger.error(error_msg)
-                        self.state.record_error(error_msg, f"distance_attempt_{attempt + 1}")
-                elif distance_file.exists():
-                    error_msg = "distance.cfg.txt exists but is empty (0 bytes)"
-                    self.logger.error(error_msg)
-                    self.state.record_error(error_msg, f"distance_attempt_{attempt + 1}")
+                    return True
                 else:
-                    error_msg = "Commands succeeded but distance.cfg.txt was not generated"
-                    self.logger.error(error_msg)
-                    self.state.record_error(error_msg, f"distance_attempt_{attempt + 1}")
+                    self.logger.warning(f"{strategy_name}: Command succeeded but file was not created properly")
+            else:
+                self.logger.warning(f"{strategy_name}: Failed with exit code {code}")
+            
+            return False
         
-        # Log final failure after all attempts
-        error_msg = f"Distance generation failed after {max_attempts} attempts"
-        self.logger.error(error_msg)
-        self.state.errors.append(error_msg)
-        return False
+        # Strategy 1: Use exact binary_path from config if provided
+        if binary_path:
+            self.logger.info(f"Strategy 1: Using exact binary_path from config: {binary_path}")
+            
+            # Convert to absolute path relative to subject_dir
+            if not binary_path.startswith('/'):
+                abs_binary_path = self.subject_dir / binary_path.lstrip('/')
+            else:
+                abs_binary_path = Path(binary_path)
+            
+            # The .bc file should be in the same directory as the binary
+            bc_dir = abs_binary_path.parent
+            
+            # Check if .bc files exist in the binary directory
+            bc_files = list(bc_dir.glob('*.0.0.*.bc'))
+            
+            if not bc_files:
+                # Try common build subdirectories relative to binary location
+                self.logger.warning(f"No .bc files in {bc_dir}, searching nearby directories...")
+                search_dirs = [
+                    bc_dir.parent,  # Parent directory
+                    bc_dir.parent / 'CMakeFiles',  # CMake build artifacts
+                    bc_dir / 'CMakeFiles',  # CMakeFiles in same dir
+                ]
+                
+                for search_dir in search_dirs:
+                    if search_dir.exists():
+                        bc_files = list(search_dir.glob('**/*.0.0.*.bc'))
+                        if bc_files:
+                            bc_dir = bc_files[0].parent
+                            self.logger.info(f"Found {len(bc_files)} .bc files in {bc_dir}")
+                            break
+            
+            if bc_files:
+                self.logger.info(f"Found {len(bc_files)} bytecode files in {bc_dir}")
+                if try_generate_distance(bc_dir, binary_name, "binary_path from config"):
+                    return True
+            else:
+                self.logger.warning(f"No .bc files found near binary_path: {abs_binary_path}")
+        
+        # Strategy 2: Fall back to LLM to find the correct binary
+        self.logger.info("Strategy 2: Falling back to LLM to locate correct binary and .bc files")
+        
+        # Build context for LLM
+        bc_files = list(self.subject_dir.glob('**/*.0.0.*.bc'))
+        bc_context = ""
+        if bc_files:
+            bc_context = f"Found {len(bc_files)} .bc files:\n"
+            for bc_file in bc_files[:10]:
+                bc_context += f"  - {bc_file.relative_to(self.subject_dir)}\n"
+            if len(bc_files) > 10:
+                bc_context += f"  ... and {len(bc_files) - 10} more\n"
+        else:
+            bc_context = "No .bc files found in repository\n"
+        
+        question = f"""Distance generation failed with config binary_path and binary_name. Help find the correct binary and .bc directory.
+
+**ENVIRONMENT:**
+- Subject directory: {self.subject_dir}
+- Temp directory: {self.temp_dir}
+- Binary name from config: {binary_name}
+- Binary path from config: {binary_path or 'not provided'}
+- Distance script: {self.aflgo_dir / 'distance' / 'gen_distance_fast.py'}
+
+**BYTECODE FILES:**
+{bc_context}
+
+**TASK:**
+Find the correct .bc directory and binary name to run gen_distance_fast.py successfully.
+
+**SCRIPT USAGE:**
+  python3 gen_distance_fast.py <binaries-directory> <temp-directory> [binary-name]
+
+**REQUIREMENTS:**
+1. <binaries-directory> must contain *.0.0.*.bc files
+2. The script does NOT search subdirectories - give exact directory path
+3. [binary-name] can be omitted for auto-detect, or specify the actual binary name from .bc filename
+
+Provide the exact command to run. Respond in JSON:
+{{
+  "reasoning": "explain which directory and binary to use",
+  "commands": ["python3 /path/to/gen_distance_fast.py /path/to/bc/dir /path/to/temp binary_name"]
+}}"""
+        
+        response = self.ask_llm(question)
+        self.log_llm_reasoning("LLM reasoning:", response.get('reasoning', ''))
+        
+        commands = response.get('commands', [])
+        if not commands:
+            error_msg = "LLM failed to provide distance generation command"
+            self.logger.error(error_msg)
+            self.state.errors.append(error_msg)
+            return False
+        
+        # Execute LLM's command
+        cmd = commands[0] if len(commands) == 1 else " && ".join(commands)
+        self.logger.info(f"Running LLM command: {cmd}")
+        
+        process = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        output_lines = []
+        for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            output_lines.append(line)
+        
+        code = process.wait()
+        stdout = ''.join(output_lines)
+        
+        if code == 0:
+            distance_file = self.temp_dir / 'distance.cfg.txt'
+            if distance_file.exists() and distance_file.stat().st_size > 0:
+                self.logger.info("✓ Distance file generated successfully using LLM guidance")
+                code, stdout, stderr = self.run_command(f"head -n5 {distance_file}")
+                self.logger.info(f"Distance values:\n{stdout}")
+                return True
+            else:
+                error_msg = "LLM command succeeded but distance.cfg.txt was not created properly"
+                self.logger.error(error_msg)
+                self.state.errors.append(error_msg)
+                return False
+        else:
+            error_msg = f"LLM distance generation command failed (exit code {code})"
+            self.logger.error(error_msg)
+            self.logger.error(f"Stdout:\n{stdout}")
+            self.state.errors.append(error_msg)
+            return False
     
     def run(self) -> bool:
         """Main execution loop with LLM-driven decision making"""

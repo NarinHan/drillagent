@@ -2,6 +2,13 @@
 .claude/
 openai.key
 src/drillagent/scripts/lhy_test.py
+.env
+
+# AFLGO agent
+instrumented/
+src/instrumentation/configs/
+src/instrumentation/repos/
+src/instrumentation/fuzzing/
 
 # 
 # Below contents are from the Github template
