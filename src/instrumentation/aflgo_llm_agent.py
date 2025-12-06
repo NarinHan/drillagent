@@ -869,7 +869,7 @@ Example: If the bug is in a for-loop at line 100, you might include lines 99-103
         return False
     
     def phase_build_with_llm(self, phase_num: int = 1) -> bool:
-        """Build using exact commands from config (phase 1 or 2)"""
+        """Build with LLM guidance (phase 1 or 2)"""
         phase_name = "CG/CFG Generation" if phase_num == 1 else "Distance Instrumentation"
         self.logger.info(f"=== Phase {phase_num + 2}: {phase_name} ===")
         
@@ -878,82 +878,269 @@ Example: If the bug is in a for-loop at line 100, you might include lines 99-103
         
         # Get build commands from config
         build_commands_str = self.config.get('build_config', {}).get('build_commands', '')
-        if not build_commands_str:
-            error_msg = "No build_commands found in config"
-            self.logger.error(error_msg)
-            self.state.errors.append(error_msg)
-            return False
         
-        # Parse build commands from config (split by newlines, filter out comments and empty lines)
-        build_commands = [cmd.strip() for cmd in build_commands_str.split('\n') 
-                         if cmd.strip() and not cmd.strip().startswith('#')]
+        max_build_attempts = 5
+        for attempt in range(max_build_attempts):
+            self.logger.info(f"Build attempt {attempt + 1}/{max_build_attempts}")
+            
+            # Show memory state for attempts > 0
+            if attempt > 0:
+                repeated = self.state.get_repeated_errors(2)
+                if repeated:
+                    self.logger.info(f"📊 Memory: Detected {len(repeated)} repeated error pattern(s)")
+                    for sig, count in repeated[:3]:  # Show top 3
+                        self.logger.info(f"   - {sig}: {count}x")
+            
+            # Reset environment to original state before each attempt
+            # This prevents flag accumulation across retries
+            for key in ['CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS']:
+                if self.original_env[key]:
+                    os.environ[key] = self.original_env[key]
+                elif key in os.environ:
+                    del os.environ[key]
+            
+            # Set compiler flags fresh for this attempt
+            if phase_num == 1:
+                additional = f"-targets={targets_file} -outdir={self.temp_dir} -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps"
+                os.environ['CFLAGS'] = f"{additional} -g"
+                os.environ['CXXFLAGS'] = f"{additional} -g"
+            else:
+                os.environ['CFLAGS'] = f"-distance={distance_file.resolve()}"
+                os.environ['CXXFLAGS'] = f"-distance={distance_file.resolve()}"
+            
+            # Add custom flags from config
+            custom_cflags = self.config.get('build_config', {}).get('cflags', '')
+            if custom_cflags:
+                os.environ['CFLAGS'] = f"{custom_cflags} {os.environ['CFLAGS']}"
+                os.environ['CXXFLAGS'] = f"{custom_cflags} {os.environ['CXXFLAGS']}"
+            
+            # Attempt 1: Try build commands from config directly (if available and first attempt)
+            if attempt == 0 and build_commands_str:
+                self.logger.info("Trying build commands from config first...")
+                
+                # Parse build commands from config
+                commands = [cmd.strip() for cmd in build_commands_str.split('\n') 
+                           if cmd.strip() and not cmd.strip().startswith('#')]
+                
+                if commands:
+                    self.logger.info(f"Using {len(commands)} build commands from config")
+                    success = self._execute_commands(commands)
+                    
+                    if success:
+                        # Validate that required artifacts were produced
+                        if phase_num == 1:
+                            validation_success = self._validate_cg_cfg_artifacts()
+                            if not validation_success:
+                                self.logger.warning(f"Build succeeded but required .bc files not found. Will retry with LLM guidance.")
+                            else:
+                                self.logger.info("Build successful with config commands and artifacts validated!")
+                                return True
+                        else:
+                            validation_success = self._validate_instrumented_binary()
+                            if not validation_success:
+                                self.logger.warning(f"Build succeeded but instrumented binary not found. Will retry with LLM guidance.")
+                            else:
+                                self.logger.info("Build successful with config commands and artifacts validated!")
+                                return True
+                    else:
+                        self.logger.warning(f"Build with config commands failed. Switching to LLM-guided approach...")
+            
+            # Attempt 2+: Use LLM to analyze errors and suggest fixes
+            # Check build system indicators
+            has_cmake = (self.subject_dir / 'CMakeLists.txt').exists()
+            has_configure_ac = (self.subject_dir / 'configure.ac').exists()
+            has_configure = (self.subject_dir / 'configure').exists()
+            has_makefile = (self.subject_dir / 'Makefile').exists()
+            has_autogen = (self.subject_dir / 'autogen.sh').exists()
+            
+            # Ask LLM for build commands with detailed context
+            question = f"""I need to build this project for AFLGo instrumentation.
+Build phase: {phase_name}
+Attempt: {attempt + 1}
+
+Environment:
+- CC: {os.environ.get('CC')}
+- CXX: {os.environ.get('CXX')}
+- CFLAGS: {os.environ.get('CFLAGS')}
+- CXXFLAGS: {os.environ.get('CXXFLAGS')}
+- LDFLAGS: {os.environ.get('LDFLAGS')}
+- Subject directory: {self.subject_dir}
+
+Project structure:
+- Has CMakeLists.txt: {has_cmake}
+- Has configure.ac: {has_configure_ac}
+- Has configure: {has_configure}
+- Has Makefile: {has_makefile}
+- Has autogen.sh: {has_autogen}"""
+            
+            # Add SEC-bench build commands if available
+            if build_commands_str:
+                question += f"""
+
+**REFERENCE BUILD SCRIPT (from SEC-bench):**
+This is the KNOWN WORKING build script for this project:
+```bash
+{build_commands_str}
+```
+
+**IMPORTANT:** 
+- The build script above shows the EXACT commands that work for this project
+- Adapt these commands to work with AFLGo instrumentation
+- The CC, CXX, CFLAGS, CXXFLAGS environment variables are ALREADY SET for AFLGo
+- Just follow the same sequence of commands (autoreconf, configure, make, etc.)
+- Do NOT add extra compiler flags - they are already in the environment
+"""
+            
+            question += """
+
+Please provide the EXACT shell commands I should run to build this project.
+Format your response as JSON with:
+{{
+  "reasoning": "your analysis",
+  "commands": ["command1", "command2", "command3"],
+  "working_directory": "where to run commands (absolute path or 'subject_dir' or 'build_dir')"
+}}
+
+Important:
+- For CMake projects: create a build directory, cd into it, run cmake .., then make
+- For autotools: run autoreconf -i (or ./autogen.sh), then ./configure, then make
+- Always use -j$(nproc) for make commands
+- The CC, CXX, CFLAGS, CXXFLAGS are already set in the environment
+
+**CRITICAL CONSTRAINTS:**
+- AFLGo toolchain ({self.aflgo_dir}) is WORKING and must NOT be modified
+- Do NOT suggest reinstalling or rebuilding AFLGo
+- Do NOT modify aflgo-clang or aflgo-clang++ compilers
+- All fixes must target the PROJECT BEING BUILT
+- You CAN modify: project Makefiles, configure scripts, source files, environment variables
+- You CANNOT modify: anything in {self.aflgo_dir}/
+"""
+            
+            if attempt > 0:
+                # Provide comprehensive error context with pattern analysis
+                recent_errors = self.state.errors[-min(3, len(self.state.errors)):]
+                
+                # Get diagnostic insights
+                diagnosis = self.state.diagnose_issue()
+                
+                question += "\n\n=== BUILD FAILURE ANALYSIS ==="
+                question += f"\nAttempt {attempt + 1} of {max_build_attempts}"
+                question += f"\nTotal errors encountered: {len(self.state.errors)}"
+                
+                # Show repeated error patterns
+                repeated = self.state.get_repeated_errors(2)
+                if repeated:
+                    question += "\n\nREPEATED ERROR PATTERNS (occurring 2+ times):"
+                    for sig, count in repeated[:5]:  # Show top 5
+                        # Truncate long signatures but keep meaningful info
+                        sig_preview = sig[:300] + '...' if len(sig) > 300 else sig
+                        question += f"\n  [{count}x] {sig_preview}"
+                
+                # Show recent errors
+                question += "\n\nRECENT ERRORS (last 3 attempts):"
+                for i, err in enumerate(recent_errors, 1):
+                    # Truncate long errors but keep enough context for compiler errors
+                    err_preview = err[:2000] + '\n...[truncated]' if len(err) > 2000 else err
+                    question += f"\n\nAttempt {attempt - len(recent_errors) + i + 1}:\n{err_preview}"
+                
+                question += "\n\n**YOUR TASK:**"
+                question += "\nAnalyze the error patterns above and determine what's going wrong."
+                question += "\nProvide a DIFFERENT approach than previous attempts - the same commands won't work."
+                question += "\nYou can:"
+                question += "\n  - Modify project source files or build scripts"
+                question += "\n  - Create wrapper scripts to intercept and fix build issues"
+                question += "\n  - Change environment variables or configure arguments"
+                question += "\n  - Patch Makefiles or configure scripts"
+                question += "\n  - Install missing dependencies"
+                question += "\nProvide COMPLETE implementation - your commands should be ready to execute."
+            
+            # Add configure arguments from config if present
+            configure_args = self.config.get('build_config', {}).get('configure_args', '')
+            if configure_args:
+                question += f"\n\nIMPORTANT: Use these configure arguments: {configure_args}"
+            
+            response = self.ask_llm(question)
+            
+            # Log prompt statistics
+            self.logger.info(f"📝 Prompt length: {len(question)} characters")
+            
+            # Log the full response for debugging
+            reasoning = response.get('reasoning', '')
+            if not reasoning:
+                self.logger.warning(f"⚠️  LLM returned empty reasoning. Full response keys: {list(response.keys())}")
+                # Log first part of response for debugging
+                if response:
+                    self.logger.warning(f"Response preview: {str(response)[:500]}")
+                # Also log a preview of the question to diagnose
+                self.logger.warning(f"Question preview (last 500 chars): ...{question[-500:]}")
+            
+            self.log_llm_reasoning("LLM reasoning:", reasoning)
+            
+            # Record what solution approach we're trying
+            solution_type = reasoning[:100] if reasoning else "empty_response"
+            
+            # Execute build based on LLM guidance
+            success = self._execute_build(response)
+            
+            # Record the solution attempt
+            self.state.record_solution_attempt(
+                solution_type=solution_type,
+                details={'attempt': attempt + 1},
+                success=success
+            )
+            
+            if success:
+                # Validate that required artifacts were produced
+                if phase_num == 1:
+                    # Phase 1: Check for LLVM bytecode files
+                    validation_success = self._validate_cg_cfg_artifacts()
+                    if not validation_success:
+                        self.logger.warning(f"Build succeeded but required .bc files not found. Attempt {attempt + 1}")
+                        continue
+                else:
+                    # Phase 2: Check for instrumented binary
+                    validation_success = self._validate_instrumented_binary()
+                    if not validation_success:
+                        self.logger.warning(f"Build succeeded but instrumented binary not found. Attempt {attempt + 1}")
+                        continue
+                
+                self.logger.info("Build successful and artifacts validated!")
+                return True
+            else:
+                self.logger.warning(f"Build attempt {attempt + 1} failed")
         
-        if not build_commands:
-            error_msg = "No valid build commands found in config after parsing"
-            self.logger.error(error_msg)
-            self.state.errors.append(error_msg)
-            return False
-        
-        # For phase 1, ensure clean build to generate CFG files
-        # The repository is already freshly cloned in Phase 1, so no need to clean
-        # Just ensure we're building from scratch
-        if phase_num == 1:
-            self.logger.info("Building from fresh repository clone (Phase 1)")
-        
-        # Reset environment to original state
-        for key in ['CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS']:
-            if self.original_env[key]:
-                os.environ[key] = self.original_env[key]
-            elif key in os.environ:
-                del os.environ[key]
-        
-        # Set compiler flags for this phase
-        if phase_num == 1:
-            additional = f"-targets={targets_file} -outdir={self.temp_dir} -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps"
-            os.environ['CFLAGS'] = f"{additional} -g"
-            os.environ['CXXFLAGS'] = f"{additional} -g"
-        else:
-            os.environ['CFLAGS'] = f"-distance={distance_file.resolve()}"
-            os.environ['CXXFLAGS'] = f"-distance={distance_file.resolve()}"
-        
-        # Add custom flags from config
-        custom_cflags = self.config.get('build_config', {}).get('cflags', '')
-        if custom_cflags:
-            os.environ['CFLAGS'] = f"{custom_cflags} {os.environ['CFLAGS']}"
-            os.environ['CXXFLAGS'] = f"{custom_cflags} {os.environ['CXXFLAGS']}"
-        
-        # Log the build commands from config
-        self.logger.info(f"Using build commands from config:")
-        for i, cmd in enumerate(build_commands, 1):
-            self.logger.info(f"  [{i}] {cmd}")
-        
-        # Execute build using exact commands from config
-        success = self._execute_commands(build_commands)
-        
-        if not success:
-            error_msg = f"{phase_name} build failed. Check the error messages above."
-            self.logger.error(error_msg)
-            self.state.errors.append(error_msg)
-            return False
-        
-        # Validate that required artifacts were produced
-        if phase_num == 1:
-            # Phase 1: Check for LLVM bytecode files
-            if not self._validate_cg_cfg_artifacts():
-                error_msg = "Build succeeded but required .bc files not found"
-                self.logger.error(error_msg)
-                self.state.errors.append(error_msg)
+        # Log final failure after all attempts
+        error_msg = f"Build phase failed after {max_build_attempts} attempts"
+        self.logger.error(error_msg)
+        self.state.errors.append(error_msg)
+        return False
+    
+    def _execute_build(self, llm_response: Dict) -> bool:
+        """Execute the build based on LLM guidance"""
+        try:
+            # Extract commands from LLM response
+            commands = llm_response.get('commands', [])
+            
+            # If no commands, extract from reasoning or use build_commands from config
+            if not commands:
+                reasoning = llm_response.get('reasoning', '')
+                if reasoning:
+                    self.logger.info("No 'commands' field found, extracting from reasoning...")
+                    commands = self._extract_commands_from_reasoning(reasoning)
+                else:
+                    self.logger.warning("⚠️  LLM response has no commands or reasoning")
+            
+            if not commands:
+                self.logger.error("No build commands available to execute")
+                self.state.errors.append("LLM provided no actionable commands")
                 return False
-        else:
-            # Phase 2: Check for instrumented binary
-            if not self._validate_instrumented_binary():
-                error_msg = "Build succeeded but instrumented binary not found"
-                self.logger.error(error_msg)
-                self.state.errors.append(error_msg)
-                return False
-        
-        self.logger.info("Build successful and artifacts validated!")
-        return True
+            
+            return self._execute_commands(commands)
+        except Exception as e:
+            error_msg = f"Exception in _execute_build: {str(e)}"
+            self.logger.error(error_msg)
+            self.state.errors.append(error_msg)
+            return False
     
     def _extract_commands_from_reasoning(self, reasoning: str) -> List[str]:
         """Extract build commands from LLM's reasoning"""
@@ -1440,16 +1627,13 @@ The build may have succeeded but placed the binary in an unexpected location."""
         self.logger.info("=== Phase 4: Distance Generation ===")
         self.state.phase = 'distance'
         
-        # Clean up any previous distance generation state to force fresh run
-        state_file = self.temp_dir / 'state-fast'
-        dot_dir = self.temp_dir / 'dot-files'
-        if state_file.exists():
-            self.logger.info("Removing previous state-fast file to force fresh distance generation")
-            state_file.unlink()
-        if dot_dir.exists():
-            self.logger.info("Removing previous dot-files directory to force fresh callgraph generation")
-            shutil.rmtree(dot_dir)
-            dot_dir.mkdir()
+        # Clean up previous distance.cfg.txt to force fresh run
+        # Note: Do NOT delete dot-files directory as it contains the callgraph and *.distances.txt files
+        distance_cfg = self.temp_dir / 'distance.cfg.txt'
+        
+        if distance_cfg.exists():
+            self.logger.info("Removing previous distance.cfg.txt to force fresh generation")
+            distance_cfg.unlink()
         
         # Clean up BB files
         bbnames = self.temp_dir / 'BBnames.txt'
