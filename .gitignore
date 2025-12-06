@@ -3,6 +3,14 @@
 output/
 openai.key
 src/drillagent/scripts/lhy_test.py
+.env
+test_output/
+
+# AFLGO agent
+instrumented/
+src/instrumentation/configs/
+src/instrumentation/repos/
+src/instrumentation/fuzzing/
 
 # 
 # Below contents are from the Github template
