@@ -1,5 +1,6 @@
 # Customized Items
 .claude/
+output/
 openai.key
 src/drillagent/scripts/lhy_test.py
 .env

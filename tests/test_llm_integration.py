@@ -242,7 +242,7 @@ class TestDrillAgentIntegration:
         from drillagent.config import AgentConfig
         
         config = AgentConfig(
-            target_repo="/tmp/test",
+            target_repo_path="/tmp/test",
             model_provider="claude",
             model_name="claude-3-7-sonnet-20250219"
         )
