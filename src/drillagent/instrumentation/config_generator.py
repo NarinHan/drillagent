@@ -2,21 +2,17 @@
 """
 LLM-Driven AFLGo Config Generator
 
-This agent uses an LLM to intelligently generate AFLGo configuration files
-from SEC-bench CVE instance data. It analyzes the CVE metadata, patch information,
-build scripts, and repository structure to create optimal configs.
+This module provides the ConfigGeneratorAgent class for intelligently generating 
+AFLGo configuration files from SEC-bench CVE instance data using an LLM.
 
-Usage:
-    ./config_generator_agent.py --cve-instance SEC-bench-data/CVE-instances/jq.cve-2023-50246.json
-    ./config_generator_agent.py --cve-id jq.cve-2023-50246
-    ./config_generator_agent.py --batch --output-dir fuzzing/configs
+The agent analyzes CVE metadata, build scripts, and repository structure to create 
+optimal AFLGo instrumentation configurations.
 """
 
 import os
 import sys
 import json
 import yaml
-import argparse
 import logging
 import re
 from pathlib import Path
@@ -42,35 +38,9 @@ try:
 except ImportError:
     pass  # python-dotenv not installed
 
-# Import DrillAgent's LLM interface
+# Import DrillAgent's LLM interface and task loader
 from drillagent.models.llm import LLM
-
-
-@dataclass
-class CVEInstance:
-    """Parsed CVE instance data"""
-    instance_id: str
-    repo: str
-    project_name: str
-    base_commit: str
-    build_sh: str
-    sanitizer_report: Optional[str]
-    bug_description: Optional[str]
-    secb_sh: Optional[str] = None
-    
-    @classmethod
-    def from_json(cls, data: Dict) -> 'CVEInstance':
-        """Create CVEInstance from JSON data"""
-        return cls(
-            instance_id=data['instance_id'],
-            repo=data['repo'],
-            project_name=data['project_name'],
-            base_commit=data['base_commit'],
-            build_sh=data.get('build_sh', ''),
-            sanitizer_report=data.get('sanitizer_report'),
-            bug_description=data.get('bug_description'),
-            secb_sh=data.get('secb_sh')
-        )
+from drillagent.task_loader.sec_bench import RawSecbTaskLoader
 
 
 class ConfigGeneratorAgent:
@@ -156,6 +126,9 @@ log_file: "aflgo_<project>.log"
             self.secbench_dir = secbench_dir
         self.instances_dir = self.secbench_dir / 'CVE-instances'
         
+        # Initialize task loader
+        self.task_loader = RawSecbTaskLoader(dataset_path=str(self.instances_dir))
+        
         # Setup logging
         logging.basicConfig(
             level=logging.INFO,
@@ -163,26 +136,22 @@ log_file: "aflgo_<project>.log"
         )
         self.logger = logging.getLogger(__name__)
     
-    def load_cve_instance(self, instance_path: Path) -> CVEInstance:
-        """Load a CVE instance from JSON file"""
-        with open(instance_path) as f:
-            data = json.load(f)
-        return CVEInstance.from_json(data)
-    
-    def extract_binary_name(self, cve: CVEInstance) -> tuple[str, str]:
+    def extract_binary_name(self, instance_id: str) -> tuple[str, str]:
         """Extract binary name and path from secb_sh repro script
         
         Returns:
             tuple: (binary_name, binary_path) e.g., ('exiv2', '/src/exiv2/build/bin/exiv2')
         """
+        # Get secb_sh from task loader
+        secb_sh = self.task_loader.get_secb_sh(instance_id)
         
-        if not cve.secb_sh:
-            raise ValueError(f"No secb_sh field found for {cve.instance_id}")
+        if not secb_sh:
+            raise ValueError(f"No secb_sh field found for {instance_id}")
         
         # Look for repro() function execution paths like /src/faad2/frontend/faad
         # Pattern: /src/<project>/...path.../binary_name followed by space, arg, or end of line
         # Need to handle paths that may have multiple directory levels (build/bin/, frontend/, .libs/, etc.)
-        match = re.search(r'(/src/[^/]+/(?:[^/\s]+/)*(?:frontend/|build/bin/|build/|bin/|\.libs/)?([a-zA-Z0-9_-]+))(?:\s|$)', cve.secb_sh)
+        match = re.search(r'(/src/[^/]+/(?:[^/\s]+/)*(?:frontend/|build/bin/|build/|bin/|\.libs/)?([a-zA-Z0-9_-]+))(?:\s|$)', secb_sh)
         if match:
             full_path = match.group(1)
             binary = match.group(2)
@@ -190,28 +159,35 @@ log_file: "aflgo_<project>.log"
             if binary not in ['bin', 'build', 'frontend', 'libs', 'src']:
                 return binary, full_path
         
-        raise ValueError(f"Could not extract binary name from secb_sh for {cve.instance_id}")
+        raise ValueError(f"Could not extract binary name from secb_sh for {instance_id}")
     
-    def generate_config_with_llm(self, cve: CVEInstance) -> str:
+    def generate_config_with_llm(self, instance_id: str) -> str:
         """Generate config using LLM"""
+        # Get task data from loader
+        task = self.task_loader.get_task(instance_id)
+        if not task:
+            raise ValueError(f"Task {instance_id} not found")
+        
         # Use base_commit (vulnerable version)
-        commit_id = cve.base_commit
+        commit_id = self.task_loader.get_base_commit(instance_id)
+        build_sh = self.task_loader.get_build_sh(instance_id)
+        secb_sh = self.task_loader.get_secb_sh(instance_id)
         
         # Extract binary name and path
-        binary_name, binary_path = self.extract_binary_name(cve)
+        binary_name, binary_path = self.extract_binary_name(instance_id)
         
         # Build context for LLM
         prompt = f"""Generate an AFLGo YAML configuration file for this CVE instance:
 
 **CVE Instance Data:**
-- instance_id: {cve.instance_id}
-- repo: {cve.repo}
-- project_name: {cve.project_name}
-- base_commit: {cve.base_commit}
+- instance_id: {instance_id}
+- repo: {task.get('repo', 'N/A')}
+- project_name: {task.get('project_name', 'N/A')}
+- base_commit: {commit_id}
 
 **Build Script (from SEC-bench build_sh field):**
 ```bash
-{cve.build_sh}
+{build_sh}
 ```
 
 **CRITICAL: Copy the EXACT build script above into build_config.build_commands field verbatim.**
@@ -219,7 +195,7 @@ log_file: "aflgo_<project>.log"
 
 **Reproduction Script (secb_sh - for binary name detection):**
 ```bash
-{cve.secb_sh[:500] if cve.secb_sh else 'No repro script'}
+{secb_sh[:500] if secb_sh else 'No repro script'}
 ```
 
 **Extracted binary information:**
@@ -260,13 +236,18 @@ IMPORTANT:
     
     def generate_config(self, instance_path: Path, output_path: Optional[Path] = None) -> str:
         """Generate config for a CVE instance"""
-        self.logger.info(f"Generating config for {instance_path.name}")
+        # Extract instance_id from path
+        instance_id = instance_path.stem
         
-        # Load CVE instance
-        cve = self.load_cve_instance(instance_path)
+        self.logger.info(f"Generating config for {instance_id}")
+        
+        # Load task if not already loaded
+        if instance_id not in self.task_loader.cve_tasks:
+            self.task_loader.instance_ids = [instance_id]
+            self.task_loader.load_cve_tasks()
         
         # Generate config with LLM
-        config_yaml = self.generate_config_with_llm(cve)
+        config_yaml = self.generate_config_with_llm(instance_id)
         
         # Validate YAML
         try:
@@ -276,8 +257,9 @@ IMPORTANT:
             raise ValueError(f"LLM generated invalid YAML: {e}")
         
         # Add sanitizer_report directly (hardcoded, not from LLM)
-        if cve.sanitizer_report:
-            config_dict['sanitizer_report'] = cve.sanitizer_report
+        sanitizer_report = self.task_loader.get_sanitizer_report(instance_id)
+        if sanitizer_report:
+            config_dict['sanitizer_report'] = sanitizer_report
         
         # Convert back to YAML
         config_yaml = yaml.dump(config_dict, default_flow_style=False, sort_keys=False, allow_unicode=True)
@@ -295,120 +277,32 @@ IMPORTANT:
         """Generate configs for all CVE instances"""
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Get all instance files
-        instance_files = sorted(self.instances_dir.glob('*.json'))
+        # Load all tasks using task loader
+        self.task_loader.load_cve_tasks()
+        instance_ids = self.task_loader.get_all_instance_ids()
         
+        # Apply filter if provided
         if filter_pattern:
-            instance_files = [f for f in instance_files if filter_pattern in f.name]
+            instance_ids = [iid for iid in instance_ids if filter_pattern in iid]
         
-        self.logger.info(f"Generating configs for {len(instance_files)} CVE instances")
+        self.logger.info(f"Generating configs for {len(instance_ids)} CVE instances")
         
-        for instance_file in instance_files:
+        for instance_id in instance_ids:
             # Generate output filename
-            output_name = instance_file.stem + '.yaml'
+            output_name = instance_id + '.yaml'
             output_path = output_dir / output_name
             
             # Skip if already exists (optional)
             if output_path.exists():
-                self.logger.info(f"Skipping {instance_file.name} - config already exists")
+                self.logger.info(f"Skipping {instance_id} - config already exists")
                 continue
             
             try:
-                self.generate_config(instance_file, output_path)
+                # Create a fake path for compatibility with generate_config
+                instance_path = self.instances_dir / f"{instance_id}.json"
+                self.generate_config(instance_path, output_path)
             except Exception as e:
-                self.logger.error(f"Error generating config for {instance_file.name}: {e}")
+                self.logger.error(f"Error generating config for {instance_id}: {e}")
                 continue
         
         self.logger.info("Batch generation complete!")
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description='LLM-Driven AFLGo Config Generator',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Generate config for a specific CVE instance
-  ./config_generator_agent.py --cve-instance DrillAgent/datasets/sec-bench/CVE-instances/jq.cve-2023-50246.json
-  
-  # Generate config by CVE ID
-  ./config_generator_agent.py --cve-id jq.cve-2023-50246
-  
-  # Generate all configs
-  ./config_generator_agent.py --batch --output-dir fuzzing/configs
-  
-  # Generate configs for specific project
-  ./config_generator_agent.py --batch --filter gpac --output-dir fuzzing/configs
-"""
-    )
-    
-    parser.add_argument('--cve-instance', type=Path,
-                       help='Path to CVE instance JSON file')
-    parser.add_argument('--cve-id', 
-                       help='CVE instance ID (e.g., jq.cve-2023-50246)')
-    parser.add_argument('--batch', action='store_true',
-                       help='Generate configs for all CVE instances')
-    parser.add_argument('--filter',
-                       help='Filter pattern for batch generation (e.g., "gpac", "jq")')
-    parser.add_argument('--output-dir', type=Path, default=Path('fuzzing/configs'),
-                       help='Output directory for generated configs')
-    parser.add_argument('--output', type=Path,
-                       help='Output file path (for single config)')
-    parser.add_argument('--secbench-dir', type=Path,
-                       default=None,
-                       help='Path to SEC-bench data directory (default: <project_root>/datasets/sec-bench)')
-    parser.add_argument('--llm-provider', default='openai',
-                       help='LLM provider to use: "openai" or "claude" (default: openai)')
-    parser.add_argument('--llm-model', default='gpt-4-turbo',
-                       help='LLM model to use (default: gpt-4-turbo for OpenAI, claude-3-7-sonnet-20250219 for Claude)')
-    parser.add_argument('--api-key',
-                       help='API key (or set OPENAI_API_KEY/ANTHROPIC_API_KEY env var)')
-    
-    args = parser.parse_args()
-    
-    # Validate arguments
-    if not args.batch and not args.cve_instance and not args.cve_id:
-        parser.error("Must specify --cve-instance, --cve-id, or --batch")
-    
-    # Create agent
-    agent = ConfigGeneratorAgent(
-        llm_provider=args.llm_provider,
-        llm_model=args.llm_model,
-        api_key=args.api_key,
-        secbench_dir=args.secbench_dir
-    )
-    
-    # Execute
-    if args.batch:
-        agent.generate_batch(args.output_dir, args.filter)
-    else:
-        # Determine instance path
-        if args.cve_instance:
-            instance_path = args.cve_instance
-        else:
-            instance_path = agent.instances_dir / f"{args.cve_id}.json"
-            if not instance_path.exists():
-                print(f"Error: CVE instance not found: {instance_path}")
-                return 1
-        
-        # Determine output path
-        if args.output:
-            output_path = args.output
-        else:
-            output_name = instance_path.stem + '.yaml'
-            output_path = args.output_dir / output_name
-        
-        # Generate
-        config = agent.generate_config(instance_path, output_path)
-        
-        # Also print to stdout
-        print("\n" + "="*60)
-        print("Generated Configuration:")
-        print("="*60)
-        print(config)
-    
-    return 0
-
-
-if __name__ == '__main__':
-    sys.exit(main())

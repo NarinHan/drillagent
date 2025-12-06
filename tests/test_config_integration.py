@@ -92,6 +92,98 @@ def test_config_generator_integration():
         return False
 
 
+def test_batch_config_generation():
+    """Test batch config generation for multiple CVEs"""
+    
+    print("\n" + "=" * 60)
+    print("Testing Batch Config Generation")
+    print("=" * 60)
+    
+    # Create a test configuration
+    config = AgentConfig(
+        target_repo="repos/exiv2",
+        model_provider="openai",
+        model_name="gpt-4-turbo",
+        api_key=os.getenv("OPENAI_API_KEY"),
+        enable_distance=True,
+        output_dir="./test_output",
+        verbose=False  # Less verbose for batch
+    )
+    
+    print("\nInitializing DrillAgent...")
+    agent = DrillAgent(config)
+    
+    if not hasattr(agent, 'config_generator') or agent.config_generator is None:
+        print("✗ ConfigGeneratorAgent not initialized")
+        return False
+    
+    print("✓ ConfigGeneratorAgent initialized")
+    
+    # Test batch generation with filter
+    output_dir = Path("./test_output/batch_configs")
+    filter_pattern = "exiv2"  # Only generate for exiv2 CVEs
+    
+    print(f"\nGenerating configs for CVEs matching '{filter_pattern}'...")
+    print(f"Output directory: {output_dir}")
+    
+    try:
+        agent.config_generator.generate_batch(output_dir, filter_pattern)
+        
+        # Check how many configs were generated
+        generated_configs = list(output_dir.glob("*.yaml"))
+        print(f"\n✓ Batch generation complete!")
+        print(f"  Generated {len(generated_configs)} config files:")
+        
+        for config_file in sorted(generated_configs)[:5]:  # Show first 5
+            print(f"    - {config_file.name}")
+        
+        if len(generated_configs) > 5:
+            print(f"    ... and {len(generated_configs) - 5} more")
+        
+        if len(generated_configs) > 0:
+            # Verify one of the configs
+            sample_config = generated_configs[0]
+            print(f"\n✓ Sample config verification: {sample_config.name}")
+            
+            import yaml
+            with open(sample_config) as f:
+                config_data = yaml.safe_load(f)
+            
+            required_fields = ['repo_url', 'commit_id', 'cve_id', 'binary_name', 
+                             'binary_path', 'sanitizer_report', 'build_config']
+            
+            missing_fields = [field for field in required_fields if field not in config_data]
+            
+            if missing_fields:
+                print(f"✗ Missing required fields: {missing_fields}")
+                return False
+            else:
+                print(f"  ✓ All required fields present")
+                print(f"  ✓ CVE ID: {config_data.get('cve_id')}")
+                print(f"  ✓ Binary: {config_data.get('binary_name')}")
+            
+            return True
+        else:
+            print("✗ No configs were generated")
+            return False
+            
+    except Exception as e:
+        print(f"✗ Error during batch generation: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 if __name__ == "__main__":
-    success = test_config_generator_integration()
-    sys.exit(0 if success else 1)
+    # Run both tests
+    test1_success = test_config_generator_integration()
+    test2_success = test_batch_config_generation()
+    
+    print("\n" + "=" * 60)
+    print("TEST SUMMARY")
+    print("=" * 60)
+    print(f"Single config generation: {'✓ PASS' if test1_success else '✗ FAIL'}")
+    print(f"Batch config generation:  {'✓ PASS' if test2_success else '✗ FAIL'}")
+    print("=" * 60)
+    
+    sys.exit(0 if (test1_success and test2_success) else 1)
