@@ -18,7 +18,8 @@ class DrillAgent:
         # The only init parameter is the AgentConfig dataclass instance.
         self.config = config
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, mutating, completed
-        self.skip_root_cause_analysis = config.disable_vuln_root_cause_analysis # Currently we only consider this skip option.
+        self.skip_instrumentation     = config.disable_program_instrumentation
+        self.skip_root_cause_analysis = config.disable_vuln_root_cause_analysis # Currently we only consider these two skip options.
         self.iteration = 0
         self.errors = []
 
@@ -111,7 +112,8 @@ class DrillAgent:
 
         try:
             # Phase 1: Code Instrumentation
-            self._phase_instrumentation()
+            if not self.skip_instrumentation:
+                self._phase_instrumentation()
 
             # Phase 2: Root Cause Analysis
             if not self.skip_root_cause_analysis:
