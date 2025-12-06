@@ -71,22 +71,18 @@ class DrillAgent:
         
         # Distance calculator using ConfigGeneratorAgent
         if self.config.enable_distance:
-            try:
-                self.logger.info("Initializing ConfigGeneratorAgent for distance calculation...")
-                # Get project root to locate SEC-bench data
-                project_root = Path(__file__).resolve().parent.parent.parent
-                secbench_dir = project_root / 'datasets' / 'sec-bench'
-                
-                self.config_generator = ConfigGeneratorAgent(
-                    llm_provider=self.config.model_provider,
-                    llm_model=self.config.model_name,
-                    api_key=self.config.api_key,
-                    secbench_dir=secbench_dir
-                )
-                self.logger.info("✓ ConfigGeneratorAgent initialized")
-            except Exception as e:
-                self.logger.error(f"Failed to initialize ConfigGeneratorAgent: {e}")
-                self.config_generator = None
+            self.logger.info("Initializing ConfigGeneratorAgent for distance calculation...")
+            # Get project root to locate SEC-bench data
+            project_root = Path(__file__).resolve().parent.parent.parent
+            secbench_dir = project_root / 'datasets' / 'sec-bench'
+            
+            self.config_generator = ConfigGeneratorAgent(
+                llm_provider=self.config.model_provider,
+                llm_model=self.config.model_name,
+                api_key=self.config.api_key,
+                secbench_dir=secbench_dir
+            )
+            self.logger.info("✓ ConfigGeneratorAgent initialized")
         else:
             self.config_generator = None
         
