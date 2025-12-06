@@ -3,8 +3,6 @@ import json
 import glob
 from pathlib import Path
 from typing import Dict, List, Optional
-from drillagent.drill_agent import DrillAgent
-from drillagent.config import AgentConfig
 
 
 class RawSecbTaskLoader:
