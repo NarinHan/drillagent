@@ -35,16 +35,13 @@ Examples:
   # Analyze a repository with default settings
   python main_test.py /path/to/repo --cve CVE-2024-1234
 
-  # Interactive mode for debugging
-  python main_test.py /path/to/repo --interactive
-
 For more information, see: https://github.com/learjet5/DrillAgent
         """
     )
 
     # Required arguments (optional when using --test-loader)
     parser.add_argument(
-        "target_repo",
+        "target_repo_path",
         nargs='?',
         help="Path to target repository or binary"
     )
@@ -54,12 +51,6 @@ For more information, see: https://github.com/learjet5/DrillAgent
         "--cve",
         dest="cve_id",
         help="CVE identifier (e.g., CVE-2024-1234)"
-    )
-
-    parser.add_argument(
-        "--binary",
-        dest="target_binary",
-        help="Specific binary to analyze (if not provided, will auto-detect)"
     )
 
     parser.add_argument(
@@ -131,12 +122,6 @@ For more information, see: https://github.com/learjet5/DrillAgent
         help="Enable verbose output"
     )
 
-    parser.add_argument(
-        "-i", "--interactive",
-        action="store_true",
-        help="Start in interactive mode"
-    )
-
     # Test mode for RawSecbTaskLoader
     parser.add_argument(
         "--test-loader",
@@ -193,21 +178,17 @@ def main():
         return
 
     # Validate required arguments for normal mode
-    if not args.target_repo:
-        print("Error: target_repo is required (unless using --test-loader)")
+    if not args.target_repo_path:
+        print("Error: target_repo_path is required (unless using --test-loader)")
         sys.exit(1)
 
     # Create configuration from arguments
     config = AgentConfig(
-        target_repo=args.target_repo,
-        target_binary=args.target_binary,
+        target_repo_path=args.target_repo_path,
         cve_id=args.cve_id,
         model_provider=args.model,
         model_name=args.model_name,
         api_key=args.api_key,
-        enable_coverage=not args.no_coverage,
-        enable_distance=not args.no_distance,
-        enable_sanitizer=not args.no_sanitizer,
         max_iterations=args.max_iterations,
         timeout=args.timeout,
         output_dir=args.output_dir,
@@ -223,16 +204,13 @@ def main():
     try:
         agent = DrillAgent(config)
 
-        if args.interactive:
-            agent.interactive_mode()
-        else:
-            result = agent.run()
+        result = agent.run()
 
-            # Exit with appropriate code
-            if result['final_phase'] == 'completed' and result['povs_generated'] > 0:
-                sys.exit(0)
-            else:
-                sys.exit(1)
+        # Exit with appropriate code
+        if result['final_phase'] == 'completed' and result['povs_generated'] > 0:
+            sys.exit(0)
+        else:
+            sys.exit(1)
 
     except KeyboardInterrupt:
         print("\n\nInterrupted by user. Exiting...")

@@ -2,34 +2,40 @@
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from typing import Dict, Any, List
+from dataclasses import dataclass, field
 
-from drillagent.config import AgentConfig, AnalysisState
+from drillagent.config import AgentConfig 
 from drillagent.models import LLM
 
 
 class DrillAgent:
-    """
-    Core orchestration class of DrillAgent
-    Responsible for coordinating all modules to complete the full workflow from source code and vulnerability locations to the final PoV.
-    """
+    # Core orchestration class of DrillAgent
+    # Note that:
+    # 1. This DrillAgent only runs for a single CVE task at a time. Benchmark's batch task scheduling should be placed at the caller layer.
+    # 2. Only the essential elements for basic PoV generation are included in DrillAgent; all other information should be maintained at the caller layer.
 
     def __init__(self, config: AgentConfig):
         """
-        Initialize DrillAgent with configuration
-
         Args:
             config: AgentConfig object containing all settings
         """
         self.config = config
-        self.state = AnalysisState()
+
+        self.phase = "initialized"
+        self.crash_inputs = []
+        self.pov_candidates = []
+        self.iteration = 0
+        self.errors = []
+        self.vulnerability_info = None
+        self.coverage_data = None
+
         self.logger = self._setup_logger()
 
         # Initialize components (TODO: implement these)
         self._init_components()
 
-        self.logger.info(f"DrillAgent initialized for target: {config.target_repo}")
+        self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
 
     def _setup_logger(self) -> logging.Logger:
         """Setup logging for DrillAgent"""
@@ -62,9 +68,6 @@ class DrillAgent:
             self.llm = None
 
         # TODO: Initialize instrumentation components
-        # self.coverage_instrument = CoverageInstrument() if self.config.enable_coverage else None
-        # self.distance_calculator = DistanceCalculator() if self.config.enable_distance else None
-        # self.memory_sanitizer = MemorySanitizer() if self.config.enable_sanitizer else None
         self.coverage_instrument = None
         self.distance_calculator = None
         self.memory_sanitizer = None
@@ -82,7 +85,6 @@ class DrillAgent:
     def run(self) -> Dict[str, Any]:
         """
         Main orchestration workflow
-
         Returns:
             Dictionary containing analysis results and generated PoVs
         """
@@ -104,45 +106,42 @@ class DrillAgent:
             self._phase_pov_generation()
 
             # Mark as completed
-            self.state.phase = "completed"
+            self.phase = "completed"
 
             return self._generate_report()
 
         except Exception as e:
             self.logger.error(f"Fatal error in DrillAgent workflow: {e}", exc_info=True)
-            self.state.errors.append(str(e))
+            self.errors.append(str(e))
             return self._generate_report()
 
     def _phase_instrumentation(self):
         """Phase 1: Instrument the target binary with coverage and sanitizers"""
         self.logger.info("\n[Phase 1] Code Instrumentation")
-        self.state.phase = "instrumentation"
+        self.phase = "instrumentation"
 
         # TODO: Implement instrumentation logic
         # Step 1: Build with coverage instrumentation
-        if self.config.enable_coverage:
-            self.logger.info("  - Applying coverage instrumentation (llvm-cov)...")
-            # coverage_binary = self.coverage_instrument.instrument(self.config.target_repo)
-            self.logger.info("    TODO: Implement coverage instrumentation")
+        #     self.logger.info("  - Applying coverage instrumentation (llvm-cov)...")
+        #     # coverage_binary = self.coverage_instrument.instrument(self.config.target_repo_path)
+        #     self.logger.info("    TODO: Implement coverage instrumentation")
 
-        # Step 2: Calculate distance file for guided fuzzing
-        if self.config.enable_distance:
-            self.logger.info("  - Calculating distance file...")
-            # distance_file = self.distance_calculator.calculate(self.config.target_repo)
-            self.logger.info("    TODO: Implement distance calculation")
+        # # Step 2: Calculate distance file for guided fuzzing
+        #     self.logger.info("  - Calculating distance file...")
+        #     # distance_file = self.distance_calculator.calculate(self.config.target_repo_path)
+        #     self.logger.info("    TODO: Implement distance calculation")
 
-        # Step 3: Build with memory sanitizer
-        if self.config.enable_sanitizer:
-            self.logger.info("  - Applying memory sanitizer...")
-            # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)
-            self.logger.info("    TODO: Implement memory sanitizer")
+        # # Step 3: Build with memory sanitizer
+        #     self.logger.info("  - Applying memory sanitizer...")
+        #     # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo_path)
+        #     self.logger.info("    TODO: Implement memory sanitizer")
 
         self.logger.info("  ✓ Instrumentation phase completed")
 
     def _phase_root_cause_analysis(self):
         """Phase 2: Analyze vulnerability root cause using LLM"""
         self.logger.info("\n[Phase 2] Root Cause Analysis")
-        self.state.phase = "analyzing"
+        self.phase = "analyzing"
 
         # TODO: Implement root cause analysis
         # Step 1: Collect vulnerability information
@@ -151,7 +150,7 @@ class DrillAgent:
 
         # Step 2: Use LLM to analyze root cause
         self.logger.info("  - Analyzing root cause with LLM...")
-        # self.state.vulnerability_info = self.root_cause_analyzer.analyze(
+        # self.vulnerability_info = self.root_cause_analyzer.analyze(
         #     cve_id=self.config.cve_id,
         #     source_code=vuln_info['source'],
         #     patch_diff=vuln_info.get('patch')
@@ -163,28 +162,28 @@ class DrillAgent:
     def _phase_exploration_and_mutation(self):
         """Phase 3: Coverage-guided path exploration and input mutation"""
         self.logger.info("\n[Phase 3] Path Exploration and Input Mutation")
-        self.state.phase = "mutating"
+        self.phase = "mutating"
 
         # TODO: Implement exploration and mutation loop
         max_iterations = self.config.max_iterations
 
         for iteration in range(max_iterations):
-            self.state.iteration = iteration
+            self.iteration = iteration
             self.logger.info(f"\n  Iteration {iteration + 1}/{max_iterations}")
 
             # Step 1: Explore new paths based on coverage feedback
             self.logger.info("    - Exploring new execution paths...")
             # new_paths = self.path_explorer.explore(
-            #     current_coverage=self.state.coverage_data,
-            #     target_vuln=self.state.vulnerability_info
+            #     current_coverage=self.coverage_data,
+            #     target_vuln=self.vulnerability_info
             # )
 
             # Step 2: Mutate inputs to trigger crash
             self.logger.info("    - Mutating inputs to trigger vulnerability...")
             # mutated_inputs = self.input_mutator.mutate(
-            #     base_inputs=self.state.crash_inputs,
+            #     base_inputs=self.crash_inputs,
             #     target_paths=new_paths,
-            #     vulnerability_info=self.state.vulnerability_info
+            #     vulnerability_info=self.vulnerability_info
             # )
 
             # Step 3: Execute and collect feedback
@@ -194,7 +193,7 @@ class DrillAgent:
             # Step 4: Check if we found a crash
             # if self._found_crash(execution_results):
             #     self.logger.info("    ✓ Found crash trigger!")
-            #     self.state.crash_inputs.extend(execution_results['crashes'])
+            #     self.crash_inputs.extend(execution_results['crashes'])
             #     break
 
             self.logger.info("      TODO: Implement path exploration and mutation")
@@ -208,13 +207,13 @@ class DrillAgent:
         # TODO: Implement PoV generation
         # Step 1: Generate PoV from crash inputs
         self.logger.info("  - Generating PoV test cases...")
-        # for crash_input in self.state.crash_inputs:
+        # for crash_input in self.crash_inputs:
         #     pov = self._generate_pov(crash_input)
-        #     self.state.pov_candidates.append(pov)
+        #     self.pov_candidates.append(pov)
 
         # Step 2: Verify PoV actually triggers the vulnerability
         self.logger.info("  - Verifying PoV test cases...")
-        # verified_povs = self._verify_povs(self.state.pov_candidates)
+        # verified_povs = self._verify_povs(self.pov_candidates)
 
         # Step 3: Save results
         self.logger.info("  - Saving results...")
@@ -226,21 +225,21 @@ class DrillAgent:
     def _generate_report(self) -> Dict[str, Any]:
         """Generate final analysis report"""
         report = {
-            "target_repo": self.config.target_repo,
+            "target_repo_path": self.config.target_repo_path,
             "cve_id": self.config.cve_id,
-            "final_phase": self.state.phase,
-            "iterations": self.state.iteration,
-            "crashes_found": len(self.state.crash_inputs),
-            "povs_generated": len(self.state.pov_candidates),
-            "errors": self.state.errors,
-            "vulnerability_info": self.state.vulnerability_info,
-            "pov_candidates": self.state.pov_candidates,
+            "final_phase": self.phase,
+            "iterations": self.iteration,
+            "crashes_found": len(self.crash_inputs),
+            "povs_generated": len(self.pov_candidates),
+            "errors": self.errors,
+            "vulnerability_info": self.vulnerability_info,
+            "pov_candidates": self.pov_candidates,
         }
 
         self.logger.info("\n" + "=" * 60)
         self.logger.info("DrillAgent Analysis Report")
         self.logger.info("=" * 60)
-        self.logger.info(f"Target: {report['target_repo']}")
+        self.logger.info(f"Target: {report['target_repo_path']}")
         self.logger.info(f"CVE ID: {report['cve_id']}")
         self.logger.info(f"Final Phase: {report['final_phase']}")
         self.logger.info(f"Iterations: {report['iterations']}")
@@ -256,16 +255,14 @@ class DrillAgent:
 
         return report
 
-    def interactive_mode(self):
-        """Interactive mode for debugging and step-by-step execution"""
-        self.logger.info("Entering interactive mode...")
 
-        # TODO: Implement interactive REPL
-        # - Allow step-by-step execution
-        # - Inspect intermediate states
-        # - Manually trigger mutations
-        # - Debug LLM prompts and responses
+@dataclass
+class AnalysisState:
+    # LHY: Not use it currently, but kept for reference.
+    # Track the state of vulnerability analysis
+    phase: str = "initialized"  # initialized, instrumented, analyzing, mutating, completed
+    crash_inputs: List[str] = field(default_factory=list)
+    pov_candidates: List[Dict] = field(default_factory=list)
+    iteration: int = 0
 
-        self.logger.info("TODO: Implement interactive mode")
-        print("\nInteractive mode not yet implemented.")
-        print("Will support: step-by-step execution, state inspection, manual intervention")
+
