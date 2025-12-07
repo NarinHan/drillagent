@@ -41,9 +41,10 @@ except ImportError:
 # Import DrillAgent's LLM interface and task loader
 from drillagent.models.llm import LLM
 from drillagent.task_loader.sec_bench import RawSecbTaskLoader
+from drillagent.instrumentation.base_agent import BaseAgent
 
 
-class ConfigGeneratorAgent:
+class ConfigGeneratorAgent(BaseAgent):
     """LLM-driven AFLGo configuration generator"""
     
     SYSTEM_PROMPT = """You are an expert in directed fuzzing and AFLGo configuration.
@@ -63,7 +64,6 @@ cve_id: "<CVE-YYYY-NNNNN>"
 
 # Directory paths (relative to workspace root or absolute)
 repos_dir: "repos"           # or absolute path
-temps_dir: "fuzzing/temps"   # or absolute path
 
 # Binary name (target executable to fuzz)
 binary_name: "<executable_name>"
@@ -113,10 +113,19 @@ log_file: "aflgo_<project>.log"
                  llm_provider: str = "openai",
                  llm_model: str = "gpt-4-turbo",
                  api_key: Optional[str] = None,
-                 secbench_dir: Path = None):
+                 secbench_dir: Path = None,
+                 max_attempts: int = 10):
         
         # Initialize DrillAgent LLM interface
-        self.llm = LLM(provider=llm_provider, model_name=llm_model, api_key=api_key)
+        llm = LLM(provider=llm_provider, model_name=llm_model, api_key=api_key)
+        
+        # Call parent constructor with system prompt
+        super().__init__(
+            llm=llm,
+            system_prompt=self.SYSTEM_PROMPT,
+            initial_phase="config_generation",
+            max_attempts=max_attempts
+        )
         
         # Default to relative path from project root
         if secbench_dir is None:
@@ -128,13 +137,6 @@ log_file: "aflgo_<project>.log"
         
         # Initialize task loader
         self.task_loader = RawSecbTaskLoader(dataset_path=str(self.instances_dir))
-        
-        # Setup logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='[%(asctime)s] %(levelname)s: %(message)s'
-        )
-        self.logger = logging.getLogger(__name__)
     
     def extract_binary_name(self, instance_id: str) -> tuple[str, str]:
         """Extract binary name and path from secb_sh repro script

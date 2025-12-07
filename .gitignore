@@ -11,6 +11,9 @@ instrumented/
 src/instrumentation/configs/
 src/instrumentation/repos/
 src/instrumentation/fuzzing/
+fuzzing/
+repos/
+output/
 
 # 
 # Below contents are from the Github template
@@ -223,3 +226,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+src/instrumentation/

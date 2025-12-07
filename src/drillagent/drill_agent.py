@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from drillagent.config import AgentConfig 
 from drillagent.models import LLM
 from drillagent.instrumentation import ConfigGeneratorAgent
+from drillagent.instrumentation.instrumentation_agent import InstrumentationAgent
 
 
 class DrillAgent:
@@ -242,6 +243,30 @@ class DrillAgent:
                         # Store config path for later use
                         self.aflgo_config_path = str(output_path)
                         self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
+                        
+                        # Run AFLGo instrumentation using InstrumentationAgent
+                        self.logger.info("  - Running AFLGo instrumentation...")
+                        
+                        # Load the YAML config file into a dictionary
+                        import yaml
+                        with open(output_path, 'r') as f:
+                            config_dict = yaml.safe_load(f)
+                        
+                        instrumentation_agent = InstrumentationAgent(
+                            config=config_dict,
+                            llm=self.llm,
+                            logger=self.logger
+                        )
+                        
+                        # Execute the full instrumentation workflow
+                        result = instrumentation_agent.run()
+                        
+                        if result['success']:
+                            self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
+                            self.state.instrumented_binary = result.get('instrumented_binary')
+                        else:
+                            self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
+                            self.state.errors.append(f"Instrumentation failed: {result.get('error')}")
                     else:
                         self.logger.warning(f"    CVE instance not found: {instance_path}")
                         self.logger.info("    Skipping config generation")
