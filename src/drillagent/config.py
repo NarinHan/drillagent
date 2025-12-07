@@ -43,9 +43,14 @@ class AgentConfig:
 
     #
     # Analysis options
-    # 
+    #
     max_iterations: int = 10
     timeout: int = 1200  # in seconds # 20mins
+
+    # Instrumentation options
+    enable_coverage: bool = False   # Enable coverage instrumentation
+    enable_distance: bool = False   # Enable distance calculation for guided fuzzing
+    enable_sanitizer: bool = False  # Enable memory sanitizer
 
     # 
     # Output options
