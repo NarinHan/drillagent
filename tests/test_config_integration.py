@@ -93,15 +93,15 @@ def test_config_generator_integration():
 
 
 def test_batch_config_generation():
-    """Test batch config generation for multiple CVEs"""
+    """Test batch config generation for ALL CVEs in SEC-bench"""
     
     print("\n" + "=" * 60)
-    print("Testing Batch Config Generation")
+    print("Testing Batch Config Generation for ALL CVEs")
     print("=" * 60)
     
     # Create a test configuration
     config = AgentConfig(
-        target_repo="repos/exiv2",
+        target_repo="repos/placeholder",  # Not used for batch generation
         model_provider="openai",
         model_name="gpt-4-turbo",
         api_key=os.getenv("OPENAI_API_KEY"),
@@ -119,26 +119,29 @@ def test_batch_config_generation():
     
     print("✓ ConfigGeneratorAgent initialized")
     
-    # Test batch generation with filter
+    # Generate configs for ALL CVEs (no filter)
     output_dir = Path("./test_output/batch_configs")
-    filter_pattern = "exiv2"  # Only generate for exiv2 CVEs
     
-    print(f"\nGenerating configs for CVEs matching '{filter_pattern}'...")
+    print(f"\nGenerating configs for ALL CVEs in SEC-bench...")
+    print(f"SEC-bench directory: {agent.config_generator.secbench_dir}")
     print(f"Output directory: {output_dir}")
     
     try:
-        agent.config_generator.generate_batch(output_dir, filter_pattern)
+        # Pass None or empty string to process all CVEs
+        agent.config_generator.generate_batch(output_dir, filter_pattern=None)
         
         # Check how many configs were generated
         generated_configs = list(output_dir.glob("*.yaml"))
         print(f"\n✓ Batch generation complete!")
-        print(f"  Generated {len(generated_configs)} config files:")
+        print(f"  Generated {len(generated_configs)} config files")
         
-        for config_file in sorted(generated_configs)[:5]:  # Show first 5
+        # Show sample of generated configs
+        print(f"\n  Sample of generated configs:")
+        for config_file in sorted(generated_configs)[:10]:  # Show first 10
             print(f"    - {config_file.name}")
         
-        if len(generated_configs) > 5:
-            print(f"    ... and {len(generated_configs) - 5} more")
+        if len(generated_configs) > 10:
+            print(f"    ... and {len(generated_configs) - 10} more")
         
         if len(generated_configs) > 0:
             # Verify one of the configs
@@ -161,6 +164,7 @@ def test_batch_config_generation():
                 print(f"  ✓ All required fields present")
                 print(f"  ✓ CVE ID: {config_data.get('cve_id')}")
                 print(f"  ✓ Binary: {config_data.get('binary_name')}")
+                print(f"  ✓ Repo: {config_data.get('repo_url')}")
             
             return True
         else:

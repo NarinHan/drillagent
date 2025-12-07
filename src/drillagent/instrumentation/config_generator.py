@@ -63,7 +63,6 @@ cve_id: "<CVE-YYYY-NNNNN>"
 
 # Directory paths (relative to workspace root or absolute)
 repos_dir: "repos"           # or absolute path
-temps_dir: "fuzzing/temps"   # or absolute path
 
 # Binary name (target executable to fuzz)
 binary_name: "<executable_name>"
