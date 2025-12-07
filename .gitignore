@@ -12,6 +12,8 @@ src/instrumentation/configs/
 src/instrumentation/repos/
 src/instrumentation/fuzzing/
 fuzzing/
+repos/
+output/
 
 # 
 # Below contents are from the Github template

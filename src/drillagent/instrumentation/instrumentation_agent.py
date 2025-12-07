@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-from drillagent.agents.base_agent import BaseAgent, AgentState
+from drillagent.instrumentation.base_agent import BaseAgent, AgentState
 from drillagent.models.llm import LLM
 
 
@@ -179,9 +179,9 @@ Handle errors by analyzing messages and providing alternative commands in your r
             # Use configured directory
             ray_base = Path(self.config['aflgo_dir']).parent
         else:
-            # Auto-detect: we're in DrillAgent/src/drillagent/agents/instrumentation_agent.py
+            # Auto-detect: we're in DrillAgent/src/drillagent/instrumentation/instrumentation_agent.py
             # Go up to DrillAgent root, then up one more to cs562 where aflgo is a sibling
-            script_dir = Path(__file__).resolve().parent  # .../DrillAgent/src/drillagent/agents
+            script_dir = Path(__file__).resolve().parent  # .../DrillAgent/src/drillagent/instrumentation
             drillagent_root = script_dir.parent.parent.parent  # .../DrillAgent
             ray_base = drillagent_root.parent  # .../cs562 (where both DrillAgent and aflgo live)
         
