@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig 
 from drillagent.models import LLM
-from drillagent.instrumentation import ConfigGeneratorAgent
-from drillagent.instrumentation.instrumentation_agent import InstrumentationAgent
+from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent
 
 
 class DrillAgent:
@@ -34,7 +33,10 @@ class DrillAgent:
         self.pov_candidates     = []
         self.coverage_data      = None
         self.closest_pov_candidate = None
+        
+        # Instrumentation results
         self.aflgo_config_path  = None # Path to AFLGo configuration file
+        self.instrumented_binary = None
 
         # Final analysis results
         self.crash_inputs = []         # Real PoV inputs that trigger the vulnerability
@@ -263,10 +265,10 @@ class DrillAgent:
                         
                         if result['success']:
                             self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
-                            self.state.instrumented_binary = result.get('instrumented_binary')
+                            self.instrumented_binary = result.get('instrumented_binary')
                         else:
                             self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
-                            self.state.errors.append(f"Instrumentation failed: {result.get('error')}")
+                            self.errors.append(f"Instrumentation failed: {result.get('error')}")
                     else:
                         self.logger.warning(f"    CVE instance not found: {instance_path}")
                         self.logger.info("    Skipping config generation")
