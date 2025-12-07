@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 import logging
 import sys
+from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig 
 from drillagent.models import LLM
-from drillagent.instrumentation import ConfigGeneratorAgent
-from drillagent.instrumentation.instrumentation_agent import InstrumentationAgent
+from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent
 
 
 class DrillAgent:
@@ -30,6 +30,10 @@ class DrillAgent:
         self.pov_candidates     = []
         self.coverage_data      = None
         self.closest_pov_candidate = None
+        
+        # Instrumentation results
+        self.aflgo_config_path  = None
+        self.instrumented_binary = None
 
         # Final analysis results
         self.crash_inputs = []         # Real PoV inputs that trigger the vulnerability
@@ -159,7 +163,7 @@ class DrillAgent:
     def _phase_instrumentation(self):
         """Phase 1: Instrument the target binary with coverage and sanitizers"""
         self.logger.info("\n[Phase 1] Code Instrumentation")
-        self.state.phase = "instrumentation"
+        self.phase = "instrumentation"
 
         # TODO: Implement instrumentation logic
         # Step 1: Build with coverage instrumentation
@@ -188,8 +192,8 @@ class DrillAgent:
                         self.logger.info(f"    Generating config from: {instance_path.name}")
                         config_yaml = self.config_generator.generate_config(instance_path, output_path)
                         
-                        # Store config path in state for later use
-                        self.state.aflgo_config_path = str(output_path)
+                        # Store config path for later use
+                        self.aflgo_config_path = str(output_path)
                         self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
                         
                         # Run AFLGo instrumentation using InstrumentationAgent
@@ -211,10 +215,10 @@ class DrillAgent:
                         
                         if result['success']:
                             self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
-                            self.state.instrumented_binary = result.get('instrumented_binary')
+                            self.instrumented_binary = result.get('instrumented_binary')
                         else:
                             self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
-                            self.state.errors.append(f"Instrumentation failed: {result.get('error')}")
+                            self.errors.append(f"Instrumentation failed: {result.get('error')}")
                     else:
                         self.logger.warning(f"    CVE instance not found: {instance_path}")
                         self.logger.info("    Skipping config generation")
@@ -222,7 +226,7 @@ class DrillAgent:
                     self.logger.warning("    No CVE ID provided, skipping config generation")
             except Exception as e:
                 self.logger.error(f"    Failed to generate AFLGo config: {e}")
-                self.state.errors.append(f"Config generation failed: {e}")
+                self.errors.append(f"Config generation failed: {e}")
 
         # Step 3: Build with memory sanitizer
         if self.config.enable_sanitizer:
