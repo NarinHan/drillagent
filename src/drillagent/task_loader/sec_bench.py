@@ -161,6 +161,7 @@ class SecbTask:
         if not self.secb_sh:
             return None
 
+        print(f"Handling get_harness_command for {self.instance_id}...") # by LHY
         # Find the repro() function
         lines = self.secb_sh.split('\n')
         in_repro_function = False
@@ -190,8 +191,11 @@ class SecbTask:
                 continue
 
             # Skip echo/print commands
-            if stripped.startswith('echo ') or stripped.startswith('print ') and ' | ' not in stripped:
-                continue
+            if stripped.startswith('echo ') or stripped.startswith('print '):
+                if ' | ' in stripped:
+                    pass
+                else:
+                    continue
 
             # Extract actual commands
             # This is a real command line

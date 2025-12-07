@@ -70,8 +70,8 @@ def parse_all_cves(dataset_path: str, max_count: int = 200) -> Dict:
         # Extract information
         vuln_location = task.vuln_location
         harness_command = task.harness_command
-        # print(f"\n{instance_id}\n{vuln_location}\n{harness_command}") # by LHY
-        print(f"\n{instance_id}\n{vuln_location}") # by LHY
+        print(f"\n{instance_id}\n{vuln_location}\n{harness_command}") # by LHY
+        # print(f"\n{instance_id}\n{vuln_location}") # by LHY
         # print(f"\n{instance_id}\n{harness_command}") # by LHY
 
 
