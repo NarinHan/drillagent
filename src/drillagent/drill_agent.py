@@ -24,12 +24,12 @@ class DrillAgent:
         self.config = config
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, mutating, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
-        self.skip_root_cause_analysis = config.disable_vuln_root_cause_analysis # Currently we only consider these two skip options.
+        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis # Currently we only consider these two skip options.
         self.iteration = 0
         self.errors = []
 
         # Intermediate analysis results
-        self.vulnerability_info = None # For vulnerability root cause analysis results
+        self.vulnerability_info = None # For vulnerability analysis results (e.g., root cause)
         self.project_info       = None # For project-level analysis results
         self.pov_candidates     = []
         self.coverage_data      = None
@@ -179,7 +179,7 @@ class DrillAgent:
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
 
-        # Checkout the base commit
+        # Checkout the base commit for the target repository
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
         self._checkout_base_commit()
 
@@ -188,9 +188,9 @@ class DrillAgent:
             if not self.skip_instrumentation:
                 self._phase_instrumentation()
 
-            # Phase 2: Root Cause Analysis
-            if not self.skip_root_cause_analysis:
-                self._phase_root_cause_analysis()
+            # Phase 2: Vulnerability Analysis
+            if not self.skip_vulnerability_analysis:
+                self._phase_vulnerability_analysis()
 
             # Phase 3: Path Exploration and Input Mutation
             self._phase_exploration()
@@ -284,14 +284,14 @@ class DrillAgent:
 
         self.logger.info("  ✓ Instrumentation phase completed")
 
-    def _phase_root_cause_analysis(self):
-        """Phase 2: Analyze vulnerability root cause using LLM"""
-        self.logger.info("\n[Phase 2] Root Cause Analysis")
+    def _phase_vulnerability_analysis(self):
+        """Phase 2: Analyze vulnerability using LLM"""
+        self.logger.info("\n[Phase 2] Vulnerability Analysis")
         self.phase = "analyzing"
 
-        # Check if root cause analysis is disabled
-        if self.config.disable_vuln_root_cause_analysis:
-            self.logger.info("  - Root cause analysis disabled by config")
+        # Check if vulnerability analysis is disabled
+        if self.config.disable_vulnerability_analysis:
+            self.logger.info("  - Vulnerability analysis disabled by config")
             return
 
         # Step 1: Prepare vulnerability context information

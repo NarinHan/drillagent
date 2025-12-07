@@ -33,7 +33,7 @@ class AgentConfig:
     # 
     # By default, we will conduct all the inplemented analyses.
     disable_program_instrumentation: bool    = False
-    disable_vuln_root_cause_analysis: bool   = False
+    disable_vulnerability_analysis: bool   = False
     disable_project_structure_analysis: bool = False
     disable_coverage_feedback: bool          = False
     disable_crash_trigger_analysis: bool     = False

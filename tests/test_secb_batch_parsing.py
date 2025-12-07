@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# python3 tests/test_secb_batch_parsing.py --output tests/batch_parsing_results.txt
+# python3 tests/test_secb_batch_parsing.py --output tests/location_and_harness.txt
 """
 Batch test script for SecbTask parsing
 Tests vulnerability location and harness command extraction for all CVE instances
