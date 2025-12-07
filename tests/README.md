@@ -1,51 +1,94 @@
-# LLM Integration Tests
+# DrillAgent Tests
 
-## Setup
+This directory contains test scripts for DrillAgent components.
 
-1. Install dependencies:
+## test_secb_batch_parsing.py
+
+Batch test script for validating vulnerability location and harness command extraction from SEC-bench CVE instances.
+
+### Features
+
+- Processes all 200 CVE instances from SEC-bench dataset
+- Extracts and validates vulnerability locations from sanitizer reports
+- Extracts and validates harness commands from repro() functions
+- Provides detailed statistics and results
+
+### Usage
+
+**Basic usage** (summary statistics only):
 ```bash
-pip install -r requirements.txt
+python3 tests/test_secb_batch_parsing.py
 ```
 
-2. Set API keys:
+**Verbose mode** (detailed results for each CVE):
 ```bash
-# For Claude (recommended)
-export ANTHROPIC_API_KEY="your_anthropic_api_key_here"
-
-# For OpenAI
-export OPENAI_API_KEY="your_openai_api_key_here"
+python3 tests/test_secb_batch_parsing.py --verbose
 ```
 
-## Run Tests
-
-Run all LLM integration tests:
+**Save results to file**:
 ```bash
-PYTHONPATH=src pytest tests/test_llm_integration.py -v
+python3 tests/test_secb_batch_parsing.py --output tests/results.txt
 ```
 
-Run specific test class:
+**Process limited number of CVEs**:
 ```bash
-PYTHONPATH=src pytest tests/test_llm_integration.py::TestLLMInitialization -v
+python3 tests/test_secb_batch_parsing.py --max-count 50
 ```
 
-Run with output:
+**Custom dataset path**:
 ```bash
-PYTHONPATH=src pytest tests/test_llm_integration.py -v -s
+python3 tests/test_secb_batch_parsing.py --dataset-path /path/to/CVE-instances
 ```
 
-Quick verification (no pytest needed):
+### Test Results
+
+Current performance on 200 CVE instances:
+
+- **Total instances loaded**: 200/200 (100%)
+- **Vulnerability location extraction**: 187/200 (93.5%)
+- **Harness command extraction**: 199/200 (99.5%)
+- **Both successfully extracted**: 186/200 (93.0%)
+
+### Output Format
+
+The script provides:
+
+1. **Summary Statistics**
+   - Total CVEs processed
+   - Success rates for location and command extraction
+
+2. **Missing Data Examples**
+   - Lists CVEs missing vulnerability location
+   - Lists CVEs missing harness command
+
+3. **Detailed Results** (with `--verbose`)
+   - Per-CVE extraction results
+   - Actual extracted values
+
+### Exit Codes
+
+- `0`: Success (>= 80% success rate)
+- `1`: Warning (< 80% success rate)
+
+### Examples
+
+**Check overall success rate**:
 ```bash
-python3 verify_llm.py
+python3 tests/test_secb_batch_parsing.py
 ```
 
-## Test Coverage
+**Generate detailed report**:
+```bash
+python3 tests/test_secb_batch_parsing.py --verbose --output reports/detailed_results.txt
+```
 
-The test file includes:
-- ✓ LLM initialization (Claude & OpenAI)
-- ✓ Text generation with/without system prompts
-- ✓ Security vulnerability analysis
-- ✓ Parameter testing (temperature, max_tokens)
-- ✓ Integration with DrillAgent config
+**Quick test on subset**:
+```bash
+python3 tests/test_secb_batch_parsing.py --max-count 10 --verbose
+```
 
-Tests automatically skip if API keys are not available.
+## Files
 
+- `test_secb_batch_parsing.py` - Main batch parsing test script
+- `batch_parsing_results.txt` - Latest test results (generated)
+- `README.md` - This file

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-import logging
+import os
 import sys
+import logging
+import subprocess
+from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass, field
 
@@ -30,6 +33,7 @@ class DrillAgent:
         self.pov_candidates     = []
         self.coverage_data      = None
         self.closest_pov_candidate = None
+        self.aflgo_config_path  = None # Path to AFLGo configuration file
 
         # Final analysis results
         self.crash_inputs = []         # Real PoV inputs that trigger the vulnerability
@@ -122,6 +126,48 @@ class DrillAgent:
 
         self.logger.info("Components initialized")
 
+    def _checkout_base_commit(self):
+        # Checkout the target repository to the specified base commit
+        self.logger.info(f"Checking out base commit: {self.config.base_commit}")
+
+        # Verify target repo path exists
+        if not os.path.exists(self.config.target_repo_path):
+            error_msg = f"Target repository path does not exist: {self.config.target_repo_path}"
+            self.logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
+
+        # Verify it's a git repository
+        git_dir = os.path.join(self.config.target_repo_path, '.git')
+        if not os.path.exists(git_dir):
+            error_msg = f"Target path is not a git repository: {self.config.target_repo_path}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        try:
+            # Run git checkout command
+            result = subprocess.run(
+                ['git', 'checkout', self.config.base_commit],
+                cwd=self.config.target_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
+            if result.stdout:
+                self.logger.debug(f"Git output: {result.stdout.strip()}")
+
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to checkout commit {self.config.base_commit}: {e.stderr}"
+            self.logger.error(error_msg)
+            self.errors.append(error_msg)
+            raise RuntimeError(error_msg) from e
+        except Exception as e:
+            error_msg = f"Unexpected error during git checkout: {str(e)}"
+            self.logger.error(error_msg)
+            self.errors.append(error_msg)
+            raise
+
     def run(self) -> Dict[str, Any]:
         """
         Main orchestration workflow
@@ -131,6 +177,10 @@ class DrillAgent:
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
+
+        # Checkout the base commit
+        assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
+        self._checkout_base_commit()
 
         try:
             # Phase 1: Code Instrumentation
@@ -160,7 +210,7 @@ class DrillAgent:
     def _phase_instrumentation(self):
         """Phase 1: Instrument the target binary with coverage and sanitizers"""
         self.logger.info("\n[Phase 1] Code Instrumentation")
-        self.state.phase = "instrumentation"
+        self.phase = "instrumentation"
 
         # TODO: Implement instrumentation logic
         # Step 1: Build with coverage instrumentation
@@ -189,8 +239,8 @@ class DrillAgent:
                         self.logger.info(f"    Generating config from: {instance_path.name}")
                         config_yaml = self.config_generator.generate_config(instance_path, output_path)
                         
-                        # Store config path in state for later use
-                        self.state.aflgo_config_path = str(output_path)
+                        # Store config path for later use
+                        self.aflgo_config_path = str(output_path)
                         self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
                     else:
                         self.logger.warning(f"    CVE instance not found: {instance_path}")
@@ -199,7 +249,7 @@ class DrillAgent:
                     self.logger.warning("    No CVE ID provided, skipping config generation")
             except Exception as e:
                 self.logger.error(f"    Failed to generate AFLGo config: {e}")
-                self.state.errors.append(f"Config generation failed: {e}")
+                self.errors.append(f"Config generation failed: {e}")
 
         # Step 3: Build with memory sanitizer
         if self.config.enable_sanitizer:
