@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-import logging
+import os
 import sys
+import logging
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass, field
@@ -20,19 +22,20 @@ class DrillAgent:
         # The only init parameter is the AgentConfig dataclass instance.
         self.config = config
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, mutating, completed
-        self.skip_root_cause_analysis = config.disable_vuln_root_cause_analysis # Currently we only consider this skip option.
+        self.skip_instrumentation     = config.disable_program_instrumentation
+        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis # Currently we only consider these two skip options.
         self.iteration = 0
         self.errors = []
 
         # Intermediate analysis results
-        self.vulnerability_info = None # For vulnerability root cause analysis results
+        self.vulnerability_info = None # For vulnerability analysis results (e.g., root cause)
         self.project_info       = None # For project-level analysis results
         self.pov_candidates     = []
         self.coverage_data      = None
         self.closest_pov_candidate = None
         
         # Instrumentation results
-        self.aflgo_config_path  = None
+        self.aflgo_config_path  = None # Path to AFLGo configuration file
         self.instrumented_binary = None
 
         # Final analysis results
@@ -126,6 +129,48 @@ class DrillAgent:
 
         self.logger.info("Components initialized")
 
+    def _checkout_base_commit(self):
+        # Checkout the target repository to the specified base commit
+        self.logger.info(f"Checking out base commit: {self.config.base_commit}")
+
+        # Verify target repo path exists
+        if not os.path.exists(self.config.target_repo_path):
+            error_msg = f"Target repository path does not exist: {self.config.target_repo_path}"
+            self.logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
+
+        # Verify it's a git repository
+        git_dir = os.path.join(self.config.target_repo_path, '.git')
+        if not os.path.exists(git_dir):
+            error_msg = f"Target path is not a git repository: {self.config.target_repo_path}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        try:
+            # Run git checkout command
+            result = subprocess.run(
+                ['git', 'checkout', self.config.base_commit],
+                cwd=self.config.target_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
+            if result.stdout:
+                self.logger.debug(f"Git output: {result.stdout.strip()}")
+
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to checkout commit {self.config.base_commit}: {e.stderr}"
+            self.logger.error(error_msg)
+            self.errors.append(error_msg)
+            raise RuntimeError(error_msg) from e
+        except Exception as e:
+            error_msg = f"Unexpected error during git checkout: {str(e)}"
+            self.logger.error(error_msg)
+            self.errors.append(error_msg)
+            raise
+
     def run(self) -> Dict[str, Any]:
         """
         Main orchestration workflow
@@ -136,13 +181,18 @@ class DrillAgent:
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
 
+        # Checkout the base commit for the target repository
+        assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
+        self._checkout_base_commit()
+
         try:
             # Phase 1: Code Instrumentation
-            self._phase_instrumentation()
+            if not self.skip_instrumentation:
+                self._phase_instrumentation()
 
-            # Phase 2: Root Cause Analysis
-            if not self.skip_root_cause_analysis:
-                self._phase_root_cause_analysis()
+            # Phase 2: Vulnerability Analysis
+            if not self.skip_vulnerability_analysis:
+                self._phase_vulnerability_analysis()
 
             # Phase 3: Path Exploration and Input Mutation
             self._phase_exploration()
@@ -236,14 +286,14 @@ class DrillAgent:
 
         self.logger.info("  ✓ Instrumentation phase completed")
 
-    def _phase_root_cause_analysis(self):
-        """Phase 2: Analyze vulnerability root cause using LLM"""
-        self.logger.info("\n[Phase 2] Root Cause Analysis")
+    def _phase_vulnerability_analysis(self):
+        """Phase 2: Analyze vulnerability using LLM"""
+        self.logger.info("\n[Phase 2] Vulnerability Analysis")
         self.phase = "analyzing"
 
-        # Check if root cause analysis is disabled
-        if self.config.disable_vuln_root_cause_analysis:
-            self.logger.info("  - Root cause analysis disabled by config")
+        # Check if vulnerability analysis is disabled
+        if self.config.disable_vulnerability_analysis:
+            self.logger.info("  - Vulnerability analysis disabled by config")
             return
 
         # Step 1: Prepare vulnerability context information

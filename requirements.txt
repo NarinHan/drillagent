@@ -4,3 +4,7 @@ openai>=1.0.0      # For OpenAI
 
 # Testing
 pytest>=7.4.0
+
+# Utilities
+pyyaml
+python-dotenv

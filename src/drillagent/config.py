@@ -32,7 +32,8 @@ class AgentConfig:
     # Ablation options
     # 
     # By default, we will conduct all the inplemented analyses.
-    disable_vuln_root_cause_analysis: bool   = False
+    disable_program_instrumentation: bool    = False
+    disable_vulnerability_analysis: bool   = False
     disable_project_structure_analysis: bool = False
     disable_coverage_feedback: bool          = False
     disable_crash_trigger_analysis: bool     = False
@@ -49,9 +50,14 @@ class AgentConfig:
 
     #
     # Analysis options
-    # 
+    #
     max_iterations: int = 10
     timeout: int = 1200  # in seconds # 20mins
+
+    # Instrumentation options
+    enable_coverage: bool = False   # Enable coverage instrumentation
+    enable_distance: bool = False   # Enable distance calculation for guided fuzzing
+    enable_sanitizer: bool = False  # Enable memory sanitizer
 
     # 
     # Output options
