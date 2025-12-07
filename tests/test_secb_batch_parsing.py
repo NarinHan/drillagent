@@ -70,7 +70,9 @@ def parse_all_cves(dataset_path: str, max_count: int = 200) -> Dict:
         # Extract information
         vuln_location = task.vuln_location
         harness_command = task.harness_command
-        print(f"\n{instance_id}\n{vuln_location}\n{harness_command}")
+        # print(f"\n{instance_id}\n{vuln_location}\n{harness_command}") # by LHY
+        print(f"\n{instance_id}\n{vuln_location}") # by LHY
+        # print(f"\n{instance_id}\n{harness_command}") # by LHY
 
 
         # Update statistics
@@ -220,11 +222,11 @@ def print_results(stats: Dict, verbose: bool = False, output_file: str = None):
     # Show first 5 CVEs missing location
     missing_location = [r for r in stats['results'] if not r['has_location']]
     if missing_location:
-        line = "CVEs missing vulnerability location (first 5):"
+        line = "CVEs missing vulnerability location:"
         output_lines.append(line)
         print(line)
 
-        for result in missing_location[:5]:
+        for result in missing_location:
             line = f"  - {result['instance_id']}"
             output_lines.append(line)
             print(line)

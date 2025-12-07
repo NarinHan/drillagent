@@ -23,6 +23,7 @@ class SecbTask:
     # Any additional fields from the JSON
     extra_fields: Dict = field(default_factory=dict)
     # Further parsed fields. (easy to extend if needed)
+    repo_name: str = ""  # e.g., "openssl" from "openssl.cve-2021-3711"
     vuln_location: Optional[str] = None 
     harness_command: Optional[str] = None
 
@@ -58,66 +59,98 @@ class SecbTask:
         Returns:
             Relative path with line and column (e.g., "src/file.c:123:45"), or None if not found
         """
+        
+        location = None # What we want to return
+        # print(f"Handling get_vuln_location for {self.instance_id}...") # by LHY
         if not self.sanitizer_report:
+            print(f"{self.instance_id} has no sanitizer report.") # by LHY
             return None
 
-        # Pattern to match absolute path with line:column format
-        # Matches: /path/to/file.c:123:45 or /path/to/file.c:123
-        pattern = r'(/[^\s:]+\.[a-zA-Z]+):(\d+)(?::(\d+))?'
+        # We need to modify some project names manually for matching
+        name_transforms = {
+            "imagemagick": "ImageMagick",
+        }
+        if self.repo_name in name_transforms:
+            self.repo_name = name_transforms[self.repo_name]
 
-        match = re.search(pattern, self.sanitizer_report)
-        if not match:
-            return None
+        skip_line_keywords = ["libsanitizer", "x86_64-linux-gnu", " __libc_start_main ", " _start ", "lib/asan/asan_malloc_linux.cc"]
 
-        abs_path = match.group(1)
-        line_num = match.group(2)
-        col_num = match.group(3) if match.group(3) else None
+        # Round1
+        for report_line in self.sanitizer_report.split('\n'):
+            if any(keyword in report_line for keyword in skip_line_keywords):
+                continue
+            pattern0 = re.compile(
+                # rf"in\s([^/\s][^\s]*)\s([^/\s][^\s]*):(\d+)", # The file_path is allowed to start with '/' char.
+                rf"in\s([^/\s][^\s]*)\s(\S+):(\d+)",
+                re.IGNORECASE
+            )
+            match = re.search(pattern0, report_line)
+            if not match:
+                continue
+            # Craft the crash location
+            crash_function = match.group(1)
+            file_path = match.group(2)
+            line_num = match.group(3)
+            location = f"^^^{file_path}:{line_num} ({crash_function})"
+            if location is not None:
+                break
 
-        # Convert absolute path to relative path
-        # Try to find the project name in the path to determine the relative path
-        path_parts = abs_path.split('/')
+        # Round2
+        for report_line in self.sanitizer_report.split('\n'):
+            if location is not None: break
+            if any(keyword in report_line for keyword in skip_line_keywords):
+                continue
+            # To handle some weird cases: Only extract location from runtime error lines
+            if "runtime error: " in self.sanitizer_report and "runtime error: " not in report_line:
+                continue
+            # Make sure we have the repo_name in current line
+            if self.repo_name not in report_line:
+                continue
+            # pattern = re.compile(rf"({'/'+re.escape(self.repo_name)}.*):(\d+)") % 70.5%
+            pattern1 = re.compile(
+                rf"((?:/{re.escape(self.repo_name)}|{re.escape(self.repo_name)}/).*):(\d+)",
+                re.IGNORECASE
+            )
+            match = re.search(pattern1, report_line)
+            if not match:
+                continue
+            # Craft the crash location
+            file_path = match.group(1)
+            line_num = match.group(2)
+            location = f"&&&{file_path}:{line_num}"
+            if location is not None:
+                break
+        
+        # Round3
+        for report_line in self.sanitizer_report.split('\n'):
+            if location is not None: break
+            if any(keyword in report_line for keyword in skip_line_keywords):
+                continue
+            # To handle some weird cases: Only extract location from runtime error lines
+            if "runtime error: " in self.sanitizer_report and "runtime error: " not in report_line:
+                continue
+            pattern2 = re.compile(
+                rf"(?:^|\s)([^/\s][^\s]*):(\d+)",
+                re.IGNORECASE
+            )
+            match = re.search(pattern2, report_line)
+            if not match:
+                continue
+            # Craft the crash location
+            file_path = match.group(1)
+            line_num = match.group(2)
+            location = f"***{file_path}:{line_num}"
+            if location is not None:
+                break
 
-        # Look for common project root indicators (src, project_name, etc.)
-        relative_start_idx = None
+        # print(f"Extracted vuln_location: {location}\n") # by LHY
+        # if not location: # Current we have 9 "Extracted vuln_location: None"
+        #     print(f"repo_name: {self.repo_name}") # by LHY
+        #     print(f"project_name: {self.project_name}") # by LHY
+        #     print(f"Sanitizer report for {self.instance_id}:\n{self.sanitizer_report}\nEnd of report.\n") # by LHY
 
-        # First, try to find the project name in the path
-        if self.project_name:
-            for i, part in enumerate(path_parts):
-                if part == self.project_name:
-                    relative_start_idx = i + 1
-                    break
-
-        # If not found by project name, try to find 'src' directory
-        if relative_start_idx is None:
-            for i, part in enumerate(path_parts):
-                if part == 'src':
-                    relative_start_idx = i
-                    break
-
-        # Special handling for system paths (keep more context)
-        if relative_start_idx is None:
-            # Check if it's a system path
-            if abs_path.startswith('/usr/') or abs_path.startswith('/lib/'):
-                # For system paths, keep from 'include' or 'lib' onwards
-                for i, part in enumerate(path_parts):
-                    if part in ['include', 'lib']:
-                        relative_start_idx = i
-                        break
-
-        # If still not found, use the last few components
-        if relative_start_idx is None:
-            # Use last 2-3 path components as a fallback
-            relative_start_idx = max(0, len(path_parts) - 3)
-
-        # Build relative path
-        relative_path = '/'.join(path_parts[relative_start_idx:])
-
-        # Construct the location string
-        if col_num:
-            location = f"{relative_path}:{line_num}:{col_num}"
-        else:
-            location = f"{relative_path}:{line_num}"
-
+        if location is not None and len(location) > 3:
+            location = location[3:]
         return location
 
     def get_harness_command(self) -> Optional[str]:
@@ -171,11 +204,12 @@ class SecbTask:
         return '\n'.join(commands)
 
     def __post_init__(self):
+        self.repo_name = self.instance_id.split('.')[0]  # e.g., "openssl" from "openssl.cve-2021-3711"
         # Parse vuln_location if not provided
-        if not self.vuln_location:
+        if self.vuln_location is None:
             self.vuln_location = self.get_vuln_location()
         # Parse harness_command if not provided
-        if not self.harness_command:
+        if self.harness_command is None:
             self.harness_command = self.get_harness_command()
 
 class RawSecbTaskLoader:
@@ -198,7 +232,7 @@ class RawSecbTaskLoader:
             Dictionary mapping instance_id to SecbTask objects
         """
         if len(self.instance_ids) > 0:
-            print(f"[+] Loading SEC-bench tasks from {self.dataset_path} for instances: {self.instance_ids}")
+            print(f"[+] Loading {len(self.instance_ids)} SEC-bench tasks from {self.dataset_path} for instances: {self.instance_ids}")
             json_files = [os.path.join(self.dataset_path, f"{instance_id}.json")
                          for instance_id in self.instance_ids]
             # Verify all requested files exist
@@ -226,7 +260,7 @@ class RawSecbTaskLoader:
                     task_data['instance_id'] = instance_id
 
                 # Create SecbTask from the data (filtering is done in from_dict)
-                task = SecbTask.from_dict(task_data)
+                task = SecbTask.from_dict(task_data) # This line may raise exceptions!!!!!
                 self.cve_tasks[instance_id] = task
                 loaded_count += 1
 
