@@ -161,7 +161,7 @@ class SecbTask:
         if not self.secb_sh:
             return None
 
-        print(f"Handling get_harness_command for {self.instance_id}...") # by LHY
+        # print(f"Handling get_harness_command for {self.instance_id}...") # by LHY
         # Find the repro() function
         lines = self.secb_sh.split('\n')
         in_repro_function = False
