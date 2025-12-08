@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig 
 from drillagent.models import LLM
-from drillagent.instrumentation import ConfigGeneratorAgent
-from drillagent.instrumentation.instrumentation_agent import InstrumentationAgent
+from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent
 
 
 class DrillAgent:
@@ -34,7 +33,10 @@ class DrillAgent:
         self.pov_candidates     = []
         self.coverage_data      = None
         self.closest_pov_candidate = None
+        
+        # Instrumentation results
         self.aflgo_config_path  = None # Path to AFLGo configuration file
+        self.instrumented_binary = None
 
         # Final analysis results
         self.crash_inputs = []         # Real PoV inputs that trigger the vulnerability
@@ -44,23 +46,35 @@ class DrillAgent:
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
-        self.logger.info(f"skip_root_cause_analysis: {self.skip_root_cause_analysis}")
+        self.logger.info(f"skip_vulnerability_analysis: {self.skip_vulnerability_analysis}")
 
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
-        # TODO: Use utils.logger.setup_logger once implemented
         # Ensure output directory exists
         Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
         
+        # Configure root logger to INFO to avoid debug spam from third-party libs
         logging.basicConfig(
-            level=logging.DEBUG if self.config.verbose else logging.INFO,
+            level=logging.INFO,  # Always INFO for root logger
             format='[%(asctime)s] %(levelname)s - %(message)s',
             handlers=[
                 logging.StreamHandler(sys.stdout),
                 logging.FileHandler(f"{self.config.output_dir}/drillagent.log")
             ]
         )
-        return logging.getLogger("DrillAgent")
+        
+        # Get DrillAgent logger and set its level based on verbose flag
+        logger = logging.getLogger("DrillAgent")
+        if self.config.verbose:
+            logger.setLevel(logging.DEBUG)
+        
+        # Suppress debug logs from noisy third-party libraries
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("anthropic").setLevel(logging.WARNING)
+        logging.getLogger("openai").setLevel(logging.WARNING)
+        
+        return logger
 
     def _init_components(self):
         # Initialize all required components
@@ -263,10 +277,10 @@ class DrillAgent:
                         
                         if result['success']:
                             self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
-                            self.state.instrumented_binary = result.get('instrumented_binary')
+                            self.instrumented_binary = result.get('instrumented_binary')
                         else:
                             self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
-                            self.state.errors.append(f"Instrumentation failed: {result.get('error')}")
+                            self.errors.append(f"Instrumentation failed: {result.get('error')}")
                     else:
                         self.logger.warning(f"    CVE instance not found: {instance_path}")
                         self.logger.info("    Skipping config generation")
@@ -294,91 +308,39 @@ class DrillAgent:
             self.logger.info("  - Vulnerability analysis disabled by config")
             return
 
-        # Step 1: Prepare vulnerability context information
-        self.logger.info("  - Preparing vulnerability context...")
-        vuln_context = {
-            "cve_id": self.config.cve_id,
-            "vuln_location": self.config.vuln_location,
-            "sanitizer_report": self.config.sanitizer_report,
-            "project_name": self.config.project_name,
-            "language": self.config.lang
-        }
-
-        # Step 2: Use LLM with tools to analyze the root cause
-        if self.llm and len(self.agent_tools) > 0:
-            self.logger.info("  - Analyzing vulnerability with LLM and agent tools...")
-
-            # Construct analysis prompt
-            system_prompt = """You are a security researcher analyzing vulnerabilities in C/C++ code.
-Your task is to understand the root cause of the vulnerability and identify the vulnerable code path.
-Use the provided tools to explore the codebase and analyze the vulnerability."""
-
-            user_prompt = f"""Analyze this vulnerability:
-
-CVE ID: {vuln_context['cve_id'] or 'N/A'}
-Project: {vuln_context['project_name'] or 'N/A'}
-Language: {vuln_context['language'] or 'C/C++'}
-Vulnerability Location: {vuln_context['vuln_location'] or 'Not specified'}
-
-Sanitizer Report:
-{vuln_context['sanitizer_report'] or 'Not provided'}
-
-Please:
-1. Use the available tools to explore the vulnerable code
-2. Identify the root cause of the vulnerability
-3. Determine the vulnerable function(s) and call path
-4. Summarize your findings
-
-Return your analysis in a structured format."""
-
-            try:
-                # Call LLM with tools
-                response_text, tool_calls = self.llm.generate_with_tools(
-                    prompt=user_prompt,
-                    tools=self.agent_tools,
-                    system_prompt=system_prompt,
-                    temperature=0.7,
-                    max_tokens=4096
-                )
-
-                self.logger.info(f"  - LLM response received: {len(response_text)} chars, {len(tool_calls)} tool calls")
-
-                # Execute tool calls if any
-                if tool_calls:
-                    self.logger.info(f"  - Executing {len(tool_calls)} tool calls...")
-                    tool_results = []
-                    for tool_call in tool_calls:
-                        tool_name = tool_call['name']
-                        tool_args = tool_call['arguments']
-
-                        # Find and execute the tool
-                        for tool in self.agent_tools:
-                            if tool.name() == tool_name:
-                                result = tool.execute(**tool_args)
-                                tool_results.append({
-                                    "tool": tool_name,
-                                    "result": result
-                                })
-                                self.logger.debug(f"    ✓ Executed {tool_name}")
-                                break
-
-                # Store vulnerability analysis results
-                self.vulnerability_info = {
-                    "context": vuln_context,
-                    "llm_analysis": response_text,
-                    "tool_calls": tool_calls,
-                    "tool_results": tool_results if tool_calls else []
-                }
-
-                self.logger.info("  ✓ Root cause analysis completed")
-
-            except Exception as e:
-                self.logger.error(f"  Failed to analyze with LLM: {e}")
-                self.errors.append(f"Root cause analysis failed: {e}")
-                self.vulnerability_info = {"error": str(e)}
-        else:
-            self.logger.warning("  - LLM or agent tools not available, skipping analysis")
-            self.logger.info("  ✓ Root cause analysis skipped")
+        # Use VulnAnalysisAgent for structured vulnerability analysis
+        try:
+            from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent
+            
+            self.logger.info("  - Initializing VulnAnalysisAgent...")
+            vuln_agent = VulnAnalysisAgent(self)
+            
+            # Run the analysis
+            analysis_results = vuln_agent.run()
+            
+            # Store the structured analysis results
+            self.vulnerability_info = {
+                "refined_vuln_location": analysis_results.get('refined_vuln_location', ''),
+                "refined_harness_command": analysis_results.get('refined_harness_command', ''),
+                "binary_path": analysis_results.get('binary_path', ''),
+                "call_trace": analysis_results.get('call_trace', ''),
+                "entry_function": analysis_results.get('entry_function', ''),
+                "crash_function": analysis_results.get('crash_function', ''),
+                "vuln_type": analysis_results.get('vuln_type', ''),
+                "root_cause": analysis_results.get('root_cause', ''),
+                "critical_branches": analysis_results.get('critical_branches', [])
+            }
+            
+            self.logger.info("  ✓ Vulnerability analysis completed")
+            self.logger.info(f"    - Vulnerability Type: {self.vulnerability_info['vuln_type']}")
+            self.logger.info(f"    - Crash Function: {self.vulnerability_info['crash_function']}")
+            self.logger.info(f"    - Entry Function: {self.vulnerability_info['entry_function']}")
+            self.logger.info(f"    - Vuln Location: {self.vulnerability_info['refined_vuln_location']}")
+            
+        except Exception as e:
+            self.logger.error(f"  Failed to analyze vulnerability: {e}", exc_info=True)
+            self.errors.append(f"Vulnerability analysis failed: {e}")
+            self.vulnerability_info = {"error": str(e)}
 
     def _phase_exploration(self):
         """Phase 3: Coverage-guided path exploration and input mutation"""
