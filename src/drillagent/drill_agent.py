@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass, field
 
-from drillagent.config import AgentConfig 
+from drillagent.config import AgentConfig
 from drillagent.models import LLM
 from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent
-from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent
+from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 
 class DrillAgent:
@@ -30,7 +30,7 @@ class DrillAgent:
         self.errors = []
 
         # Intermediate analysis results
-        self.vulnerability_info = None # For vulnerability analysis results (e.g., root cause)
+        self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., root cause)
         self.project_info       = None # For project-level analysis results # TBD
         self.pov_candidates     = []
         self.coverage_data      = None
@@ -308,33 +308,19 @@ class DrillAgent:
         try:
             vuln_agent = VulnAnalysisAgent(self)
             self.logger.info("  - Initialized VulnAnalysisAgent...")
-            
-            # Run the analysis
-            analysis_results = vuln_agent.run()
-            
-            # Store the structured analysis results
-            self.vulnerability_info = {
-                "refined_vuln_location": analysis_results.get('refined_vuln_location', ''),
-                "refined_harness_command": analysis_results.get('refined_harness_command', ''),
-                "binary_path": analysis_results.get('binary_path', ''),
-                "call_trace": analysis_results.get('call_trace', ''),
-                "entry_function": analysis_results.get('entry_function', ''),
-                "crash_function": analysis_results.get('crash_function', ''),
-                "vuln_type": analysis_results.get('vuln_type', ''),
-                "root_cause": analysis_results.get('root_cause', ''),
-                "critical_branches": analysis_results.get('critical_branches', [])
-            }
-            
+
+            # Run the analysis - returns VulnInfo instance directly
+            self.vulnerability_info = vuln_agent.run()
+
+            # Print the formatted vulnerability analysis results
+            self.vulnerability_info.format_output()
             self.logger.info("  ✓ Vulnerability analysis completed")
-            self.logger.info(f"    - Vulnerability Type: {self.vulnerability_info['vuln_type']}")
-            self.logger.info(f"    - Crash Function: {self.vulnerability_info['crash_function']}")
-            self.logger.info(f"    - Entry Function: {self.vulnerability_info['entry_function']}")
-            self.logger.info(f"    - Vuln Location: {self.vulnerability_info['refined_vuln_location']}")
-            
+
         except Exception as e:
             self.logger.error(f"  Failed to analyze vulnerability: {e}", exc_info=True)
             self.errors.append(f"Vulnerability analysis failed: {e}")
-            self.vulnerability_info = {"error": str(e)}
+            # Keep the VulnInfo instance but mark it with error in root_cause field
+            self.vulnerability_info.root_cause = f"Analysis failed: {e}"
 
     def _phase_exploration(self):
         """Phase 3: Coverage-guided path exploration and input mutation"""
@@ -354,7 +340,7 @@ class DrillAgent:
 #                 # Prepare context for path exploration
 #                 exploration_prompt = f"""Based on the vulnerability analysis, suggest execution paths that could trigger the vulnerability.
 
-# Vulnerability Info: {self.vulnerability_info.get('llm_analysis', 'Not available')[:500] if self.vulnerability_info else 'Not analyzed'}
+# Vulnerability Info: {self.vulnerability_info.root_cause[:500] if self.vulnerability_info.root_cause else 'Not analyzed'}
 
 # Harness Command: {self.config.harness_command or 'Not specified'}
 
@@ -528,7 +514,7 @@ Format your response as a complete, executable test case."""
             "crashes_found": len(self.crash_inputs),
             "povs_generated": len(self.pov_candidates),
             "errors": self.errors,
-            "vulnerability_info": self.vulnerability_info,
+            "vulnerability_info": self.vulnerability_info.to_dict(),
             "pov_candidates": self.pov_candidates,
         }
 
