@@ -10,13 +10,13 @@ class AgentConfig:
     # 
     # PoV task information
     # 
-    project_name: Optional[str] = None                    
+    project_name: Optional[str] = None
     cve_id: Optional[str] = None            # CVE identifier, if applicable
     lang: Optional[str] = None              # Programming language of the project
 
-    target_repo_path: str = ""              # Path to the target source repository (with .git/)
+    target_repo_path: str = ""              # Actual path to the target source repository (with .git/) (should exactly exist in your local machine)
     vuln_location: str = ""                 # Location of the vulnerability in the source code (file:line)
-    base_commit: str = "af5acf3566d5732871b1dcb007aee4f474369d93"                   # Necessary to checkout the correct commit.
+    base_commit: str = ""                   # Necessary to checkout the correct commit.
     build_sh: Optional[str] = None          # If not provided, reasoning by ourselves.
     harness_command: Optional[str] = None   # If not provided, reasoning by ourselves.
     sanitizer_report: Optional[str] = None  # If not provided (no call trace), we have to conduct control/data flow analysis.
@@ -33,7 +33,7 @@ class AgentConfig:
     # 
     # By default, we will conduct all the inplemented analyses.
     disable_program_instrumentation: bool    = False
-    disable_vulnerability_analysis: bool   = False
+    disable_vulnerability_analysis: bool     = False
     disable_project_structure_analysis: bool = False
     disable_coverage_feedback: bool          = False
     disable_crash_trigger_analysis: bool     = False
@@ -82,4 +82,42 @@ class AgentConfig:
         self.output_dir = str(Path(self.output_dir).resolve())
         self.work_dir = str(Path(self.work_dir).resolve())
 
+    def print_config(self):
+        print("=" * 80)
+        print("Agent Configuration:")
+        print("=" * 80)
 
+        print("[PoV Task Information]")
+        print(f"  Project Name:       {self.project_name}")
+        print(f"  CVE ID:             {self.cve_id}")
+        # print(f"  Language:           {self.lang}")
+        print(f"  Target Repo Path:   {self.target_repo_path}")
+        print(f"  Vuln Location:      {self.vuln_location}")
+        print(f"  Harness Command:    {self.harness_command}")
+        print(f"  Base Commit:        {self.base_commit}")
+        # print(f"  Build Script:       {self.build_sh}")
+        # print(f"  Sanitizer Report:   {self.sanitizer_report}")
+
+        # print("\n[LLM Configuration]")
+        # print(f"  Model Provider:     {self.model_provider}")
+        # print(f"  Model Name:         {self.model_name}")
+
+        print("\n[Ablation Options]")
+        print(f"  Disable Program Instrumentation:       {self.disable_program_instrumentation}")
+        print(f"  Disable Vulnerability Analysis:        {self.disable_vulnerability_analysis}")
+        # print(f"  Disable Project Structure Analysis:    {self.disable_project_structure_analysis}")
+        # print(f"  Disable Coverage Feedback:             {self.disable_coverage_feedback}")
+        # print(f"  Disable Crash Trigger Analysis:        {self.disable_crash_trigger_analysis}")
+        # print(f"  Disable Advanced Agent Tools:          {self.disable_advanced_agent_tools}")
+        # print(f"  Disable In-Context RL:                 {self.disable_in_context_rl}")
+
+        print("\n[Analysis Options]")
+        print(f"  Max Iterations:     {self.max_iterations} rounds")
+        print(f"  Timeout:            {self.timeout} seconds")
+
+        # print("\n[Output Options]")
+        # print(f"  Work Directory:     {self.work_dir}")
+        # print(f"  Output Directory:   {self.output_dir}")
+        # print(f"  Verbose:            {self.verbose}")
+
+        print("=" * 80)
