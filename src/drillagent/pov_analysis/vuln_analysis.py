@@ -9,10 +9,11 @@ class VulnAnalysisAgent:
         self.logger = drill_agent.logger
 
         # output fields
+        # refined_vuln_location should be a relative path starting with repo_name
         self.refined_vuln_location: str = ""  # Refined vulnerability location after analysis
         self.refined_harness_command: str = ""  # Refined harness command
         self.binary_path: str = ""  # Path to the binary to be analyzed
-        self.call_trace: str = ""  # Call trace leading to the vulnerability
+        self.call_trace: str = ""  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
         # vuln details
         self.entry_function: str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
         self.crash_function: str = ""  # Function in which the crash occurs (i.e., the caller of the sink point)
