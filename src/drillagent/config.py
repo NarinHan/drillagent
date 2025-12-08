@@ -14,7 +14,7 @@ class AgentConfig:
     cve_id: Optional[str] = None            # CVE identifier, if applicable
     lang: Optional[str] = None              # Programming language of the project
 
-    target_repo_path: str = ""              # Path to the target source repository (with .git/)
+    target_repo_path: str = ""              # Actual path to the target source repository (with .git/) (should exactly exist in your local machine)
     vuln_location: str = ""                 # Location of the vulnerability in the source code (file:line)
     base_commit: str = ""                   # Necessary to checkout the correct commit.
     build_sh: Optional[str] = None          # If not provided, reasoning by ourselves.
