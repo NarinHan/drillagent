@@ -1,6 +1,6 @@
-from typing import Dict, Any, List
-import json
 import re
+import json
+from typing import Dict, Any, List
 
 class VulnAnalysisAgent:
     """Analyzes vulnerabilities using LLM with code exploration tools"""
@@ -15,8 +15,8 @@ class VulnAnalysisAgent:
         # output fields
         # refined_vuln_location should be a relative path starting with repo_name
         self.refined_vuln_location: str = ""  # Refined vulnerability location after analysis
-        self.refined_harness_command: str = ""  # Refined harness command
-        self.binary_path: str = ""  # Path to the binary to be analyzed
+        self.refined_harness_command: str = ""  # Refined harness command #TBD
+        self.binary_path: str = ""  # Path to the binary to be analyzed #TBD
         self.call_trace: str = ""  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
         # vuln details
         self.entry_function: str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
@@ -24,10 +24,10 @@ class VulnAnalysisAgent:
         self.vuln_type: str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
         self.root_cause: str = ""  # Root cause analysis result
         # advanced analysis results (optional now)
-        self.critical_branches: List[str] = []  # This can be used for the exploration phase later
+        self.critical_branches: List[str] = []  # This can be used for the exploration phase later #TBD
 
     def run(self) -> Dict[str, Any]:
-        """Run vulnerability analysis"""
+        # Run vulnerability analysis
         self.logger.info("  [VulnAnalysisAgent] Starting vulnerability analysis...")
         
         if not self.llm or not self.tools:
@@ -35,11 +35,9 @@ class VulnAnalysisAgent:
             return self._generate_results()
         
         sanitizer_report = self.config.sanitizer_report or ""
-        
         if not sanitizer_report:
             self.logger.warning("  [VulnAnalysisAgent] No sanitizer report provided!")
             return self._generate_results()
-        
         self.logger.info(f"  [VulnAnalysisAgent] Sanitizer report: {len(sanitizer_report)} chars")
         
         # Extract info from sanitizer report

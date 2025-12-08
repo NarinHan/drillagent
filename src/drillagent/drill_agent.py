@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import yaml
 import logging
 import subprocess
 from pathlib import Path
@@ -10,7 +11,8 @@ from dataclasses import dataclass, field
 from drillagent.config import AgentConfig 
 from drillagent.models import LLM
 from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent
-
+from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent
+from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -20,7 +22,7 @@ class DrillAgent:
 
     def __init__(self, config: AgentConfig):
         # The only init parameter is the AgentConfig dataclass instance.
-        self.config = config
+        self.config = config       # Include all the PoV task information and configuration options.
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, mutating, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
         self.skip_vulnerability_analysis = config.disable_vulnerability_analysis # Currently we only consider these two skip options.
@@ -29,7 +31,7 @@ class DrillAgent:
 
         # Intermediate analysis results
         self.vulnerability_info = None # For vulnerability analysis results (e.g., root cause)
-        self.project_info       = None # For project-level analysis results
+        self.project_info       = None # For project-level analysis results # TBD
         self.pov_candidates     = []
         self.coverage_data      = None
         self.closest_pov_candidate = None
@@ -206,7 +208,7 @@ class DrillAgent:
             if not self.skip_vulnerability_analysis:
                 self._phase_vulnerability_analysis()
 
-            # Phase 3: Path Exploration and Input Mutation
+            # Phase 3: Path Exploration with the coverage feedback
             self._phase_exploration()
 
             # Phase 4: PoV Generation and Verification
@@ -227,14 +229,14 @@ class DrillAgent:
         self.logger.info("\n[Phase 1] Code Instrumentation")
         self.phase = "instrumentation"
 
-        # TODO: Implement instrumentation logic
-        # Step 1: Build with coverage instrumentation
+        # Option 1: Build with llvm-cov coverage instrumentation
         if self.config.enable_coverage:
             self.logger.info("  - Applying coverage instrumentation (llvm-cov)...")
             # coverage_binary = self.coverage_instrument.instrument(self.config.target_repo)
-            self.logger.info("    TODO: Implement coverage instrumentation")
+            self.logger.info("    TODO: Implement llvm-cov coverage instrumentation")
 
-        # Step 2: Calculate distance file for guided fuzzing
+        # Option 2: Calculate distance file for guided fuzzing
+        # LHY: This part kind of breaches the design philosophy of DrillAgent, could be discussed later. (2025.12.07)
         if self.config.enable_distance and self.config_generator:
             self.logger.info("  - Generating AFLGo configuration...")
             try:
@@ -262,7 +264,6 @@ class DrillAgent:
                         self.logger.info("  - Running AFLGo instrumentation...")
                         
                         # Load the YAML config file into a dictionary
-                        import yaml
                         with open(output_path, 'r') as f:
                             config_dict = yaml.safe_load(f)
                         
@@ -290,7 +291,7 @@ class DrillAgent:
                 self.logger.error(f"    Failed to generate AFLGo config: {e}")
                 self.errors.append(f"Config generation failed: {e}")
 
-        # Step 3: Build with memory sanitizer
+        # Option 3: Build with memory sanitizer
         if self.config.enable_sanitizer:
             self.logger.info("  - Applying memory sanitizer...")
             # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)
@@ -303,17 +304,10 @@ class DrillAgent:
         self.logger.info("\n[Phase 2] Vulnerability Analysis")
         self.phase = "analyzing"
 
-        # Check if vulnerability analysis is disabled
-        if self.config.disable_vulnerability_analysis:
-            self.logger.info("  - Vulnerability analysis disabled by config")
-            return
-
         # Use VulnAnalysisAgent for structured vulnerability analysis
         try:
-            from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent
-            
-            self.logger.info("  - Initializing VulnAnalysisAgent...")
             vuln_agent = VulnAnalysisAgent(self)
+            self.logger.info("  - Initialized VulnAnalysisAgent...")
             
             # Run the analysis
             analysis_results = vuln_agent.run()

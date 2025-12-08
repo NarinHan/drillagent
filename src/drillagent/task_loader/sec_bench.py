@@ -24,6 +24,7 @@ class SecbTask:
     extra_fields: Dict = field(default_factory=dict)
     # Further parsed fields. (easy to extend if needed)
     repo_name: str = ""  # e.g., "openssl" from "openssl.cve-2021-3711"
+    cve_id: Optional[str] = None
     vuln_location: Optional[str] = None 
     harness_command: Optional[str] = None
 
@@ -209,6 +210,7 @@ class SecbTask:
 
     def __post_init__(self):
         self.repo_name = self.instance_id.split('.')[0]  # e.g., "openssl" from "openssl.cve-2021-3711"
+        self.cve_id = self.instance_id.split('.')[1] 
         # Parse vuln_location if not provided
         if self.vuln_location is None:
             self.vuln_location = self.get_vuln_location()
@@ -218,7 +220,7 @@ class SecbTask:
 
 class RawSecbTaskLoader:
     # Responsible for loading security benchmark tasks from JSON files.
-    def __init__(self, dataset_path: str, instance_ids: Optional[List[str]] = None):
+    def __init__(self, dataset_path: str = "datasets/sec-bench/CVE-instances", instance_ids: Optional[List[str]] = None):
         """
         Args:
             dataset_path: Path to the SEC-bench CVE instances directory
