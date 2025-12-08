@@ -723,6 +723,16 @@ def main():
                             text=True
                         )
                         print(f"✓ Successfully checked out commit {commit_id}")
+                        
+                        # Initialize and update git submodules
+                        subprocess.run(
+                            ['git', 'submodule', 'update', '--init', '--recursive'],
+                            cwd=repo_path,
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                        print(f"✓ Successfully initialized git submodules")
                     except subprocess.CalledProcessError as e:
                         print(f"Warning: Failed to checkout commit {commit_id}: {e.stderr}")
                 else:
