@@ -50,40 +50,36 @@ LLVM coverage uses these flags:
 When replacing paths or fixing build scripts, output ONLY the corrected script/commands.
 No explanations, no markdown code blocks, just the raw script content."""
 
-    def __init__(
-        self,
-        config: Dict[str, Any],
-        llm: Optional[LLM] = None,
-        logger: Optional[logging.Logger] = None
-    ):
+    def __init__(self, drill_agent):
         """Initialize coverage instrumentation agent
         
         Args:
-            config: Configuration dictionary with keys:
-                - cve_id: CVE ID (e.g., "CVE-2022-43284")
-                - project_name: Project name (e.g., "njs")
-                - target_repo_path: Path to target repository
-                - config_file: Optional path to instrumentation config file
-                - output_dir: Directory for instrumented binary
-            llm: LLM instance for intelligent build assistance
-            logger: Logger instance
+            drill_agent: DrillAgent instance containing config, llm, logger, etc.
         """
-        # Initialize parent BaseAgent
-        # BaseAgent will handle log file creation using config
-        super().__init__(
-            llm=llm,
-            system_prompt=self.SYSTEM_PROMPT,
-            initial_phase='initialized',
-            max_attempts=3,
-            logger=logger,
-            config=config
-        )
+        self.drill_agent = drill_agent
+        self.config = drill_agent.config
+        self.llm = drill_agent.llm
+        self.logger = drill_agent.logger
         
-        self.config = config
-        self.cve_id = config.get('cve_id', '')
-        self.project_name = config.get('project_name', '')
-        self.target_repo = Path(config.get('target_repo_path', ''))
-        self.output_dir = Path(config.get('output_dir', './output'))
+        self.cve_id = self.config.cve_id
+        
+        if not self.cve_id:
+            raise ValueError("cve_id is required in config")
+        
+        # Load instrumentation config first to get project_name and repo_url
+        self.instr_config = self._load_instrumentation_config()
+        
+        # Extract project name from repo_url
+        repo_url = self.instr_config.get('repo_url', '')
+        if repo_url:
+            # Extract project name from URL like https://github.com/nginx/njs.git -> njs
+            self.project_name = repo_url.rstrip('/').rstrip('.git').split('/')[-1]
+        else:
+            raise ValueError(f"repo_url not found in instrumentation config for {self.cve_id}")
+        
+        # Use target_repo_path from drill_agent config
+        self.target_repo = Path(self.config.target_repo_path)
+        self.output_dir = Path(self.config.output_dir)
         
         # Coverage flags
         self.coverage_flags = [
@@ -91,41 +87,43 @@ No explanations, no markdown code blocks, just the raw script content."""
             '-fcoverage-mapping'
         ]
         
-        # Load instrumentation config
-        self.instr_config = self._load_instrumentation_config(config.get('config_file'))
-        
         # State tracking
         self.state = AgentState(phase='initialized', max_attempts=3)
         self.build_log = []
         self.instrumented_binary_path = None
         
         self.logger.info(f"CoverageInstrumentAgent initialized for {self.project_name} {self.cve_id}")
+        self.logger.info(f"Target repository: {self.target_repo}")
 
-    def _load_instrumentation_config(self, config_file: Optional[str] = None) -> Dict[str, Any]:
+    def _load_instrumentation_config(self) -> Dict[str, Any]:
         """Load instrumentation config from SEC-bench datasets
         
-        Args:
-            config_file: Optional path to config file. If not provided, constructs from CVE ID and project name
-            
         Returns:
             Loaded configuration dictionary
         """
-        if config_file and Path(config_file).exists():
-            config_path = Path(config_file)
-        else:
-            # Construct path from project and CVE ID
-            # Find project root
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent.parent.parent
-            
-            # Construct config filename: project.cve-id.yaml (lowercase)
-            config_filename = f"{self.project_name}.{self.cve_id.lower()}.yaml"
-            config_path = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs' / config_filename
+        # Find config file by CVE ID
+        # Config files are named: <project>.<cve-id>.yaml (e.g., njs.cve-2022-43284.yaml)
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent.parent.parent
+        config_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
+        
+        # Search for config file matching CVE ID
+        import glob
+        cve_pattern = f"*.{self.cve_id.lower()}.yaml"
+        matches = list(config_dir.glob(cve_pattern))
+        
+        if not matches:
+            raise FileNotFoundError(f"No instrumentation config found for CVE ID: {self.cve_id}")
+        
+        if len(matches) > 1:
+            raise ValueError(f"Multiple configs found for {self.cve_id}: {[m.name for m in matches]}")
+        
+        config_path = matches[0]
         
         if not config_path.exists():
             raise FileNotFoundError(f"Instrumentation config not found: {config_path}")
         
-        self.logger.info(f"Loading instrumentation config from: {config_path.name}")
+        self.logger.info(f"Loading instrumentation config: {config_path.name}")
         
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
@@ -844,92 +842,80 @@ Output the fixed build script now:"""
 def main():
     """CLI entry point for testing coverage instrumentation"""
     import argparse
+    from drillagent.config import AgentConfig
+    from drillagent.drill_agent import DrillAgent
+    from dotenv import load_dotenv
+    
+    # Load .env file from project root
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent.parent
+    env_file = project_root / '.env'
+    
+    if env_file.exists():
+        load_dotenv(env_file)
     
     parser = argparse.ArgumentParser(description='Coverage Instrumentation Agent')
     parser.add_argument('--cve-id', required=True, help='CVE ID (e.g., CVE-2022-43284)')
-    parser.add_argument('--project', required=True, help='Project name (e.g., njs)')
     parser.add_argument('--repo-path', required=True, help='Path to target repository')
     parser.add_argument('--output-dir', default='./output', help='Output directory')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
     
-    # Create config
-    config = {
-        'cve_id': args.cve_id,
-        'project_name': args.project,
-        'target_repo_path': args.repo_path,
-        'output_dir': args.output_dir
-    }
-
-    # Load YAML config to get commit_id
-    current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.parent.parent
-    config_filename = f"{args.project}.{args.cve_id.lower()}.yaml"
-    config_path = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs' / config_filename
+    # Create AgentConfig
+    config = AgentConfig(
+        cve_id=args.cve_id,
+        target_repo_path=args.repo_path,
+        output_dir=args.output_dir,
+        verbose=args.verbose
+    )
     
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            yaml_config = yaml.safe_load(f)
-            commit_id = yaml_config.get('commit_id')
-            
-            if commit_id:
-                print(f"Checking out commit: {commit_id}")
-                repo_path = Path(args.repo_path)
-                if repo_path.exists():
-                    try:
-                        # Git checkout to the specified commit
-                        subprocess.run(
-                            ['git', 'checkout', commit_id],
-                            cwd=repo_path,
-                            check=True,
-                            capture_output=True,
-                            text=True
-                        )
-                        print(f"✓ Successfully checked out commit {commit_id}")
-                        
-                        # Initialize and update git submodules
-                        subprocess.run(
-                            ['git', 'submodule', 'update', '--init', '--recursive'],
-                            cwd=repo_path,
-                            check=True,
-                            capture_output=True,
-                            text=True
-                        )
-                        print(f"✓ Successfully initialized git submodules")
-                    except subprocess.CalledProcessError as e:
-                        print(f"Warning: Failed to checkout commit {commit_id}: {e.stderr}")
-                else:
-                    print(f"Warning: Repository path does not exist: {repo_path}")
+    # Create DrillAgent instance
+    drill_agent = DrillAgent(config)
     
-    # Initialize LLM for intelligent build assistance if API key available
-    llm = None
-    try:
-        from drillagent.models.llm import LLM
-        from dotenv import load_dotenv
-        
-        # Load .env file from project root
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent.parent
-        env_file = project_root / '.env'
-        
-        if env_file.exists():
-            load_dotenv(env_file)
-            print(f"Loaded environment from {env_file}")
-        
-        # Try to initialize LLM - will fail gracefully if no API key
-        llm = LLM(provider="openai", model_name="gpt-4-turbo")
-        print("✓ LLM initialized successfully")
-    except (ValueError, Exception) as e:
-        print(f"Note: LLM not available ({e}). Will use regex-based path replacement.")
+    # Initialize coverage agent
+    agent = CoverageInstrumentAgent(drill_agent)
     
-    # Run agent - let BaseAgent create logger with file handler
-    # Don't pass logger so BaseAgent can set up file logging automatically
-    agent = CoverageInstrumentAgent(config=config, llm=llm)
+    # Print info
+    print(f"\\nProject: {agent.project_name}")
+    print(f"CVE: {agent.cve_id}")
+    print(f"Repository: {agent.target_repo}")
+    
+    # Checkout commit if specified in config
+    commit_id = agent.instr_config.get('commit_id')
+    if commit_id:
+        print(f"\\nChecking out commit: {commit_id}")
+        if agent.target_repo.exists():
+            try:
+                # Git checkout to the specified commit
+                subprocess.run(
+                    ['git', 'checkout', commit_id],
+                    cwd=agent.target_repo,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(f"✓ Successfully checked out commit {commit_id}")
+                
+                # Initialize and update git submodules
+                subprocess.run(
+                    ['git', 'submodule', 'update', '--init', '--recursive'],
+                    cwd=agent.target_repo,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(f"✓ Successfully initialized git submodules")
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: Failed to checkout commit {commit_id}: {e.stderr}")
+        else:
+            print(f"Warning: Repository path does not exist: {agent.target_repo}")
+    
+    # Run agent
     result = agent.run()
     
     # Print result
-    print("\n" + "=" * 60)
+    print("\\n" + "=" * 60)
     print("Coverage Instrumentation Result")
     print("=" * 60)
     print(f"Success: {result['success']}")
@@ -937,7 +923,7 @@ def main():
         print(f"Instrumented Binary: {result['instrumented_binary']}")
         
         # Test coverage instrumentation
-        print("\n" + "=" * 60)
+        print("\\n" + "=" * 60)
         print("Testing Coverage Instrumentation")
         print("=" * 60)
         test_result = agent.test_coverage_instrumentation()
@@ -953,8 +939,6 @@ def main():
     else:
         print(f"Error: {result.get('error', 'Unknown error')}")
     print("=" * 60)
-
-    
     
     return 0 if result['success'] else 1
 if __name__ == '__main__':

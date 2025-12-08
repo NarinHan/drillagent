@@ -238,20 +238,8 @@ class DrillAgent:
         if self.config.enable_coverage and self.coverage_instrument:
             self.logger.info("  - Applying coverage instrumentation (llvm-cov)...")
             try:
-                # Prepare config for coverage agent
-                coverage_config = {
-                    'cve_id': self.config.cve_id,
-                    'project_name': self.config.project_name,
-                    'target_repo_path': str(self.config.target_repo_path),
-                    'output_dir': str(Path(self.config.output_dir) / 'coverage')
-                }
-                
-                # Instantiate and run coverage agent
-                coverage_agent = self.coverage_instrument(
-                    config=coverage_config,
-                    llm=self.llm,
-                    logger=self.logger
-                )
+                # Instantiate and run coverage agent - pass self (DrillAgent instance)
+                coverage_agent = self.coverage_instrument(self)
                 
                 result = coverage_agent.run()
                 
