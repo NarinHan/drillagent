@@ -132,32 +132,15 @@ Handle errors by analyzing messages and providing alternative commands in your r
             llm_api_key = config.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
             llm = LLM(provider="openai", model_name=llm_model, api_key=llm_api_key)
         
-        # Prepare log file path from config
-        log_file = None
-        if config.get('log_file'):
-            # Find DrillAgent root for logs directory
-            script_dir = Path(__file__).resolve().parent
-            drillagent_root = script_dir.parent.parent.parent
-            logs_dir = drillagent_root / 'logs'
-            logs_dir.mkdir(exist_ok=True)
-            log_file = str(logs_dir / config['log_file'])
-        elif config.get('cve_id'):
-            # Auto-generate log file name with CVE number
-            script_dir = Path(__file__).resolve().parent
-            drillagent_root = script_dir.parent.parent.parent
-            logs_dir = drillagent_root / 'logs'
-            logs_dir.mkdir(exist_ok=True)
-            cve_suffix = config['cve_id'].replace('CVE-', '').replace('-', '_')
-            log_file = str(logs_dir / f'instrumentation_{cve_suffix}.log')
-        
         # Initialize BaseAgent with AFLGo-specific system prompt
+        # BaseAgent will handle log file creation using config
         super().__init__(
             llm=llm,
             system_prompt=self.AFLGO_SYSTEM_PROMPT,
             initial_phase="setup",
             max_attempts=10,
             logger=logger,
-            log_file=log_file
+            config=config
         )
         
         # Store environment variables for reset between attempts
@@ -313,6 +296,13 @@ Handle errors by analyzing messages and providing alternative commands in your r
             stderr=subprocess.PIPE,
             text=True
         )
+        
+        # Log command output for debugging
+        if result.returncode != 0:
+            self.logger.error(f"Command failed with exit code {result.returncode}")
+            if result.stderr:
+                stderr_preview = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
+                self.logger.error(f"stderr: {stderr_preview}")
         
         return result.returncode, result.stdout, result.stderr
     
@@ -860,8 +850,13 @@ Provide exact shell commands. Respond in JSON:
         
         output_lines = []
         for line in process.stdout:
+            # Write to console
             sys.stdout.write(line)
             sys.stdout.flush()
+            # Log to file (strip ANSI color codes for clean logs)
+            clean_line = re.sub(r'\x1b\[[0-9;]*m', '', line.rstrip())
+            if clean_line:
+                self.logger.info(f"BUILD: {clean_line}")
             output_lines.append(line)
         
         process.wait()
@@ -869,8 +864,12 @@ Provide exact shell commands. Respond in JSON:
         
         if process.returncode != 0:
             error_context = f"Commands failed\nExit code: {process.returncode}\nOutput:\n{result_stdout}"
+            self.logger.error(f"Build failed with exit code {process.returncode}")
+            self.logger.error(f"Last 1000 chars of output: {result_stdout[-1000:]}")
             self.state.record_error(error_context, context=f"phase_{self.state.phase}")
             return False
+        
+        self.logger.info(f"Build commands completed successfully")
         
         return True
     

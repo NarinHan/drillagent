@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig 
 from drillagent.models import LLM
-from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent
+from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent, CoverageInstrumentAgent
 
 
 class DrillAgent:
@@ -46,7 +46,8 @@ class DrillAgent:
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
-        self.logger.info(f"skip_vulnerability_analysis: {self.skip_vulnerability_analysis}")
+        self.logger.info(f"Skip instrumentation: {self.skip_instrumentation}")
+        self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
 
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
@@ -108,8 +109,13 @@ class DrillAgent:
             self.logger.error(f"Failed to initialize agent tools: {e}")
             self.agent_tools = []
 
-        # TODO: Initialize instrumentation components
-        self.coverage_instrument = None
+        # Initialize coverage instrumentation agent
+        if self.config.enable_coverage:
+            self.logger.info("Initializing CoverageInstrumentAgent...")
+            self.coverage_instrument = CoverageInstrumentAgent
+            self.logger.info("✓ CoverageInstrumentAgent class loaded")
+        else:
+            self.coverage_instrument = None
         
         # Distance calculator using ConfigGeneratorAgent
         if self.config.enable_distance:
@@ -229,10 +235,37 @@ class DrillAgent:
 
         # TODO: Implement instrumentation logic
         # Step 1: Build with coverage instrumentation
-        if self.config.enable_coverage:
+        if self.config.enable_coverage and self.coverage_instrument:
             self.logger.info("  - Applying coverage instrumentation (llvm-cov)...")
-            # coverage_binary = self.coverage_instrument.instrument(self.config.target_repo)
-            self.logger.info("    TODO: Implement coverage instrumentation")
+            try:
+                # Prepare config for coverage agent
+                coverage_config = {
+                    'cve_id': self.config.cve_id,
+                    'project_name': self.config.project_name,
+                    'target_repo_path': str(self.config.target_repo_path),
+                    'output_dir': str(Path(self.config.output_dir) / 'coverage')
+                }
+                
+                # Instantiate and run coverage agent
+                coverage_agent = self.coverage_instrument(
+                    config=coverage_config,
+                    llm=self.llm,
+                    logger=self.logger
+                )
+                
+                result = coverage_agent.run()
+                
+                if result['success']:
+                    self.logger.info(f"    ✓ Coverage instrumentation completed")
+                    self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
+                    # Store the coverage-instrumented binary path
+                    self.coverage_binary = result.get('instrumented_binary')
+                else:
+                    self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
+                    self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
+            except Exception as e:
+                self.logger.error(f"    Coverage instrumentation error: {e}")
+                self.errors.append(f"Coverage instrumentation error: {e}")
 
         # Step 2: Calculate distance file for guided fuzzing
         if self.config.enable_distance and self.config_generator:
