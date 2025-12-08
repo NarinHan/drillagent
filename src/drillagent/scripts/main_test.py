@@ -62,7 +62,7 @@ For more information, see: https://github.com/learjet5/DrillAgent
 
     parser.add_argument(
         "--model-name",
-        default="claude-sonnet-4",
+        default="claude-sonnet-4-5-20250929",
         help="Specific model name to use"
     )
 
@@ -168,6 +168,35 @@ def test_task_loader(dataset_path: str, instance_ids: list = None):
                 loader.print_task_summary(instance_id)
 
 
+def load_cve_data(cve_id: str) -> dict:
+    """
+    Load CVE data from SEC-bench dataset
+    
+    Args:
+        cve_id: CVE instance ID (e.g., "mruby.cve-2022-1934")
+    
+    Returns:
+        Dictionary with CVE data or empty dict if not found
+    """
+    import json
+    
+    # Get project root
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    
+    # Try CVE-instances directory first
+    instance_file = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f'{cve_id}.json'
+    
+    if instance_file.exists():
+        print(f"[+] Loading CVE data from: {instance_file}")
+        with open(instance_file, 'r') as f:
+            data = json.load(f)
+        print(f"[+] Loaded CVE data with {len(data)} fields")
+        return data
+    else:
+        print(f"[!] Warning: CVE instance file not found: {instance_file}")
+        return {}
+
+
 def main():
     """Main entry point for DrillAgent CLI"""
     args = parse_arguments()
@@ -182,10 +211,21 @@ def main():
         print("Error: target_repo_path is required (unless using --test-loader)")
         sys.exit(1)
 
-    # Create configuration from arguments
+    # Load CVE data if CVE ID is provided
+    cve_data = {}
+    if args.cve_id:
+        cve_data = load_cve_data(args.cve_id)
+    
+    # Create configuration from arguments, with CVE data as defaults
     config = AgentConfig(
         target_repo_path=args.target_repo_path,
         cve_id=args.cve_id,
+        project_name=cve_data.get('project_name'),
+        lang=cve_data.get('lang'),
+        base_commit=cve_data.get('base_commit', 'af5acf3566d5732871b1dcb007aee4f474369d93'),
+        sanitizer_report=cve_data.get('sanitizer_report'),
+        build_sh=cve_data.get('build_sh'),
+        harness_command=cve_data.get('harness_command'),
         model_provider=args.model,
         model_name=args.model_name,
         api_key=args.api_key,
@@ -195,6 +235,16 @@ def main():
         work_dir=args.work_dir,
         verbose=args.verbose,
     )
+    
+    # Print loaded config summary
+    if args.verbose:
+        print(f"\n[Config Summary]")
+        print(f"  CVE ID: {config.cve_id}")
+        print(f"  Project: {config.project_name}")
+        print(f"  Language: {config.lang}")
+        print(f"  Base Commit: {config.base_commit[:12] if config.base_commit else 'N/A'}...")
+        print(f"  Sanitizer Report: {len(config.sanitizer_report) if config.sanitizer_report else 0} chars")
+        print()
 
     # Create output directories
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
