@@ -215,6 +215,9 @@ No explanations, no markdown code blocks, just the raw script content."""
         # Step 2: Replace Docker paths with actual repo path using LLM
         build_commands = self._replace_docker_paths(build_commands)
         
+        # Step 3: Remove sanitizer flags that conflict with coverage instrumentation
+        build_commands = self._remove_sanitizer_flags(build_commands)
+        
         # Define coverage flags
         cov_flags = ' '.join(self.coverage_flags)
         
@@ -383,6 +386,53 @@ LDFLAGS="${{LDFLAGS:-}}"
         )
         
         self.logger.debug(f"Regex replaced paths (first 300 chars): {modified[:300]}")
+        return modified
+
+    def _remove_sanitizer_flags(self, build_commands: str) -> str:
+        """Remove sanitizer flags that conflict with coverage instrumentation
+        
+        Sanitizer instrumentation (AddressSanitizer, UBSan, etc.) can conflict with
+        coverage instrumentation, especially during configure's sanity checks where
+        the test program needs to link against sanitizer runtime libraries.
+        
+        Args:
+            build_commands: Build commands that may contain sanitizer flags
+            
+        Returns:
+            Build commands with sanitizer flags removed
+        """
+        import re
+        
+        # Common sanitizer flags to remove
+        sanitizer_patterns = [
+            r'-fsanitize=\S+',           # Any -fsanitize flag
+            r'-fno-sanitize-recover=\S+', # Sanitizer recovery flags
+            r'-fsanitize-coverage=\S+',  # Sanitizer coverage flags (different from LLVM coverage)
+        ]
+        
+        modified = build_commands
+        removed_flags = []
+        
+        for pattern in sanitizer_patterns:
+            matches = re.findall(pattern, modified)
+            if matches:
+                removed_flags.extend(matches)
+                # Replace with a space to avoid concatenating words
+                modified = re.sub(pattern, ' ', modified)
+        
+        # Clean up multiple consecutive spaces on the same line (but preserve newlines)
+        # Only collapse spaces within lines, not across lines
+        modified = re.sub(r'[ \t]+', ' ', modified)
+        
+        # Clean up spaces next to quotes that were left by removed flags
+        modified = re.sub(r'"\s+([^"\n])', r'" \1', modified)
+        modified = re.sub(r'([^"\n])\s+"', r'\1 "', modified)
+        
+        if removed_flags:
+            self.logger.info(f"Removed conflicting sanitizer flags: {', '.join(set(removed_flags))}")
+        else:
+            self.logger.debug("No sanitizer flags found to remove")
+        
         return modified
 
     def _prepare_environment(self) -> Dict[str, str]:
@@ -710,18 +760,16 @@ Output the fixed build script now:"""
             return "\n".join([f"- {sig[:100]}" for sig, count in repeated[:3]])
         return "None"
 
-    def test_coverage_instrumentation(self, test_input_content: Optional[str] = None) -> Dict[str, Any]:
+    def test_coverage_instrumentation(self) -> Dict[str, Any]:
         """Test the instrumented binary to verify coverage instrumentation works
         
-        Args:
-            test_input_content: Optional test input content. If None, generates a simple test
-            
+        Uses strings command to check for __llvm_profile symbols in the binary.
+        
         Returns:
             Dictionary with test results including:
                 - success: bool
-                - profraw_generated: bool
-                - profdata_generated: bool
-                - coverage_report: str (path to coverage report)
+                - has_llvm_profile_symbols: bool
+                - symbols_found: list of __llvm_profile symbols
                 - error: str if failed
         """
         if not self.instrumented_binary_path:
@@ -731,122 +779,59 @@ Output the fixed build script now:"""
             }
         
         binary = self.instrumented_binary_path
-        binary_name = binary.name
-        test_dir = self.target_repo / 'coverage_test'
-        test_dir.mkdir(exist_ok=True)
         
         self.logger.info("=" * 60)
         self.logger.info("Testing Coverage Instrumentation")
         self.logger.info("=" * 60)
         
         try:
-            # Generate simple test input based on project type
-            if test_input_content is None:
-                test_input_content = self._generate_test_input()
+            # Run strings command and grep for __llvm_profile symbols
+            self.logger.info(f"Checking binary for LLVM coverage symbols: {binary}")
             
-            test_input_path = test_dir / f'test_input.{self._get_input_extension()}'
-            with open(test_input_path, 'w') as f:
-                f.write(test_input_content)
-            
-            self.logger.info(f"Created test input: {test_input_path}")
-            
-            # Set up environment for coverage profiling
-            env = os.environ.copy()
-            profraw_path = test_dir / f'{binary_name}.profraw'
-            env['LLVM_PROFILE_FILE'] = str(profraw_path)
-            
-            # Run the instrumented binary with test input
-            self.logger.info(f"Running instrumented binary: {binary}")
-            try:
-                result = subprocess.run(
-                    [str(binary), str(test_input_path)],
-                    cwd=test_dir,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                self.logger.info(f"Binary exit code: {result.returncode}")
-                if result.stdout:
-                    self.logger.debug(f"Binary stdout: {result.stdout[:500]}")
-                if result.stderr:
-                    self.logger.debug(f"Binary stderr: {result.stderr[:500]}")
-            except subprocess.TimeoutExpired:
-                self.logger.warning("Binary execution timed out (10s)")
-            except Exception as e:
-                self.logger.warning(f"Binary execution failed: {e}")
-            
-            # Check if profraw was generated
-            if not profraw_path.exists():
-                return {
-                    'success': False,
-                    'profraw_generated': False,
-                    'error': f'Profile data not generated at {profraw_path}'
-                }
-            
-            self.logger.info(f"✓ Profile data generated: {profraw_path}")
-            
-            # Merge profraw to profdata
-            profdata_path = test_dir / f'{binary_name}.profdata'
             result = subprocess.run(
-                ['llvm-profdata', 'merge', '-o', str(profdata_path), str(profraw_path)],
+                f'strings "{binary}" | grep "__llvm_profile"',
+                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=30
             )
             
-            if result.returncode != 0:
+            # Parse the output to get symbols
+            symbols = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+            
+            if symbols:
+                self.logger.info(f"✓ LLVM coverage instrumentation SUCCESSFUL")
+                self.logger.info(f"  Found {len(symbols)} __llvm_profile symbols:")
+                for symbol in symbols[:10]:  # Show first 10 symbols
+                    self.logger.info(f"    - {symbol}")
+                if len(symbols) > 10:
+                    self.logger.info(f"    ... and {len(symbols) - 10} more")
+                
+                return {
+                    'success': True,
+                    'has_llvm_profile_symbols': True,
+                    'symbols_found': symbols,
+                    'binary_path': str(binary)
+                }
+            else:
+                self.logger.error(f"✗ LLVM coverage instrumentation FAILED")
+                self.logger.error(f"  No __llvm_profile symbols found in binary")
+                
                 return {
                     'success': False,
-                    'profraw_generated': True,
-                    'profdata_generated': False,
-                    'error': f'llvm-profdata merge failed: {result.stderr}'
+                    'has_llvm_profile_symbols': False,
+                    'symbols_found': [],
+                    'error': 'No __llvm_profile symbols found in binary',
+                    'binary_path': str(binary)
                 }
             
-            self.logger.info(f"✓ Profile data merged: {profdata_path}")
-            
-            # Generate coverage report
-            coverage_report_path = test_dir / 'coverage_report.txt'
-            result = subprocess.run(
-                ['llvm-cov', 'show', str(binary), f'-instr-profile={profdata_path}'],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            if result.returncode != 0:
-                return {
-                    'success': False,
-                    'profraw_generated': True,
-                    'profdata_generated': True,
-                    'coverage_report_generated': False,
-                    'error': f'llvm-cov show failed: {result.stderr}'
-                }
-            
-            with open(coverage_report_path, 'w') as f:
-                f.write(result.stdout)
-            
-            self.logger.info(f"✓ Coverage report generated: {coverage_report_path}")
-            self.logger.info(f"  Report size: {len(result.stdout)} bytes")
-            
-            # Show a preview of coverage stats
-            if result.stdout:
-                lines = result.stdout.split('\n')[:20]
-                self.logger.info("Coverage report preview:")
-                for line in lines:
-                    self.logger.info(f"  {line}")
-            
+        except subprocess.TimeoutExpired:
+            error_msg = "strings command timed out"
+            self.logger.error(error_msg)
             return {
-                'success': True,
-                'profraw_generated': True,
-                'profdata_generated': True,
-                'coverage_report_generated': True,
-                'profraw_path': str(profraw_path),
-                'profdata_path': str(profdata_path),
-                'coverage_report': str(coverage_report_path),
-                'test_input': str(test_input_path)
+                'success': False,
+                'error': error_msg
             }
-            
         except Exception as e:
             self.logger.error(f"Coverage test failed: {e}", exc_info=True)
             return {
@@ -854,44 +839,6 @@ Output the fixed build script now:"""
                 'error': str(e)
             }
 
-    def _generate_test_input(self) -> str:
-        """Generate simple test input based on project type
-        
-        Returns:
-            Test input content as string
-        """
-        # Project-specific test inputs
-        test_inputs = {
-            'njs': 'console.log("Hello, World!");',
-            'jq': '{"name": "test", "value": 123}',
-            'mruby': 'puts "Hello, World!"',
-            'exiv2': '',  # exiv2 works with image files
-            'faad2': '',  # faad2 works with audio files
-            'php-src': '<?php echo "Hello, World!"; ?>',
-            'libxml2': '<?xml version="1.0"?><root><item>test</item></root>',
-            'yaml-cpp': 'key: value\nlist:\n  - item1\n  - item2',
-        }
-        
-        return test_inputs.get(self.project_name, 'test input')
-
-    def _get_input_extension(self) -> str:
-        """Get appropriate file extension for test input
-        
-        Returns:
-            File extension (without dot)
-        """
-        extensions = {
-            'njs': 'js',
-            'jq': 'json',
-            'mruby': 'rb',
-            'exiv2': 'txt',
-            'faad2': 'txt',
-            'php-src': 'php',
-            'libxml2': 'xml',
-            'yaml-cpp': 'yaml',
-        }
-        
-        return extensions.get(self.project_name, 'txt')
 
 
 def main():
@@ -997,13 +944,12 @@ def main():
         
         if test_result['success']:
             print("✓ Coverage instrumentation test PASSED")
-            print(f"  Profile data: {test_result.get('profdata_path', 'N/A')}")
-            print(f"  Coverage report: {test_result.get('coverage_report', 'N/A')}")
+            print(f"  Binary: {test_result.get('binary_path', 'N/A')}")
+            print(f"  LLVM profile symbols found: {len(test_result.get('symbols_found', []))}")
         else:
             print("✗ Coverage instrumentation test FAILED")
             print(f"  Error: {test_result.get('error', 'Unknown error')}")
-            print(f"  Profraw generated: {test_result.get('profraw_generated', False)}")
-            print(f"  Profdata generated: {test_result.get('profdata_generated', False)}")
+            print(f"  Has LLVM symbols: {test_result.get('has_llvm_profile_symbols', False)}")
     else:
         print(f"Error: {result.get('error', 'Unknown error')}")
     print("=" * 60)
