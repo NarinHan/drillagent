@@ -160,6 +160,10 @@ No explanations, no markdown code blocks, just the raw script content."""
             success = self._execute_build_with_retries(build_env, modified_commands)
             
             if success:
+                # Phase 4: Test coverage instrumentation
+                self.state.phase = 'testing'
+                test_result = self.test_coverage_instrumentation()
+                
                 self.state.phase = 'complete'
                 self.logger.info(f"✓ Coverage instrumentation successful")
                 self.logger.info(f"  Instrumented binary: {self.instrumented_binary_path}")
@@ -168,7 +172,8 @@ No explanations, no markdown code blocks, just the raw script content."""
                     'success': True,
                     'instrumented_binary': str(self.instrumented_binary_path),
                     'build_log': self.build_log,
-                    'coverage_flags': self.coverage_flags
+                    'coverage_flags': self.coverage_flags,
+                    'test_result': test_result
                 }
             else:
                 self.state.phase = 'failed'
@@ -922,20 +927,15 @@ def main():
     if result['success']:
         print(f"Instrumented Binary: {result['instrumented_binary']}")
         
-        # Test coverage instrumentation
-        print("\\n" + "=" * 60)
-        print("Testing Coverage Instrumentation")
-        print("=" * 60)
-        test_result = agent.test_coverage_instrumentation()
-        
-        if test_result['success']:
-            print("✓ Coverage instrumentation test PASSED")
+        # Test results are already included in result['test_result'] from Phase 4
+        test_result = result.get('test_result', {})
+        if test_result.get('success'):
+            print("\\n✓ Coverage instrumentation test PASSED")
             print(f"  Binary: {test_result.get('binary_path', 'N/A')}")
             print(f"  LLVM profile symbols found: {len(test_result.get('symbols_found', []))}")
         else:
-            print("✗ Coverage instrumentation test FAILED")
+            print("\\n✗ Coverage instrumentation test FAILED")
             print(f"  Error: {test_result.get('error', 'Unknown error')}")
-            print(f"  Has LLVM symbols: {test_result.get('has_llvm_profile_symbols', False)}")
     else:
         print(f"Error: {result.get('error', 'Unknown error')}")
     print("=" * 60)
