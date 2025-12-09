@@ -171,7 +171,8 @@ class BaseAgent:
         initial_phase: str = "init",
         max_attempts: int = 10,
         logger: Optional[logging.Logger] = None,
-        log_file: Optional[str] = None
+        log_file: Optional[str] = None,
+        config: Optional[Dict] = None
     ):
         """Initialize BaseAgent
         
@@ -182,17 +183,19 @@ class BaseAgent:
             max_attempts: Maximum number of attempts before giving up
             logger: Logger instance (creates one if not provided)
             log_file: Optional log file path (defaults to DrillAgent/logs/<classname>.log)
+            config: Optional config dict with 'log_file' or 'cve_id' for auto-naming
         """
         self.llm = llm
         self.system_prompt = system_prompt
         self.state = AgentState(phase=initial_phase, max_attempts=max_attempts)
-        self.logger = logger or self._create_default_logger(log_file)
+        self.logger = logger or self._create_default_logger(log_file, config)
     
-    def _create_default_logger(self, log_file: Optional[str] = None) -> logging.Logger:
+    def _create_default_logger(self, log_file: Optional[str] = None, config: Optional[Dict] = None) -> logging.Logger:
         """Create a default logger for the agent
         
         Args:
             log_file: Optional log file path
+            config: Optional config dict with 'log_file' or 'cve_id' for auto-naming
             
         Returns:
             Configured logger instance
@@ -200,14 +203,42 @@ class BaseAgent:
         logger = logging.getLogger(self.__class__.__name__)
         if not logger.handlers:
             # Determine log directory (DrillAgent/logs)
+            script_dir = Path(__file__).resolve().parent
+            drillagent_root = script_dir.parent.parent.parent  # Up to DrillAgent root
+            logs_dir = drillagent_root / 'logs'
+            logs_dir.mkdir(exist_ok=True)
+            
             if log_file:
                 log_path = Path(log_file)
+            elif config and config.get('log_file'):
+                # Use log_file from config
+                log_path = logs_dir / config['log_file']
+            elif config and (config.get('cve_id') or config.get('project_name') or config.get('repo_name')):
+                # Auto-generate log file name based on agent type
+                # Determine prefix based on agent class
+                agent_class = self.__class__.__name__.lower()
+                if 'coverage' in agent_class:
+                    prefix = 'coverage_log'
+                elif 'instrumentation' in agent_class:
+                    prefix = 'distance_log'
+                else:
+                    prefix = 'agent_log'
+                
+                # Get identifiers (prioritize project_name, fallback to repo_name)
+                project = config.get('project_name') or config.get('repo_name', '')
+                cve_id = config.get('cve_id', '')
+                
+                # Build log filename
+                if project and cve_id:
+                    log_path = logs_dir / f'{prefix}_{project}_{cve_id}.log'
+                elif cve_id:
+                    log_path = logs_dir / f'{prefix}_{cve_id}.log'
+                elif project:
+                    log_path = logs_dir / f'{prefix}_{project}.log'
+                else:
+                    log_path = logs_dir / f'{self.__class__.__name__.lower()}.log'
             else:
-                # Auto-detect: find DrillAgent root and create logs directory
-                script_dir = Path(__file__).resolve().parent
-                drillagent_root = script_dir.parent.parent.parent  # Up to DrillAgent root
-                logs_dir = drillagent_root / 'logs'
-                logs_dir.mkdir(exist_ok=True)
+                # Default: <classname>.log
                 log_path = logs_dir / f'{self.__class__.__name__.lower()}.log'
             
             # Ensure parent directory exists

@@ -17,6 +17,7 @@ src/instrumentation/fuzzing/
 fuzzing/
 repos/
 output/
+ray_test/
 
 # 
 # Below contents are from the Github template

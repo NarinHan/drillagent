@@ -19,25 +19,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
-# Load .env file before anything else
-try:
-    from dotenv import load_dotenv
-    # Try multiple locations for .env file
-    project_root = Path(__file__).resolve().parent.parent.parent
-    env_paths = [
-        project_root / '.env',
-        project_root.parent / '.env',  # One level up from src
-        Path.cwd() / '.env',
-    ]
-    for env_path in env_paths:
-        if env_path.exists():
-            load_dotenv(env_path)
-            break
-    else:
-        load_dotenv()  # Try default search
-except ImportError:
-    pass  # python-dotenv not installed
-
 # Import DrillAgent's LLM interface and task loader
 from drillagent.models.llm import LLM
 from drillagent.task_loader.sec_bench import RawSecbTaskLoader
@@ -109,34 +90,26 @@ log_file: "aflgo_<project>.log"
 6. **Validation**: Ensure all required fields are present and values are reasonable.
 """
     
-    def __init__(self, 
-                 llm_provider: str = "openai",
-                 llm_model: str = "gpt-4-turbo",
-                 api_key: Optional[str] = None,
-                 secbench_dir: Path = None,
-                 max_attempts: int = 10):
+    def __init__(self, drill_agent):
+        """Initialize configuration generator agent
         
-        # Initialize DrillAgent LLM interface
-        llm = LLM(provider=llm_provider, model_name=llm_model, api_key=api_key)
+        Args:
+            drill_agent: DrillAgent instance containing config, llm, logger, etc.
+        """
+        self.drill_agent = drill_agent
+        self.config = drill_agent.config
+        self.llm = drill_agent.llm
+        self.logger = drill_agent.logger
         
-        # Call parent constructor with system prompt
-        super().__init__(
-            llm=llm,
-            system_prompt=self.SYSTEM_PROMPT,
-            initial_phase="config_generation",
-            max_attempts=max_attempts
-        )
-        
-        # Default to relative path from project root
-        if secbench_dir is None:
-            project_root = Path(__file__).resolve().parent.parent.parent
-            self.secbench_dir = project_root / 'datasets' / 'sec-bench'
-        else:
-            self.secbench_dir = secbench_dir
+        # Get SEC-bench directory from project root
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        self.secbench_dir = project_root / 'datasets' / 'sec-bench'
         self.instances_dir = self.secbench_dir / 'CVE-instances'
         
         # Initialize task loader
         self.task_loader = RawSecbTaskLoader(dataset_path=str(self.instances_dir))
+        
+        self.logger.info("ConfigGeneratorAgent initialized")
     
     def extract_binary_name(self, instance_id: str) -> tuple[str, str]:
         """Extract binary name and path from secb_sh repro script
@@ -183,8 +156,8 @@ log_file: "aflgo_<project>.log"
 
 **CVE Instance Data:**
 - instance_id: {instance_id}
-- repo: {task.get('repo', 'N/A')}
-- project_name: {task.get('project_name', 'N/A')}
+- repo: {task.repo}
+- project_name: {task.project_name}
 - base_commit: {commit_id}
 
 **Build Script (from SEC-bench build_sh field):**
