@@ -51,7 +51,25 @@ class DrillAgent:
 
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
-        # Ensure output directory exists
+        # Determine log directory and filename
+        if self.config.output_dir == str(Path("./output").resolve()):
+            # User didn't set custom output_dir, use DrillAgent/logs
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent.parent  # Go up to DrillAgent root
+            log_dir = project_root / "logs"
+        else:
+            # User set custom output_dir, use it
+            log_dir = Path(self.config.output_dir)
+        
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate log filename with repo name and CVE ID
+        repo_name = Path(self.config.target_repo_path).name if self.config.target_repo_path else "unknown"
+        cve_id = self.config.cve_id.lower() if self.config.cve_id else "no-cve"
+        log_filename = f"drillagent_{repo_name}_{cve_id}.log"
+        log_path = log_dir / log_filename
+        
+        # Also ensure output_dir exists for other files
         Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
         
         # Configure root logger to INFO to avoid debug spam from third-party libs
@@ -60,7 +78,7 @@ class DrillAgent:
             format='[%(asctime)s] %(levelname)s - %(message)s',
             handlers=[
                 logging.StreamHandler(sys.stdout),
-                logging.FileHandler(f"{self.config.output_dir}/drillagent.log")
+                logging.FileHandler(str(log_path))
             ]
         )
         

@@ -335,7 +335,7 @@ LDFLAGS="${{LDFLAGS:-}}"
                     1  # Only replace first occurrence
                 )
         
-        self.logger.debug(f"Modified build commands:\n{modified[:500]}...")
+        self.logger.debug(f"Modified build commands:\n{modified}")
         return modified
 
     def _replace_docker_paths(self, build_commands: str) -> str:
@@ -352,34 +352,51 @@ LDFLAGS="${{LDFLAGS:-}}"
         """
         import re
         
-        # Check if there are any Docker-like absolute paths to replace
-        docker_path_pattern = r'/(?:src|out|work|testcase)/\S+'
-        if not re.search(docker_path_pattern, build_commands):
-            self.logger.debug("No Docker paths detected in build commands")
+        # Check if there are any Docker-like patterns that need fixing
+        docker_patterns = [
+            r'\$\(dirname\s+["\']?\$0["\']?\)',  # $(dirname "$0")
+            r'/(?:src|out|work|testcase)/',       # Absolute Docker paths
+            r'\$(?:LIBHEIF_PATH|SRC|OUT|WORK)\b'  # Docker environment variables
+        ]
+        
+        has_docker_patterns = any(re.search(pattern, build_commands) for pattern in docker_patterns)
+        
+        if not has_docker_patterns:
+            self.logger.debug("No Docker patterns detected in build commands")
             return build_commands
         
         if self.llm:
             # Use LLM for intelligent path replacement
             self.logger.info("Using LLM to replace Docker paths with actual repository path")
             
-            prompt = f"""Replace all Docker absolute paths in these build commands with the actual repository path.
+            prompt = f"""Fix this build script by replacing Docker-specific paths and removing problematic commands.
 
-**Docker paths to replace:**
-- /src/{self.project_name} → {self.target_repo}
-- /src/... → {self.target_repo}
-- /out/... → {self.target_repo}
-- /work/... → {self.target_repo}
+**Context:**
+- Target repository: {self.target_repo}
+- Project name: {self.project_name}
+- The script will be executed with cwd={self.target_repo} (already in the repo directory)
+- $0 will be /bin/bash (not a script file), so $(dirname "$0") will fail
 
 **Original build commands:**
 {build_commands}
 
+**Common Docker patterns to fix:**
+1. Remove: cd "$(dirname "$0")/project" → This fails because $0=/bin/bash
+2. Remove: cd /src/project or cd /out/... → Absolute Docker paths
+3. Remove: cd "$LIBHEIF_PATH" or cd $SRC → Docker environment variables
+4. Keep: cd build or cd src → Legitimate relative subdirectories (these are OK!)
+5. Replace: /src/{self.project_name}/... → {self.target_repo}/... (in other contexts)
+6. Replace: WORK_DIR="${{WORK:-/work}}" → WORK_DIR="${{WORK:-{self.target_repo}/work}}"
+
 **Instructions:**
-1. Replace absolute Docker paths (like /src/openexr) with: {self.target_repo}
-2. Keep all other parts of the commands unchanged
-3. Preserve relative paths and current directory references (. or ./)
-4. Output ONLY the corrected build commands, nothing else
-5. Do NOT wrap in markdown code blocks
-6. Do NOT add explanations
+1. Remove problematic cd commands that navigate to Docker paths
+2. Keep legitimate cd commands to subdirectories like "cd build"
+3. Replace absolute Docker paths with {self.target_repo}
+4. Update Docker environment variable defaults to use {self.target_repo}
+5. Preserve all other commands unchanged
+6. Output ONLY the corrected build commands
+7. Do NOT wrap in markdown code blocks
+8. Do NOT add explanations
 """
             
             try:
@@ -401,7 +418,7 @@ LDFLAGS="${{LDFLAGS:-}}"
                         lines = lines[:-1]
                     response = '\n'.join(lines)
                 
-                self.logger.info(f"LLM replaced Docker paths (first 300 chars): {response[:300]}")
+                self.logger.info(f"LLM replaced Docker paths:\n{response}")
                 return response
                 
             except Exception as e:
@@ -441,7 +458,7 @@ LDFLAGS="${{LDFLAGS:-}}"
             modified
         )
         
-        self.logger.debug(f"Regex replaced paths (first 300 chars): {modified[:300]}")
+        self.logger.debug(f"Regex replaced paths:\n{modified}")
         return modified
 
     def _remove_sanitizer_flags(self, build_commands: str) -> str:
@@ -571,7 +588,7 @@ LDFLAGS="${{LDFLAGS:-}}"
         """
         try:
             self.logger.info(f"Executing build in {self.target_repo}")
-            self.logger.info(f"Build commands (first 500 chars): {build_commands[:500]}")
+            self.logger.info(f"Build commands:\n{build_commands}")
             
             # Execute build script
             result = subprocess.run(
@@ -587,15 +604,13 @@ LDFLAGS="${{LDFLAGS:-}}"
             
             success = result.returncode == 0
             
-            # Log stdout (truncate if too long)
+            # Log stdout
             if result.stdout:
-                stdout_preview = result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout
-                self.logger.info(f"Build stdout (last 2000 chars):\n{stdout_preview}")
+                self.logger.info(f"Build stdout:\n{result.stdout}")
             
             # Log stderr
             if result.stderr:
-                stderr_preview = result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr
-                self.logger.error(f"Build stderr (last 2000 chars):\n{stderr_preview}")
+                self.logger.error(f"Build stderr:\n{result.stderr}")
             
             if success:
                 self.logger.info("✓ Build completed successfully")
@@ -735,7 +750,7 @@ LDFLAGS="${{LDFLAGS:-}}"
 {build_commands}
 
 **Build Error:**
-{error[-2000:]}
+{error}
 
 **Common issues and fixes:**
 - Unbound variable (like LIB_FUZZING_ENGINE): Export it with empty value or remove references
@@ -778,10 +793,10 @@ Output the fixed build script now:"""
             
             # Check if response looks like a valid script
             if response and (response.startswith('#!/bin/bash') or 'COV_FLAGS' in response):
-                self.logger.info(f"LLM provided fixed build script (first 300 chars):\n{response[:300]}")
+                self.logger.info(f"LLM provided fixed build script:\n{response}")
                 return response
             else:
-                self.logger.warning(f"LLM response doesn't look like a valid build script: {response[:200]}")
+                self.logger.warning(f"LLM response doesn't look like a valid build script:\n{response}")
                 
                 # Try specific pattern-based fixes as fallback
                 if 'LIB_FUZZING_ENGINE' in error:

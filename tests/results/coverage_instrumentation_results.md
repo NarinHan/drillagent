@@ -12,7 +12,8 @@ openexr_cve_2020_16587
 openjpeg_cve_2016_10507
 jq_CVE-2023-50246
 upx_cve-2023-23457
-yara_cve-2017-5924
+yara_cve-2017-
+php_cve-2017-12933
 
 ## Failed instrumentation CVEs
 
