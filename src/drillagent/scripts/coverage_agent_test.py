@@ -42,9 +42,6 @@ Examples:
 
   # Run with verbose output
   python coverage_agent_test.py --cve-id CVE-2017-5924 --repo /path/to/repo -v
-
-  # Skip checkout (if already at correct commit)
-  python coverage_agent_test.py --cve-id CVE-2017-5924 --repo /path/to/repo --skip-checkout
         """
     )
 
@@ -85,18 +82,6 @@ Examples:
         dest="output_dir",
         default="./output",
         help="Output directory for results (default: ./output)"
-    )
-
-    parser.add_argument(
-        "--skip-checkout",
-        action="store_true",
-        help="Skip git checkout step (use if already at correct commit)"
-    )
-
-    parser.add_argument(
-        "--skip-submodules",
-        action="store_true",
-        help="Skip git submodule initialization"
     )
 
     parser.add_argument(
@@ -168,55 +153,6 @@ def determine_repo_path(cve_data: dict, target_repo_path: str = None) -> str:
     raise ValueError("Could not determine repository path. Please provide --repo argument.")
 
 
-def checkout_commit(repo_path: str, commit_id: str, skip_submodules: bool = False):
-    """
-    Checkout specific commit in repository
-    
-    Args:
-        repo_path: Path to repository
-        commit_id: Commit hash to checkout
-        skip_submodules: Skip submodule initialization
-    """
-    import subprocess
-    
-    repo = Path(repo_path)
-    
-    if not repo.exists():
-        print(f"[!] Warning: Repository path does not exist: {repo}")
-        return
-    
-    if not (repo / '.git').exists():
-        print(f"[!] Warning: Not a git repository: {repo}")
-        return
-    
-    try:
-        # Checkout commit
-        print(f"[+] Checking out commit: {commit_id[:12]}...")
-        subprocess.run(
-            ['git', 'checkout', commit_id],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        print(f"    ✓ Successfully checked out commit {commit_id[:12]}...")
-        
-        # Initialize submodules
-        if not skip_submodules:
-            print(f"[+] Initializing git submodules...")
-            subprocess.run(
-                ['git', 'submodule', 'update', '--init', '--recursive'],
-                cwd=repo,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print(f"    ✓ Successfully initialized git submodules")
-            
-    except subprocess.CalledProcessError as e:
-        print(f"[!] Warning: Git operation failed: {e.stderr}")
-
-
 def main():
     """Main entry point for coverage agent testing"""
     args = parse_arguments()
@@ -225,7 +161,7 @@ def main():
     print("Coverage Agent Test")
     print("=" * 60)
 
-    # Load CVE data
+    # Load CVE data to get project_name and display summary
     cve_data = load_cve_data(args.cve_id)
     
     if not cve_data:
@@ -243,29 +179,16 @@ def main():
     print(f"\n[CVE Summary]")
     print(f"  CVE ID: {args.cve_id}")
     print(f"  Project: {cve_data.get('project_name', 'N/A')}")
-    print(f"  Language: {cve_data.get('lang', 'N/A')}")
-    print(f"  Base Commit: {cve_data.get('base_commit', 'N/A')[:12]}...")
     print(f"  Repository: {repo_path}")
     print()
 
-    # Checkout base commit if not skipped
-    if not args.skip_checkout:
-        base_commit = cve_data.get('base_commit')
-        if base_commit:
-            checkout_commit(repo_path, base_commit, args.skip_submodules)
-        else:
-            print("[!] Warning: No base_commit found in CVE data, skipping checkout")
-
-    # Create configuration
+    # Create minimal configuration
+    # Only provide essentials - DrillAgent will load full CVE instance data internally
     config = AgentConfig(
         target_repo_path=repo_path,
         cve_id=args.cve_id,
-        project_name=cve_data.get('project_name'),
-        lang=cve_data.get('lang'),
-        base_commit=cve_data.get('base_commit', 'HEAD'),
-        sanitizer_report=cve_data.get('sanitizer_report'),
-        build_sh=cve_data.get('build_sh'),
-        harness_command=cve_data.get('harness_command'),
+        project_name=cve_data.get('project_name'),  # Needed to locate instance file
+        base_commit=cve_data.get('base_commit'),    # Needed for git checkout
         model_provider=args.model,
         model_name=args.model_name,
         api_key=args.api_key,

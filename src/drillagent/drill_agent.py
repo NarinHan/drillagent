@@ -137,7 +137,43 @@ class DrillAgent:
             raise ValueError(error_msg)
 
         try:
-            # Run git checkout command
+            # Step 1: Clean build artifacts (make clean or equivalent)
+            self.logger.info("Cleaning build artifacts...")
+            clean_result = subprocess.run(
+                ['make', 'clean'],
+                cwd=self.config.target_repo_path,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if clean_result.returncode == 0:
+                self.logger.info("✓ Build artifacts cleaned")
+            else:
+                self.logger.warning(f"make clean failed or not available (this is OK if no Makefile exists)")
+            
+            # Step 2: Reset git repository state - discard all local changes
+            self.logger.info("Resetting git repository state...")
+            subprocess.run(
+                ['git', 'reset', '--hard', 'HEAD'],
+                cwd=self.config.target_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            self.logger.info("✓ Git repository reset to HEAD")
+            
+            # Step 3: Clean untracked files and directories
+            self.logger.info("Cleaning untracked files...")
+            subprocess.run(
+                ['git', 'clean', '-fdx'],
+                cwd=self.config.target_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            self.logger.info("✓ Untracked files cleaned")
+            
+            # Step 4: Checkout the target commit
             result = subprocess.run(
                 ['git', 'checkout', self.config.base_commit],
                 cwd=self.config.target_repo_path,
@@ -149,6 +185,19 @@ class DrillAgent:
             self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
             if result.stdout:
                 self.logger.debug(f"Git output: {result.stdout.strip()}")
+            
+            # Step 5: Update git submodules
+            self.logger.info("Updating git submodules...")
+            result = subprocess.run(
+                ['git', 'submodule', 'update', '--init', '--recursive'],
+                cwd=self.config.target_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            self.logger.info("✓ Successfully updated git submodules")
+            if result.stdout:
+                self.logger.debug(f"Submodule output: {result.stdout.strip()}")
 
         except subprocess.CalledProcessError as e:
             error_msg = f"Failed to checkout commit {self.config.base_commit}: {e.stderr}"
