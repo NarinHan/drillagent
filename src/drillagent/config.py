@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class AgentConfig:
     # Input configuration for DrillAgent (for a single CVE task)
+    # This dataclass should be benchmark-agnostic.
 
     # 
     # PoV task information
