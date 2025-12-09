@@ -132,32 +132,15 @@ Handle errors by analyzing messages and providing alternative commands in your r
             llm_api_key = config.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
             llm = LLM(provider="openai", model_name=llm_model, api_key=llm_api_key)
         
-        # Prepare log file path from config
-        log_file = None
-        if config.get('log_file'):
-            # Find DrillAgent root for logs directory
-            script_dir = Path(__file__).resolve().parent
-            drillagent_root = script_dir.parent.parent.parent
-            logs_dir = drillagent_root / 'logs'
-            logs_dir.mkdir(exist_ok=True)
-            log_file = str(logs_dir / config['log_file'])
-        elif config.get('cve_id'):
-            # Auto-generate log file name with CVE number
-            script_dir = Path(__file__).resolve().parent
-            drillagent_root = script_dir.parent.parent.parent
-            logs_dir = drillagent_root / 'logs'
-            logs_dir.mkdir(exist_ok=True)
-            cve_suffix = config['cve_id'].replace('CVE-', '').replace('-', '_')
-            log_file = str(logs_dir / f'instrumentation_{cve_suffix}.log')
-        
         # Initialize BaseAgent with AFLGo-specific system prompt
+        # BaseAgent will handle log file creation using config
         super().__init__(
             llm=llm,
             system_prompt=self.AFLGO_SYSTEM_PROMPT,
             initial_phase="setup",
             max_attempts=10,
             logger=logger,
-            log_file=log_file
+            config=config
         )
         
         # Store environment variables for reset between attempts
@@ -244,31 +227,26 @@ Handle errors by analyzing messages and providing alternative commands in your r
         }
         
         try:
-            # Phase 1: Repository Setup
-            if not self.phase_setup_repository():
-                results['errors'] = self.state.errors
-                return results
-            
-            # Phase 2: Target Extraction
+            # Phase 1: Target Extraction
             if not self.phase_extract_targets():
                 results['errors'] = self.state.errors
                 return results
             
             results['targets_file'] = str(self.temp_dir / 'BBtargets.txt')
             
-            # Phase 3: CG/CFG Generation (First Build)
+            # Phase 2: CG/CFG Generation (First Build)
             if not self.phase_build_with_llm(phase_num=1):
                 results['errors'] = self.state.errors
                 return results
             
-            # Phase 4: Distance Calculation
+            # Phase 3: Distance Calculation
             if not self.phase_generate_distance():
                 results['errors'] = self.state.errors
                 return results
             
             results['distance_file'] = str(self.temp_dir / 'distance.cfg.txt')
             
-            # Phase 5: Final Instrumented Build
+            # Phase 4: Final Instrumented Build
             if not self.phase_build_with_llm(phase_num=2):
                 results['errors'] = self.state.errors
                 return results
@@ -313,6 +291,13 @@ Handle errors by analyzing messages and providing alternative commands in your r
             stderr=subprocess.PIPE,
             text=True
         )
+        
+        # Log command output for debugging
+        if result.returncode != 0:
+            self.logger.error(f"Command failed with exit code {result.returncode}")
+            if result.stderr:
+                stderr_preview = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
+                self.logger.error(f"stderr: {stderr_preview}")
         
         return result.returncode, result.stdout, result.stderr
     
@@ -369,40 +354,6 @@ Handle errors by analyzing messages and providing alternative commands in your r
             }
     
     # AFLGo-specific phase methods
-    
-    def phase_setup_repository(self) -> bool:
-        """Phase 1: Clone/update repository"""
-        self.logger.info("=== Phase 1: Repository Setup ===")
-        self.state.phase = 'setup'
-        
-        # Remove existing repository if it exists
-        if self.subject_dir.exists():
-            self.logger.info(f"Removing existing repository: {self.subject_dir}")
-            shutil.rmtree(self.subject_dir)
-        
-        # Clone fresh repository
-        self.logger.info(f"Cloning repository: {self.repo_url}")
-        code, stdout, stderr = self.run_command(
-            f"git clone {self.repo_url} {self.subject_dir}"
-        )
-        if code != 0:
-            error_msg = f"git clone failed: {stderr}"
-            self.logger.error(error_msg)
-            self.state.record_error(error_msg, context="setup")
-            return False
-        
-        # Initialize and update git submodules
-        self.logger.info("Initializing git submodules...")
-        code, stdout, stderr = self.run_command(
-            "git submodule update --init --recursive",
-            self.subject_dir
-        )
-        # Don't fail if there are no submodules
-        if code != 0 and "No submodule mapping found" not in stderr:
-            self.logger.warning(f"Submodule initialization warning: {stderr}")
-        
-        self.state.observations.append("Repository setup complete")
-        return True
     
     def _extract_targets_from_sanitizer_report(self) -> Optional[List[str]]:
         """Extract targets from sanitizer report using LLM guidance"""
@@ -578,8 +529,8 @@ Respond in JSON:
         return extended_targets
     
     def phase_extract_targets(self) -> bool:
-        """Phase 2: Extract targets from sanitizer reports"""
-        self.logger.info("=== Phase 2: Target Extraction ===")
+        """Phase 1: Extract targets from sanitizer reports"""
+        self.logger.info("=== Phase 1: Target Extraction ===")
         self.state.phase = 'targets'
         
         targets_file = self.temp_dir / 'BBtargets.txt'
@@ -634,9 +585,9 @@ Respond in JSON:
         return False
     
     def phase_build_with_llm(self, phase_num: int = 1) -> bool:
-        """Phase 3/5: Build with LLM guidance"""
+        """Phase 2/4: Build with LLM guidance"""
         phase_name = "CG/CFG Generation" if phase_num == 1 else "Distance Instrumentation"
-        self.logger.info(f"=== Phase {phase_num + 2}: {phase_name} ===")
+        self.logger.info(f"=== Phase {phase_num + 1}: {phase_name} ===")
         
         targets_file = self.temp_dir / 'BBtargets.txt'
         distance_file = self.temp_dir / 'distance.cfg.txt'
@@ -860,8 +811,13 @@ Provide exact shell commands. Respond in JSON:
         
         output_lines = []
         for line in process.stdout:
+            # Write to console
             sys.stdout.write(line)
             sys.stdout.flush()
+            # Log to file (strip ANSI color codes for clean logs)
+            clean_line = re.sub(r'\x1b\[[0-9;]*m', '', line.rstrip())
+            if clean_line:
+                self.logger.info(f"BUILD: {clean_line}")
             output_lines.append(line)
         
         process.wait()
@@ -869,14 +825,18 @@ Provide exact shell commands. Respond in JSON:
         
         if process.returncode != 0:
             error_context = f"Commands failed\nExit code: {process.returncode}\nOutput:\n{result_stdout}"
+            self.logger.error(f"Build failed with exit code {process.returncode}")
+            self.logger.error(f"Last 1000 chars of output: {result_stdout[-1000:]}")
             self.state.record_error(error_context, context=f"phase_{self.state.phase}")
             return False
+        
+        self.logger.info(f"Build commands completed successfully")
         
         return True
     
     def phase_generate_distance(self) -> bool:
-        """Phase 4: Generate distance file"""
-        self.logger.info("=== Phase 4: Distance Generation ===")
+        """Phase 3: Generate distance file"""
+        self.logger.info("=== Phase 3: Distance Generation ===")
         self.state.phase = 'distance'
         
         distance_cfg = self.temp_dir / 'distance.cfg.txt'
