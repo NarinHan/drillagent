@@ -205,106 +205,85 @@ class DrillAgent:
         self.logger.info("\n[Phase 1] Code Instrumentation")
         self.phase = "instrumentation"
 
-        # Step 1: Generate AFLGo configuration
-        if self.config.enable_distance:
-            # Initialize ConfigGeneratorAgent
-            self.logger.info("  - Initializing ConfigGeneratorAgent...")
+        # Step 1: Always ensure AFLGo configuration exists (for all CVE instances)
+        self.logger.info("  - Checking AFLGo configuration...")
+        try:
+            # Get project root for paths
             project_root = Path(__file__).resolve().parent.parent.parent
-            secbench_dir = project_root / 'datasets' / 'sec-bench'
             
-            config_generator = ConfigGeneratorAgent(
-                llm_provider=self.config.model_provider,
-                llm_model=self.config.model_name,
-                api_key=self.config.api_key,
-                secbench_dir=secbench_dir
+            # Check if config already exists in instrumentation_configs
+            instrumentation_configs_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
+            existing_configs = list(instrumentation_configs_dir.glob(f"*.{self.config.cve_id.lower()}.yaml"))
+            
+            if existing_configs:
+                # Use existing config
+                config_path = existing_configs[0]
+                self.aflgo_config_path = str(config_path)
+                self.logger.info(f"    ✓ Using existing config: {config_path.name}")
+            else:
+                # Generate new config from CVE instance using ConfigGeneratorAgent
+                self.logger.info("    - Initializing ConfigGeneratorAgent...")
+                config_generator = ConfigGeneratorAgent(self)
+                
+                # Instance files are named: {project}.{cve-id}.json (e.g., exiv2.cve-2017-14857.json)
+                instance_path = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f"{self.config.project_name}.{self.config.cve_id.lower()}.json"
+                
+                # Generate config for AFLGo instrumentation - save to instrumentation_configs
+                output_path = instrumentation_configs_dir / f"{self.config.project_name}.{self.config.cve_id.lower()}.yaml"
+                
+                self.logger.info(f"    - Generating config from: {instance_path.name}")
+                config_yaml = config_generator.generate_config(instance_path, output_path)
+                
+                # Store config path for later use
+                self.aflgo_config_path = str(output_path)
+                self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
+        except Exception as e:
+            self.logger.error(f"    Failed to ensure AFLGo config: {e}")
+            self.errors.append(f"Config generation failed: {e}")
+            self.aflgo_config_path = None
+
+        # Step 2: Run AFLGo instrumentation if enabled
+        if self.config.enable_distance:
+            self.logger.info("  - Running AFLGo instrumentation...")
+            
+            # Load the YAML config file into a dictionary
+            import yaml
+            with open(self.aflgo_config_path, 'r') as f:
+                config_dict = yaml.safe_load(f)
+            
+            instrumentation_agent = InstrumentationAgent(
+                config=config_dict,
+                llm=self.llm,
+                logger=self.logger
             )
-            self.logger.info("  - Preparing AFLGo configuration...")
-            try:
-                # Get project root for paths
-                project_root = Path(__file__).resolve().parent.parent.parent
-                
-                # Determine CVE instance path
-                if self.config.cve_id:
-                    # Check if config already exists in instrumentation_configs
-                    instrumentation_configs_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
-                    existing_configs = list(instrumentation_configs_dir.glob(f"*.{self.config.cve_id.lower()}.yaml"))
-                    
-                    if existing_configs:
-                        # Use existing config
-                        config_path = existing_configs[0]
-                        self.aflgo_config_path = str(config_path)
-                        self.logger.info(f"    ✓ Using existing config: {config_path.name}")
-                    else:
-                        # Generate new config from CVE instance
-                        instance_path = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f"{self.config.cve_id}.json"
-                        
-                        if instance_path.exists():
-                            # Generate config for AFLGo instrumentation - save to instrumentation_configs
-                            output_path = instrumentation_configs_dir / f"{self.config.project_name}.{self.config.cve_id.lower()}.yaml"
-                            
-                            self.logger.info(f"    Generating config from: {instance_path.name}")
-                            config_yaml = config_generator.generate_config(instance_path, output_path)
-                            
-                            # Store config path for later use
-                            self.aflgo_config_path = str(output_path)
-                            self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
-                        else:
-                            self.logger.warning(f"    CVE instance not found: {instance_path}")
-                            self.logger.info("    Skipping config generation")
-                            self.aflgo_config_path = None
-                    
-                    # Run AFLGo instrumentation using InstrumentationAgent if we have a config
-                    if self.aflgo_config_path:
-                        self.logger.info("  - Running AFLGo instrumentation...")
-                        
-                        # Load the YAML config file into a dictionary
-                        import yaml
-                        with open(self.aflgo_config_path, 'r') as f:
-                            config_dict = yaml.safe_load(f)
-                        
-                        instrumentation_agent = InstrumentationAgent(
-                            config=config_dict,
-                            llm=self.llm,
-                            logger=self.logger
-                        )
-                        
-                        # Execute the full instrumentation workflow
-                        result = instrumentation_agent.run()
-                        
-                        if result['success']:
-                            self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
-                            self.instrumented_binary = result.get('instrumented_binary')
-                        else:
-                            self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
-                            self.errors.append(f"Instrumentation failed: {result.get('error')}")
-                else:
-                    self.logger.warning("    No CVE ID provided, skipping config generation")
-            except Exception as e:
-                self.logger.error(f"    Failed to generate AFLGo config: {e}")
-                self.errors.append(f"Config generation failed: {e}")
+            
+            # Execute the full instrumentation workflow
+            result = instrumentation_agent.run()
+            
+            if result['success']:
+                self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
+                self.instrumented_binary = result.get('instrumented_binary')
+            else:
+                self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
+                self.errors.append(f"AFLGo instrumentation failed: {result.get('error')}")
+        else:
+            self.logger.info("  - AFLGo instrumentation disabled (enable_distance=False)")
 
-        # Step 2: Build with coverage instrumentation
+        # Step 3: Build with coverage instrumentation
         if self.config.enable_coverage:
-            self.logger.info("  - Initializing CoverageInstrumentAgent...")
-            try:
-                # Instantiate and run coverage agent - pass self (DrillAgent instance)
-                coverage_agent = CoverageInstrumentAgent(self)
-                
-                result = coverage_agent.run()
-                
-                if result['success']:
-                    self.logger.info(f"    ✓ Coverage instrumentation completed")
-                    self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
-                    # Store the coverage-instrumented binary path
-                    self.coverage_binary = result.get('instrumented_binary')
-                else:
-                    self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
-                    self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-            except Exception as e:
-                self.logger.error(f"    Coverage instrumentation error: {e}")
-                self.errors.append(f"Coverage instrumentation error: {e}")
+            self.logger.info("  - Running coverage instrumentation...")
+            coverage_agent = CoverageInstrumentAgent(self)
+            result = coverage_agent.run()
+            
+            if result['success']:
+                self.logger.info(f"    ✓ Coverage instrumentation completed")
+                self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
+                self.coverage_binary = result.get('instrumented_binary')
+            else:
+                self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
+                self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
 
-        # Step 3: Build with memory sanitizer
+        # Step 4: Build with memory sanitizer
         if self.config.enable_sanitizer:
             self.logger.info("  - Applying memory sanitizer...")
             # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)

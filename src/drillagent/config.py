@@ -16,7 +16,7 @@ class AgentConfig:
 
     target_repo_path: str = ""              # Path to the target source repository (with .git/)
     vuln_location: str = ""                 # Location of the vulnerability in the source code (file:line)
-    base_commit: str = "af5acf3566d5732871b1dcb007aee4f474369d93"                   # Necessary to checkout the correct commit.
+    base_commit: str = ""                   # Necessary to checkout the correct commit.
     build_sh: Optional[str] = None          # If not provided, reasoning by ourselves.
     harness_command: Optional[str] = None   # If not provided, reasoning by ourselves.
     sanitizer_report: Optional[str] = None  # If not provided (no call trace), we have to conduct control/data flow analysis.
