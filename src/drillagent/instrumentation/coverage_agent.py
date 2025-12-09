@@ -95,6 +95,40 @@ No explanations, no markdown code blocks, just the raw script content."""
         self.logger.info(f"CoverageInstrumentAgent initialized for {self.project_name} {self.cve_id}")
         self.logger.info(f"Target repository: {self.target_repo}")
 
+    def _check_existing_instrumentation(self) -> bool:
+        """Check if the repository has already been successfully instrumented
+        
+        Returns:
+            True if already instrumented with coverage, False otherwise
+        """
+        # Try to locate the binary first
+        binary = self._locate_instrumented_binary()
+        
+        if not binary or not binary.exists():
+            self.logger.info("  No existing binary found")
+            return False
+        
+        # Check if binary has LLVM coverage symbols
+        try:
+            self.logger.info(f"  Checking existing binary: {binary}")
+            result = subprocess.run(
+                f'strings "{binary}" | grep -q "__llvm_profile"',
+                shell=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                self.logger.info(f"  ✓ Found instrumented binary with LLVM coverage symbols")
+                self.instrumented_binary_path = binary
+                return True
+            else:
+                self.logger.info(f"  Binary exists but has no LLVM coverage symbols")
+                return False
+                
+        except Exception as e:
+            self.logger.warning(f"  Failed to check existing binary: {e}")
+            return False
+
     def _load_instrumentation_config(self) -> Dict[str, Any]:
         """Load instrumentation config from SEC-bench datasets
         
@@ -145,6 +179,25 @@ No explanations, no markdown code blocks, just the raw script content."""
         self.logger.info("=" * 60)
         
         try:
+            # Phase 0: Check if already instrumented
+            self.logger.info("Checking if repository is already instrumented...")
+            if self._check_existing_instrumentation():
+                self.logger.info("✓ Repository already instrumented, skipping build")
+                self.state.phase = 'complete'
+                
+                # Test the existing binary
+                test_result = self.test_coverage_instrumentation()
+                
+                return {
+                    'success': True,
+                    'instrumented_binary': str(self.instrumented_binary_path),
+                    'build_log': [],
+                    'coverage_flags': self.coverage_flags,
+                    'test_result': test_result,
+                    'skipped': True,
+                    'reason': 'Already instrumented'
+                }
+            
             # Phase 1: Inject coverage flags into build commands
             self.state.phase = 'prepare_build'
             modified_commands = self._inject_coverage_flags()
