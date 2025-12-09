@@ -24,3 +24,5 @@ All the entry points should be included in `src/drillagent/scripts/`. You can al
 ## Developing Tips
 
 Each of us developers should create our own dev branch. After pushing some commits to our dev branch, we can create a pull request and merge it into the main branch.
+
+Classes `DrillAgent`, `AgentConfig`, and most of agents should be benchmark-agnostic. Thus we can easily evaluate **DrillAgent** in different datasets.

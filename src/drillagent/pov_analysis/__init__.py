@@ -4,12 +4,13 @@ PoV Analysis Module
 This module contains agents for vulnerability analysis, path exploration, and crash triggering.
 """
 
-from .vuln_analysis import VulnAnalysisAgent
+from .vuln_analysis import VulnAnalysisAgent, VulnInfo
 from .path_exploration import PathExplorationAgent
 from .crash_trigger import CrashTriggerAgent
 
 __all__ = [
     "VulnAnalysisAgent",
+    "VulnInfo",
     "PathExplorationAgent",
     "CrashTriggerAgent",
 ]

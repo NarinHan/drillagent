@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass, field
 
-from drillagent.config import AgentConfig 
+from drillagent.config import AgentConfig
 from drillagent.models import LLM
 from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent, CoverageInstrumentAgent
-from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent
+from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 
 class DrillAgent:
@@ -20,18 +20,21 @@ class DrillAgent:
     # 1. This DrillAgent only runs for a single CVE task at a time. Benchmark's batch task scheduling should be placed at the caller layer.
     # 2. Only the essential elements for basic PoV generation are included in DrillAgent; all other information should be maintained at the caller layer.
 
+    # This dataclass should be benchmark-agnostic.
+
     def __init__(self, config: AgentConfig):
         # The only init parameter is the AgentConfig dataclass instance.
         self.config = config       # Include all the PoV task information and configuration options.
-        self.phase = "initialized" # TODO: initialized, instrumented, analyzing, mutating, completed
+        self.phase = "initialized" # TODO: initialized, instrumented, analyzing, exploring, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
         self.skip_vulnerability_analysis = config.disable_vulnerability_analysis # Currently we only consider these two skip options.
         self.iteration = 0
         self.errors = []
 
         # Intermediate analysis results
-        self.vulnerability_info = None # For vulnerability analysis results (e.g., root cause)
+        self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD
+        # Path exploration results
         self.pov_candidates     = []
         self.coverage_data      = None
         self.closest_pov_candidate = None
@@ -128,14 +131,6 @@ class DrillAgent:
         except Exception as e:
             self.logger.error(f"Failed to initialize agent tools: {e}")
             self.agent_tools = []
-
-        # TODO: Initialize PoV analysis components
-        # self.root_cause_analyzer = RootCauseAnalyzer(self.llm)
-        # self.path_explorer = PathExplorer(self.llm)
-        # self.input_mutator = InputMutator(self.llm)
-        self.root_cause_analyzer = None
-        self.path_explorer = None
-        self.input_mutator = None
 
         self.logger.info("Components initialized")
 
@@ -368,125 +363,47 @@ class DrillAgent:
         # Use VulnAnalysisAgent for structured vulnerability analysis
         try:
             vuln_agent = VulnAnalysisAgent(self)
-            self.logger.info("  - Initialized VulnAnalysisAgent...")
-            
-            # Run the analysis
-            analysis_results = vuln_agent.run()
-            
-            # Store the structured analysis results
-            self.vulnerability_info = {
-                "refined_vuln_location": analysis_results.get('refined_vuln_location', ''),
-                "refined_harness_command": analysis_results.get('refined_harness_command', ''),
-                "binary_path": analysis_results.get('binary_path', ''),
-                "call_trace": analysis_results.get('call_trace', ''),
-                "entry_function": analysis_results.get('entry_function', ''),
-                "crash_function": analysis_results.get('crash_function', ''),
-                "vuln_type": analysis_results.get('vuln_type', ''),
-                "root_cause": analysis_results.get('root_cause', ''),
-                "critical_branches": analysis_results.get('critical_branches', [])
-            }
-            
+            self.logger.info("  - Initialized VulnAnalysisAgent!")
+
+            # Run the analysis - returns VulnInfo instance directly
+            self.vulnerability_info = vuln_agent.run()
+
+            # Print the formatted vulnerability analysis results
+            self.vulnerability_info.format_output()
             self.logger.info("  ✓ Vulnerability analysis completed")
-            self.logger.info(f"    - Vulnerability Type: {self.vulnerability_info['vuln_type']}")
-            self.logger.info(f"    - Crash Function: {self.vulnerability_info['crash_function']}")
-            self.logger.info(f"    - Entry Function: {self.vulnerability_info['entry_function']}")
-            self.logger.info(f"    - Vuln Location: {self.vulnerability_info['refined_vuln_location']}")
-            
+
         except Exception as e:
             self.logger.error(f"  Failed to analyze vulnerability: {e}", exc_info=True)
             self.errors.append(f"Vulnerability analysis failed: {e}")
-            self.vulnerability_info = {"error": str(e)}
+            # Keep the VulnInfo instance but mark it with error in root_cause field
+            self.vulnerability_info.root_cause = f"Analysis failed: {e}"
 
     def _phase_exploration(self):
-        """Phase 3: Coverage-guided path exploration and input mutation"""
-        self.logger.info("\n[Phase 3] Path Exploration and Input Mutation")
-        self.phase = "mutating"
+        """Phase 3: Coverage-guided path exploration"""
+        self.logger.info("\n[Phase 3] Path Exploration")
+        self.phase = "exploring"
 
         max_iterations = self.config.max_iterations
 
-#         for iteration in range(max_iterations):
-#             self.iteration = iteration
-#             self.logger.info(f"\n  Iteration {iteration + 1}/{max_iterations}")
+        # Utilize PathExplorationAgent to reach the vulnerable function
+        try:
+            path_agent = PathExplorationAgent(self)
+            self.logger.info("  - Initialized PathExplorationAgent!")
 
-#             # Step 1: Use LLM to explore execution paths toward vulnerability
-#             if self.llm and not self.config.disable_coverage_feedback:
-#                 self.logger.info("    - Exploring paths with LLM guidance...")
+            # Run the path exploration process
+            path_agent.run()
 
-#                 # Prepare context for path exploration
-#                 exploration_prompt = f"""Based on the vulnerability analysis, suggest execution paths that could trigger the vulnerability.
+            # Extract exploration results
+            self.pov_candidates = path_agent.history_pov_candidates
+            self.closest_pov_candidate = path_agent.best_pov_candidate
 
-# Vulnerability Info: {self.vulnerability_info.get('llm_analysis', 'Not available')[:500] if self.vulnerability_info else 'Not analyzed'}
+            # TODO: Print the formatted exploration results
 
-# Harness Command: {self.config.harness_command or 'Not specified'}
+        except Exception as e:
+            self.logger.error(f"  Failed to run path exploration: {e}", exc_info=True)
+            self.errors.append(f"Path exploration failed: {e}")
 
-# Please suggest:
-# 1. Input patterns that might trigger the vulnerable path
-# 2. Specific program states or conditions needed
-# 3. Potential input mutations to explore
-
-# Format your response as structured suggestions."""
-
-#                 try:
-#                     path_suggestions = self.llm.generate(
-#                         prompt=exploration_prompt,
-#                         system_prompt="You are an expert in program analysis and vulnerability exploitation.",
-#                         temperature=0.8,  # Higher temperature for creative exploration
-#                         max_tokens=2048
-#                     )
-
-#                     self.logger.info(f"    ✓ Path exploration suggestions generated ({len(path_suggestions)} chars)")
-
-#                 except Exception as e:
-#                     self.logger.warning(f"    Path exploration failed: {e}")
-#                     path_suggestions = None
-#             else:
-#                 self.logger.info("    - Path exploration skipped (LLM unavailable or disabled)")
-#                 path_suggestions = None
-
-#             # Step 2: Generate mutated inputs based on exploration
-#             if self.llm and not self.config.disable_crash_trigger_analysis:
-#                 self.logger.info("    - Generating input mutations...")
-
-#                 mutation_prompt = f"""Generate test inputs to trigger the vulnerability.
-
-# Path Suggestions: {path_suggestions[:500] if path_suggestions else 'None'}
-
-# Harness Command: {self.config.harness_command or 'Please infer from project structure'}
-
-# Generate concrete test inputs that could trigger the vulnerability.
-# Consider edge cases, boundary conditions, and malformed inputs."""
-
-#                 try:
-#                     mutated_inputs_suggestion = self.llm.generate(
-#                         prompt=mutation_prompt,
-#                         system_prompt="You are an expert in fuzzing and test case generation.",
-#                         temperature=0.9,  # Higher temperature for diverse mutations
-#                         max_tokens=2048
-#                     )
-
-#                     self.logger.info(f"    ✓ Input mutations generated ({len(mutated_inputs_suggestion)} chars)")
-
-#                     # Store the generated inputs as PoV candidates
-#                     self.pov_candidates.append({
-#                         "iteration": iteration,
-#                         "path_suggestions": path_suggestions,
-#                         "input_mutations": mutated_inputs_suggestion,
-#                         "timestamp": self.iteration
-#                     })
-
-#                 except Exception as e:
-#                     self.logger.warning(f"    Input mutation failed: {e}")
-
-#             # TODO: Step 3: Actually execute the inputs with harness and collect coverage
-#             # This requires implementing the harness execution and coverage collection
-#             # For now, we just simulate the exploration process
-
-#             # Step 4: Check early termination conditions
-#             if len(self.pov_candidates) >= 5:
-#                 self.logger.info(f"    - Generated {len(self.pov_candidates)} PoV candidates, moving to next phase")
-#                 break
-
-        self.logger.info("  ✓ Exploration and mutation completed")
+        self.logger.info("  ✓ Path exploration completed")
         self.logger.info(f"  - Total PoV candidates generated: {len(self.pov_candidates)}")
 
     def _phase_pov_generation(self):
@@ -589,7 +506,7 @@ Format your response as a complete, executable test case."""
             "crashes_found": len(self.crash_inputs),
             "povs_generated": len(self.pov_candidates),
             "errors": self.errors,
-            "vulnerability_info": self.vulnerability_info,
+            "vulnerability_info": self.vulnerability_info.to_dict(),
             "pov_candidates": self.pov_candidates,
         }
 
@@ -617,7 +534,7 @@ Format your response as a complete, executable test case."""
 class AnalysisState:
     # LHY: Not use it currently, but kept for reference.
     # Track the state of vulnerability analysis
-    phase: str = "initialized"  # initialized, instrumented, analyzing, mutating, completed
+    phase: str = "initialized"  # initialized, instrumented, analyzing, exploring, completed
     crash_inputs: List[str] = field(default_factory=list)
     pov_candidates: List[Dict] = field(default_factory=list)
     iteration: int = 0

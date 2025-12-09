@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Dict, Any, List, TYPE_CHECKING
+from dataclasses import dataclass, field
 from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_system_prompt,
     VAA_sanitizer_extraction_prompt,
@@ -27,13 +28,13 @@ class VulnAnalysisAgent:
         # Vulnerability information container!!!!!
         self.vuln_info = VulnInfo()
 
-    def run(self) -> Dict[str, Any]:
+    def run(self) -> 'VulnInfo':
         # Run vulnerability analysis
         self.logger.info("  [VulnAnalysisAgent] Starting vulnerability analysis...")
-        
+
         if not self.llm or not self.tools:
             self.logger.warning("  [VulnAnalysisAgent] LLM or tools not available! Return with nothing.")
-            return self._generate_results()
+            return self.vuln_info
         
         # The analysis is based on the following basic information.
         project_name     = self.config.project_name
@@ -59,8 +60,8 @@ class VulnAnalysisAgent:
         # self.logger.info("  [VulnAnalysisAgent] Performing root cause analysis...")
         # self._root_cause_analysis()
         # LHY: Currently we skip this step to save cost and time.
-        
-        return self._generate_results()
+
+        return self.vuln_info
 
     def store_to_cache(self, cache_dir: str):
         pass
@@ -127,6 +128,7 @@ Provide your response in the following JSON format ONLY:
     "crash_function": "innermost function IN REPOSITORY CODE (not libc)",
     "refined_vuln_location": "relative/path/file.c:line_number",
     "entry_function": "main or other entry function",
+    "entry_location": "relative/path/file.c:line_number",
     "call_trace": "full stack trace starting with #0..."
 }}"""
 
@@ -191,24 +193,17 @@ Provide your response in the following JSON format ONLY:
             self.vuln_info.crash_function = extracted_info.get('crash_function', '')
             self.vuln_info.refined_vuln_location = extracted_info.get('refined_vuln_location', '')
             self.vuln_info.entry_function = extracted_info.get('entry_function', '')
+            self.vuln_info.entry_location = extracted_info.get('entry_location', '')
             self.vuln_info.call_trace = extracted_info.get('call_trace', '')
 
             self.logger.info(f"    ✓ Extracted vulnerability information:")
             self.logger.info(f"      Type: {self.vuln_info.vuln_type}")
             self.logger.info(f"      Crash: {self.vuln_info.crash_function} @ {self.vuln_info.refined_vuln_location}")
-            self.logger.info(f"      Entry: {self.vuln_info.entry_function}")
+            self.logger.info(f"      Entry: {self.vuln_info.entry_function} @ {self.vuln_info.entry_location}")
 
         except Exception as e:
             self.logger.error(f"    Failed to extract sanitizer report: {e}", exc_info=True)
-            # Fallback to basic extraction
-            self.vuln_info.vuln_type = self._extract_vuln_type_basic(sanitizer_report)
-            self.vuln_info.call_trace = self._extract_call_trace_basic(sanitizer_report)
-            crash_info = self._extract_crash_info_basic(sanitizer_report)
-            if crash_info:
-                self.vuln_info.crash_function = crash_info.get('function', '')
-                self.vuln_info.refined_vuln_location = crash_info.get('location', '')
-            if 'main' in self.vuln_info.call_trace.lower():
-                self.vuln_info.entry_function = 'main'
+            # Return empty values on failure
 
     def _refine_harness_command(self, project_name, actual_repo_path, harness_command):
         """Refine harness command to use actual paths using LLM with tools"""
@@ -411,107 +406,38 @@ Provide your complete root cause analysis explanation."""
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
             self.vuln_info.root_cause = f"Root cause analysis failed: {e}"
 
-    def _extract_call_trace_basic(self, report: str) -> str:
-        """Fallback: Extract stack trace lines from sanitizer report"""
-        lines = []
-        for line in report.split('\n'):
-            stripped = line.strip()
-            if stripped and stripped[0] == '#' and len(stripped) > 1:
-                # Check if next char is a digit
-                if stripped[1].isdigit():
-                    lines.append(stripped)
-        return '\n'.join(lines)
-
-    def _extract_vuln_type_basic(self, report: str) -> str:
-        """Fallback: Extract vulnerability type from sanitizer report"""
-        report_lower = report.lower()
-        types = {
-            'heap-use-after-free': 'heap-use-after-free',
-            'heap-buffer-overflow': 'heap-buffer-overflow',
-            'stack-buffer-overflow': 'stack-buffer-overflow',
-            'use-after-return': 'use-after-return',
-            'double-free': 'double-free',
-        }
-        for pattern, vtype in types.items():
-            if pattern in report_lower:
-                return vtype
-        return "Unknown"
-
-    def _extract_crash_info_basic(self, report: str) -> Dict[str, str]:
-        """Fallback: Extract crash function and location from #0 frame"""
-        for line in report.split('\n'):
-            stripped = line.strip()
-            # Look for #0 line
-            if not (stripped.startswith('#0') and ' in ' in stripped):
-                continue
-
-            # Extract function name (after " in " and before next space)
-            in_pos = stripped.find(' in ')
-            if in_pos == -1:
-                continue
-
-            after_in = stripped[in_pos + 4:]  # Skip " in "
-            parts = after_in.split()
-            if not parts:
-                continue
-
-            function = parts[0]
-
-            # Look for file path (contains :line_number)
-            for part in parts[1:]:
-                if ':' in part:
-                    # Split by : to get file and line number
-                    file_parts = part.split(':')
-                    if len(file_parts) >= 2:
-                        file_path = file_parts[0]
-                        line_num = file_parts[1]
-
-                        # Get relative path by finding common project directories
-                        path_parts = file_path.split('/')
-                        for i, p in enumerate(path_parts):
-                            if p in ['src', 'lib', 'include', 'core', 'mrbgems', 'test']:
-                                rel_path = '/'.join(path_parts[i:])
-                                return {'function': function, 'location': f"{rel_path}:{line_num}"}
-
-                        # Fallback: last 2 parts
-                        if len(path_parts) >= 2:
-                            rel_path = '/'.join(path_parts[-2:])
-                        else:
-                            rel_path = path_parts[-1] if path_parts else file_path
-
-                        return {'function': function, 'location': f"{rel_path}:{line_num}"}
-
-        return {}
-
     def _generate_results(self) -> Dict[str, Any]:
-        # Generate final results
+        # Generate final results as dictionary (kept for backward compatibility)
+        # Note: run() now returns VulnInfo instance directly
         return self.vuln_info.to_dict()
 
 
+@dataclass
 class VulnInfo:
-    # Container for vulnerability analysis information
-    def __init__(self):        
-        # vuln details
-        # refined_vuln_location should be a relative path after the repo_name
-        self.refined_vuln_location: str = ""  # Refined vulnerability crash location after analysis
-        self.entry_function:        str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
-        self.crash_function:        str = ""  # Function in which the crash occurs (i.e., the caller of the sink point)
-        self.call_trace:            str = ""  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
-        # harness details
-        self.refined_harness_command: str = ""  # Refined harness command #TBD
-        self.binary_path:             str = ""  # Path to the binary to be analyzed #TBD
-        # vuln semantics
-        self.vuln_type:  str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
-        self.root_cause: str = ""  # Root cause analysis result
-        # advanced analysis results (optional now)
-        self.critical_branches: List[str] = []  # This can be used for the exploration phase later #TBD
+    """Container for vulnerability analysis information"""
+    # vuln details
+    # refined_vuln_location should be a relative path after the repo_name
+    refined_vuln_location: str = ""  # Refined vulnerability crash location (file:line)
+    crash_function: str = ""  # Function in which the crash occurs (i.e., the caller of the sink point)
+    entry_location: str = ""  # Entry location (file:line)
+    entry_function: str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
+    call_trace: str = ""  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
+    # harness details
+    refined_harness_command: str = ""  # Refined harness command #TBD
+    binary_path: str = ""  # Path to the binary to be analyzed #TBD
+    # vuln semantics
+    vuln_type: str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
+    root_cause: str = ""  # Root cause analysis result
+    # advanced analysis results (optional now)
+    critical_branches: List[str] = field(default_factory=list)  # This can be used for the exploration phase later #TBD
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert VulnInfo to dictionary"""
         return {
             'refined_vuln_location': self.refined_vuln_location,
-            'entry_function': self.entry_function,
             'crash_function': self.crash_function,
+            'entry_location': self.entry_location,
+            'entry_function': self.entry_function,
             'call_trace': self.call_trace,
             'refined_harness_command': self.refined_harness_command,
             'binary_path': self.binary_path,
@@ -520,3 +446,54 @@ class VulnInfo:
             'critical_branches': self.critical_branches
         }
 
+    def format_output(self) -> str:
+        lines = []
+        lines.append("=" * 80)
+        lines.append("VULNERABILITY ANALYSIS RESULTS")
+        lines.append("=" * 80)
+        # Section 1: Vulnerability Details
+        lines.append("[VULNERABILITY DETAILS]")
+        lines.append(f"  Type:              {self.vuln_type if self.vuln_type else 'N/A'}")
+        lines.append(f"  Crash Location:    {self.refined_vuln_location if self.refined_vuln_location else 'N/A'}")
+        lines.append(f"  Crash Function:    {self.crash_function if self.crash_function else 'N/A'}")
+        lines.append(f"  Entry Location:    {self.entry_location if self.entry_location else 'N/A'}")
+        lines.append(f"  Entry Function:    {self.entry_function if self.entry_function else 'N/A'}")
+        # Section 2: Harness Information
+        lines.append("\n[HARNESS INFORMATION]")
+        lines.append(f"  Binary Path:       {self.binary_path if self.binary_path else 'N/A'}")
+        if self.refined_harness_command:
+            lines.append(f"  Harness Command:")
+            # Handle multi-line commands
+            if '\n' in self.refined_harness_command:
+                for cmd_line in self.refined_harness_command.split('\n'):
+                    lines.append(f"    {cmd_line}")
+            else:
+                lines.append(f"    {self.refined_harness_command}")
+        else:
+            lines.append(f"  Harness Command:   N/A")
+        # Section 3: Call Trace
+        lines.append("\n[CALL TRACE]")
+        if self.call_trace:
+            trace_lines = self.call_trace.split('\n')
+            for trace_line in trace_lines:
+                if trace_line.strip():
+                    lines.append(f"  {trace_line}")
+        else:
+            lines.append("  N/A")
+        # Section 4: Root Cause Analysis
+        if self.root_cause:
+            lines.append("\n[ROOT CAUSE ANALYSIS]")
+            # Handle multi-line root cause descriptions
+            root_cause_lines = self.root_cause.split('\n')
+            for rc_line in root_cause_lines:
+                if rc_line.strip():
+                    lines.append(f"  {rc_line}")
+        # Section 5: Critical Branches (if available)
+        # if self.critical_branches and len(self.critical_branches) > 0:
+        #     lines.append("\n[CRITICAL BRANCHES]")
+        #     for idx, branch in enumerate(self.critical_branches, 1):
+        #         lines.append(f"  {idx}. {branch}")
+
+        lines.append("=" * 80)
+        print('\n'.join(lines))
+        return '\n'.join(lines)

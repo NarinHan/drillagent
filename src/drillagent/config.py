@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class AgentConfig:
     # Input configuration for DrillAgent (for a single CVE task)
+    # This dataclass should be benchmark-agnostic.
 
     # 
     # PoV task information
@@ -92,8 +93,8 @@ class AgentConfig:
         print(f"  CVE ID:             {self.cve_id}")
         # print(f"  Language:           {self.lang}")
         print(f"  Target Repo Path:   {self.target_repo_path}")
-        print(f"  Vuln Location:      {self.vuln_location}")
-        print(f"  Harness Command:    {self.harness_command}")
+        print(f"  Vuln Locatio   (raw):    {self.vuln_location}")
+        print(f"  Harness Command(raw):    {self.harness_command}")
         print(f"  Base Commit:        {self.base_commit}")
         # print(f"  Build Script:       {self.build_sh}")
         # print(f"  Sanitizer Report:   {self.sanitizer_report}")

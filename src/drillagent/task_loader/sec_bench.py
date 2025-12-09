@@ -301,6 +301,109 @@ class RawSecbTaskLoader:
         """
         return list(self.cve_tasks.keys())
 
+    # Get a subset of tasks from SEC-bench
+    def get_openhands_solved_tasks(self) -> Dict[str, SecbTask]:
+        assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
+        # Get tasks that were successfully solved by OpenHands (oh_sonnet).
+        oh_sonnet_instances = [
+            "exiv2.cve-2017-17669",
+            "exiv2.cve-2017-18005",
+            "exiv2.cve-2018-17229",
+            "exiv2.cve-2018-17230",
+            "exiv2.cve-2020-18899",
+            "gpac.cve-2021-32438",
+            "gpac.cve-2023-0819",
+            "gpac.cve-2023-3291",
+            "gpac.cve-2023-42298",
+            "gpac.cve-2023-4758",
+            "gpac.cve-2023-5586",
+            "imagemagick.cve-2017-11539",
+            "imagemagick.cve-2017-12641",
+            "imagemagick.cve-2017-12644",
+            "imagemagick.cve-2017-18022",
+            "imagemagick.cve-2018-5246",
+            "imagemagick.cve-2018-5247",
+            "imagemagick.cve-2018-5248",
+            "imagemagick.cve-2019-13297",
+            "imagemagick.cve-2019-13301",
+            "imagemagick.cve-2019-13303",
+            "imagemagick.cve-2019-13306",
+            "liblouis.cve-2023-26768",
+            "libmodbus.cve-2022-0367",
+            "libplist.cve-2017-5545",
+            "libsndfile.cve-2018-19432",
+            "libxls.cve-2023-38855",
+            "matio.cve-2019-9036",
+            "matio.cve-2020-19497",
+            "njs.cve-2022-27007",
+            "openjpeg.cve-2016-10507",
+            "openjpeg.cve-2016-7445",
+            "openjpeg.cve-2017-14041",
+            "readstat.cve-2018-5698",
+            "upx.cve-2017-15056",
+            "wabt.cve-2022-43282",
+        ]
+        # Filter the loaded tasks to only include oh_sonnet instances
+        return {instance_id: task for instance_id, task in self.cve_tasks.items()
+                if instance_id in oh_sonnet_instances}
+
+    def get_swea_solved_tasks(self) -> Dict[str, SecbTask]:
+        assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
+        # Get tasks that were successfully solved by SWEA (swea_sonnet).
+        swea_sonnet_instances = [
+            "exiv2.cve-2017-17669",
+            "faad2.cve-2018-20195",
+            "faad2.cve-2018-20357",
+            "faad2.cve-2018-20359",
+            "faad2.cve-2018-20361",
+            "faad2.cve-2018-20362",
+            "gpac.cve-2023-0819",
+            "gpac.cve-2023-4758",
+            "gpac.cve-2024-0321",
+            "imagemagick.cve-2017-11539",
+            "imagemagick.cve-2017-12644",
+            "imagemagick.cve-2017-14400",
+            "imagemagick.cve-2017-18022",
+            "imagemagick.cve-2018-5246",
+            "imagemagick.cve-2019-13306",
+            "imagemagick.cve-2019-13309",
+            "imagemagick.cve-2022-48541",
+            "libplist.cve-2017-5545",
+            "libredwg.cve-2021-28237",
+            "libsndfile.cve-2018-19432",
+            "matio.cve-2020-19497",
+            "mruby.cve-2018-14337",
+            "njs.cve-2022-27007",
+            "openjpeg.cve-2016-7445",
+            "openjpeg.cve-2017-14041",
+        ]
+        # Filter the loaded tasks to only include swea_sonnet instances
+        return {instance_id: task for instance_id, task in self.cve_tasks.items()
+                if instance_id in swea_sonnet_instances}
+
+    def get_overlapping_solved_tasks(self) -> Dict[str, SecbTask]:
+        assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
+        # Get tasks that were successfully solved by both OpenHands and SWEA.
+        overlapping_instances = [
+            "exiv2.cve-2017-17669",
+            "gpac.cve-2023-0819",
+            "gpac.cve-2023-4758",
+            "imagemagick.cve-2017-11539",
+            "imagemagick.cve-2017-12644",
+            "imagemagick.cve-2017-18022",
+            "imagemagick.cve-2018-5246",
+            "imagemagick.cve-2019-13306",
+            "libplist.cve-2017-5545",
+            "libsndfile.cve-2018-19432",
+            "matio.cve-2020-19497",
+            "njs.cve-2022-27007",
+            "openjpeg.cve-2016-7445",
+            "openjpeg.cve-2017-14041",
+        ]
+        # Filter the loaded tasks to only include overlapping instances
+        return {instance_id: task for instance_id, task in self.cve_tasks.items()
+                if instance_id in overlapping_instances}
+
     # Below are 4 useful getters.
     def get_base_commit(self, instance_id: str) -> Optional[str]:
         """

@@ -36,7 +36,14 @@ Your task is to extract the following information from the sanitizer report:
 
 4. **Call Trace**: Extract the full stack trace (all lines starting with #)
 
-5. **Entry Function**: Identify the entry point (usually 'main')
+5. **Entry Function**: Identify the entry point function (usually 'main')
+
+6. **Entry Location (entry_location)**: Must be in format "file_relative_path:line_number"
+   - Find the location where the entry function is called or defined in the call trace
+   - Look at the LAST frame in the stack trace (typically #N where N is the highest number)
+   - The file path must be RELATIVE to the repository root: {actual_repo_path}
+   - Format: src/main.c:45 (NOT /home/user/project/src/main.c:45)
+   - If entry location is not clearly in the call trace, leave it empty
 
 IMPORTANT PATH REQUIREMENTS:
 - ALL paths must be relative to repository root: {actual_repo_path}
@@ -49,6 +56,7 @@ Respond in the following JSON format ONLY:
     "crash_function": "innermost function IN REPOSITORY CODE (not libc)",
     "refined_vuln_location": "relative/path/file.c:line_number",
     "entry_function": "main or other entry function",
+    "entry_location": "relative/path/file.c:line_number",
     "call_trace": "full stack trace starting with #0..."
 }}
 
