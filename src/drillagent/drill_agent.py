@@ -227,7 +227,6 @@ class DrillAgent:
 
         # Checkout the base commit for the target repository
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
-        # self._checkout_base_commit() # Annotate before fixing Ray's "make clean" bug
 
         try:
             # Phase 1: Code Instrumentation
@@ -336,7 +335,7 @@ class DrillAgent:
             else:
                 # Need to instrument - first clean and checkout
                 self.logger.info("  - Coverage instrumentation needed, preparing repository...")
-                assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
+
                 self._clean_repository()
                 self._checkout_base_commit()
 
