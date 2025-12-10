@@ -27,7 +27,8 @@ class DrillAgent:
         self.config = config       # Include all the PoV task information and configuration options.
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, exploring, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
-        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis # Currently we only consider these two skip options.
+        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis
+        self.skip_crash_trigger_analysis = config.disable_crash_trigger_analysis
         self.iteration = 0
         self.errors = []
 
@@ -53,6 +54,7 @@ class DrillAgent:
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
         self.logger.info(f"Skip instrumentation: {self.skip_instrumentation}")
         self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
+        self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_trigger_analysis}")
 
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
@@ -231,13 +233,14 @@ class DrillAgent:
         Returns:
             Dictionary containing analysis results and generated PoVs
         """
+        print("")
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
 
         # Checkout the base commit for the target repository
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
-        self._checkout_base_commit()
+        # self._checkout_base_commit() # Annotate before fixing Ray's "make clean" bug
 
         try:
             # Phase 1: Code Instrumentation
@@ -252,7 +255,8 @@ class DrillAgent:
             self._phase_exploration()
 
             # Phase 4: PoV Generation and Verification
-            self._phase_pov_generation()
+            if not self.skip_crash_trigger_analysis:
+                self._phase_pov_generation()
 
             # Mark as completed
             self.phase = "completed"
