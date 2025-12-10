@@ -12,8 +12,9 @@ libheif-CVE-2023-49460
 libiec61850-CVE-2021-45769
 libjpeg-CVE-2020-13790
 libmodbus-CVE-2022-0367
+libplist.cve-2017-5545
+libredwg.cve-2020-21816
 njs_cve_2022_29779
-njs_cve_2022_29780
 openexr_cve_2020_16587
 openjpeg_cve_2016_10507
 jq_CVE-2023-50246

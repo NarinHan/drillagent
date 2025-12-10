@@ -217,17 +217,30 @@ No explanations, no markdown code blocks, just the raw script content."""
                 self.state.phase = 'testing'
                 test_result = self.test_coverage_instrumentation()
                 
-                self.state.phase = 'complete'
-                self.logger.info(f"✓ Coverage instrumentation successful")
-                self.logger.info(f"  Instrumented binary: {self.instrumented_binary_path}")
-                
-                return {
-                    'success': True,
-                    'instrumented_binary': str(self.instrumented_binary_path),
-                    'build_log': self.build_log,
-                    'coverage_flags': self.coverage_flags,
-                    'test_result': test_result
-                }
+                # Check if coverage instrumentation test passed
+                if test_result and test_result.get('success'):
+                    self.state.phase = 'complete'
+                    self.logger.info(f"✓ Coverage instrumentation successful")
+                    self.logger.info(f"  Instrumented binary: {self.instrumented_binary_path}")
+                    
+                    return {
+                        'success': True,
+                        'instrumented_binary': str(self.instrumented_binary_path),
+                        'build_log': self.build_log,
+                        'coverage_flags': self.coverage_flags,
+                        'test_result': test_result
+                    }
+                else:
+                    self.state.phase = 'failed'
+                    error_msg = test_result.get('error', 'Coverage instrumentation test failed')
+                    self.logger.error(f"Coverage instrumentation test failed: {error_msg}")
+                    
+                    return {
+                        'success': False,
+                        'error': error_msg,
+                        'build_log': self.build_log,
+                        'test_result': test_result
+                    }
             else:
                 self.state.phase = 'failed'
                 error_msg = f"Build failed after {self.state.attempts} attempts"
