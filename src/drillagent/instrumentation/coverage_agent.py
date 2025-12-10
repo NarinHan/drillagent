@@ -179,25 +179,6 @@ No explanations, no markdown code blocks, just the raw script content."""
         self.logger.info("=" * 60)
         
         try:
-            # Phase 0: Check if already instrumented
-            self.logger.info("Checking if repository is already instrumented...")
-            if self._check_existing_instrumentation():
-                self.logger.info("✓ Repository already instrumented, skipping build")
-                self.state.phase = 'complete'
-                
-                # Test the existing binary
-                test_result = self.test_coverage_instrumentation()
-                
-                return {
-                    'success': True,
-                    'instrumented_binary': str(self.instrumented_binary_path),
-                    'build_log': [],
-                    'coverage_flags': self.coverage_flags,
-                    'test_result': test_result,
-                    'skipped': True,
-                    'reason': 'Already instrumented'
-                }
-            
             # Phase 1: Inject coverage flags into build commands
             self.state.phase = 'prepare_build'
             modified_commands = self._inject_coverage_flags()

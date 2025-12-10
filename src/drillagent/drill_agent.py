@@ -141,96 +141,75 @@ class DrillAgent:
 
         self.logger.info("Components initialized")
 
+    def _clean_repository(self):
+        # Clean build artifacts and git repository state
+        self.logger.info("Cleaning repository...")
+
+        # Clean build artifacts (make clean or equivalent)
+        self.logger.info("Cleaning build artifacts...")
+        clean_result = subprocess.run(
+            ['make', 'clean'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if clean_result.returncode == 0:
+            self.logger.info("✓ Build artifacts cleaned")
+        else:
+            self.logger.warning(f"make clean failed or not available (this is OK if no Makefile exists)")
+        
+        # Reset git repository state - discard all local changes
+        self.logger.info("Resetting git repository state...")
+        subprocess.run(
+            ['git', 'reset', '--hard', 'HEAD'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.logger.info("✓ Git repository reset to HEAD")
+        
+        # Clean untracked files and directories
+        self.logger.info("Cleaning untracked files...")
+        subprocess.run(
+            ['git', 'clean', '-fdx'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.logger.info("✓ Untracked files cleaned")
+
     def _checkout_base_commit(self):
         # Checkout the target repository to the specified base commit
         self.logger.info(f"Checking out base commit: {self.config.base_commit}")
 
-        # Verify target repo path exists
-        if not os.path.exists(self.config.target_repo_path):
-            error_msg = f"Target repository path does not exist: {self.config.target_repo_path}"
-            self.logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
+        # Checkout the target commit
+        result = subprocess.run(
+            ['git', 'checkout', self.config.base_commit],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
 
-        # Verify it's a git repository
-        git_dir = os.path.join(self.config.target_repo_path, '.git')
-        if not os.path.exists(git_dir):
-            error_msg = f"Target path is not a git repository: {self.config.target_repo_path}"
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        try:
-            # Step 1: Clean build artifacts (make clean or equivalent)
-            self.logger.info("Cleaning build artifacts...")
-            clean_result = subprocess.run(
-                ['make', 'clean'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            if clean_result.returncode == 0:
-                self.logger.info("✓ Build artifacts cleaned")
-            else:
-                self.logger.warning(f"make clean failed or not available (this is OK if no Makefile exists)")
-            
-            # Step 2: Reset git repository state - discard all local changes
-            self.logger.info("Resetting git repository state...")
-            subprocess.run(
-                ['git', 'reset', '--hard', 'HEAD'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            self.logger.info("✓ Git repository reset to HEAD")
-            
-            # Step 3: Clean untracked files and directories
-            self.logger.info("Cleaning untracked files...")
-            subprocess.run(
-                ['git', 'clean', '-fdx'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            self.logger.info("✓ Untracked files cleaned")
-            
-            # Step 4: Checkout the target commit
-            result = subprocess.run(
-                ['git', 'checkout', self.config.base_commit],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-
-            self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
-            if result.stdout:
-                self.logger.debug(f"Git output: {result.stdout.strip()}")
-            
-            # Step 5: Update git submodules
-            self.logger.info("Updating git submodules...")
-            result = subprocess.run(
-                ['git', 'submodule', 'update', '--init', '--recursive'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            self.logger.info("✓ Successfully updated git submodules")
-            if result.stdout:
-                self.logger.debug(f"Submodule output: {result.stdout.strip()}")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = f"Failed to checkout commit {self.config.base_commit}: {e.stderr}"
-            self.logger.error(error_msg)
-            self.errors.append(error_msg)
-            raise RuntimeError(error_msg) from e
-        except Exception as e:
-            error_msg = f"Unexpected error during git checkout: {str(e)}"
-            self.logger.error(error_msg)
-            self.errors.append(error_msg)
-            raise
+        self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
+        if result.stdout:
+            self.logger.debug(f"Git output: {result.stdout.strip()}")
+        
+        # Update git submodules
+        self.logger.info("Updating git submodules...")
+        result = subprocess.run(
+            ['git', 'submodule', 'update', '--init', '--recursive'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.logger.info("✓ Successfully updated git submodules")
+        if result.stdout:
+            self.logger.debug(f"Submodule output: {result.stdout.strip()}")
 
     def run(self) -> Dict[str, Any]:
         """
@@ -241,10 +220,6 @@ class DrillAgent:
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
-
-        # Checkout the base commit for the target repository
-        assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
-        self._checkout_base_commit()
 
         try:
             # Phase 1: Code Instrumentation
@@ -344,17 +319,31 @@ class DrillAgent:
 
         # Step 3: Build with coverage instrumentation
         if self.config.enable_coverage:
-            self.logger.info("  - Running coverage instrumentation...")
+            self.logger.info("  - Checking existing coverage instrumentation...")
             coverage_agent = CoverageInstrumentAgent(self)
-            result = coverage_agent.run()
             
-            if result['success']:
-                self.logger.info(f"    ✓ Coverage instrumentation completed")
-                self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
-                self.coverage_binary = result.get('instrumented_binary')
+            # Use the agent's test method to check if already instrumented
+            if coverage_agent._check_existing_instrumentation():
+                self.logger.info("  ✓ Coverage instrumentation already exists, skipping build")
+                self.coverage_binary = coverage_agent.instrumented_binary_path
             else:
-                self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
-                self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
+                # Need to instrument - first clean and checkout
+                self.logger.info("  - Coverage instrumentation needed, preparing repository...")
+                assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
+                self._clean_repository()
+                self._checkout_base_commit()
+
+                # Run coverage instrumentation
+                self.logger.info("  - Running coverage instrumentation...")
+                result = coverage_agent.run()
+                
+                if result['success']:
+                    self.logger.info(f"    ✓ Coverage instrumentation completed")
+                    self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
+                    self.coverage_binary = result.get('instrumented_binary')
+                else:
+                    self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
+                    self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
 
         # Step 4: Build with memory sanitizer
         if self.config.enable_sanitizer:
