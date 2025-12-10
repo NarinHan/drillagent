@@ -2,6 +2,7 @@
 import os
 import sys
 import yaml
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -28,6 +29,7 @@ class DrillAgent:
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, exploring, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
         self.skip_vulnerability_analysis = config.disable_vulnerability_analysis 
+        self.skip_crash_trigger_analysis = config.disable_crash_trigger_analysis
         self.skip_path_exploration = config.disable_path_exploration
         self.skip_pov_generation = config.disable_pov_generation
 
@@ -56,6 +58,7 @@ class DrillAgent:
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
         self.logger.info(f"Skip instrumentation: {self.skip_instrumentation}")
         self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
+        self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_trigger_analysis}")
 
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
@@ -217,9 +220,14 @@ class DrillAgent:
         Returns:
             Dictionary containing analysis results and generated PoVs
         """
+        print("")
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
+
+        # Checkout the base commit for the target repository
+        assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
+        # self._checkout_base_commit() # Annotate before fixing Ray's "make clean" bug
 
         try:
             # Phase 1: Code Instrumentation
@@ -295,7 +303,6 @@ class DrillAgent:
             self.logger.info("  - Running AFLGo instrumentation...")
             
             # Load the YAML config file into a dictionary
-            import yaml
             with open(self.aflgo_config_path, 'r') as f:
                 config_dict = yaml.safe_load(f)
             
@@ -456,9 +463,6 @@ Format your response as a complete, executable test case."""
 
         # Step 2: Save PoV candidates to output directory
         self.logger.info("  - Saving PoV test cases...")
-        import json
-        from pathlib import Path
-
         try:
             output_path = Path(self.config.output_dir)
             output_path.mkdir(parents=True, exist_ok=True)

@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_system_prompt,
     VAA_sanitizer_extraction_prompt,
+    VAA_sanitizer_followup_prompt,
     VAA_harness_refine_prompt,
+    VAA_harness_followup_prompt,
     VAA_root_cause_analysis_prompt
 )
 
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
     from drillagent.utils.tools import AgentTool
 
 class VulnAnalysisAgent:
-    """Analyzes vulnerabilities using LLM with code exploration tools"""
+    # Analyzes vulnerabilities using LLM with code exploration tools
 
     def __init__(self, drill_agent: 'DrillAgent'):
         self.drill_agent: 'DrillAgent' = drill_agent
@@ -40,21 +42,28 @@ class VulnAnalysisAgent:
         project_name     = self.config.project_name
         actual_repo_path = self.config.target_repo_path
         sanitizer_report = self.config.sanitizer_report
-        # vuln_location    = self.config.vuln_location    # won't use
-        harness_command  = self.config.harness_command
+        # raw_vuln_location    = self.config.vuln_location    # won't use
+        raw_harness_command  = self.config.harness_command
         self.logger.info(f"  [VulnAnalysisAgent] Actual repo path: {len(actual_repo_path)}.")
         
-        # Substep1: Extract basic vulnerability information
+        # Substep1: Extract basic vulnerability information (if sanitizer report is available)
+        # TODO: call_trace structure should be easier to use. And raw_vuln_location could be used for cross checking.
         if len(sanitizer_report) > 0:
             self.logger.info(f"  [VulnAnalysisAgent] Extracting basic vulnerability information...")
             self.logger.info(f"  [VulnAnalysisAgent] Sanitizer report: {len(sanitizer_report)} chars.")
             self._extract_sanitizer_report(project_name, actual_repo_path, sanitizer_report)
+            # TODO: Need to transform raw call trace to structured format, for the following PathExplorationAgent.
+            if len(self.vuln_info.raw_call_trace) > 0:
+                 self.vuln_info.call_trace = self.transform_raw_call_trace(self.vuln_info.raw_call_trace)
             # 
         
         # Substep2: Refine harness command
-        self.logger.info("  [VulnAnalysisAgent] Refining harness command...")
-        self._refine_harness_command(project_name, actual_repo_path, harness_command)
-        # 
+        # TODO: raw_harness_command could be used for cross checking.
+        if raw_harness_command and len(raw_harness_command) > 0:
+            self.logger.info(f"  [VulnAnalysisAgent] Refining harness command...")
+            self.logger.info(f"  [VulnAnalysisAgent] Raw harness command: {raw_harness_command}")
+            self._refine_harness_command(project_name, actual_repo_path, raw_harness_command)
+            # 
 
         # Substep3: Perform root cause analysis
         # self.logger.info("  [VulnAnalysisAgent] Performing root cause analysis...")
@@ -67,7 +76,7 @@ class VulnAnalysisAgent:
         pass
 
     def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report):
-        """Extract vulnerability information from sanitizer report using LLM with tools"""
+        # Extract vulnerability information from sanitizer report using LLM with tools
         try:
             # Prepare the prompt
             prompt = VAA_sanitizer_extraction_prompt.format(
@@ -76,10 +85,8 @@ class VulnAnalysisAgent:
                 sanitizer_report=sanitizer_report
             )
 
-            # Call LLM with tools - no tools needed for simple extraction
-            self.logger.info("    Calling LLM to extract sanitizer report information...")
-
             # First try without tools - simple extraction
+            self.logger.info("  [VulnAnalysisAgent] Calling LLM to extract sanitizer report information...")
             response = self.llm.generate(
                 prompt=prompt,
                 system_prompt=VAA_system_prompt,
@@ -89,7 +96,6 @@ class VulnAnalysisAgent:
 
             # Check if we need tools (if response doesn't contain JSON)
             has_json = '{' in response and '}' in response
-
             if not has_json:
                 # Retry with tools if first attempt failed
                 response, tool_calls = self.llm.generate_with_tools(
@@ -104,7 +110,7 @@ class VulnAnalysisAgent:
 
             # Execute any tool calls if needed
             if tool_calls and len(tool_calls) > 0:
-                self.logger.info(f"    Executing {len(tool_calls)} tool calls...")
+                self.logger.info(f"  [VulnAnalysisAgent] Executing {len(tool_calls)} tool calls...")
                 for tool_call in tool_calls:
                     tool_name = tool_call.get('name')
                     tool_args = tool_call.get('arguments', {})
@@ -120,33 +126,19 @@ class VulnAnalysisAgent:
                             break
 
                 # Get final response after tool execution
-                follow_up_prompt = f"""Based on the file verification results above, now extract the vulnerability information from the sanitizer report.
-
-Provide your response in the following JSON format ONLY:
-{{
-    "vuln_type": "the vulnerability type",
-    "crash_function": "innermost function IN REPOSITORY CODE (not libc)",
-    "refined_vuln_location": "relative/path/file.c:line_number",
-    "entry_function": "main or other entry function",
-    "entry_location": "relative/path/file.c:line_number",
-    "call_trace": "full stack trace starting with #0..."
-}}"""
-
                 response, _ = self.llm.generate_with_tools(
-                    prompt=follow_up_prompt,
+                    prompt=VAA_sanitizer_followup_prompt,
                     tools=self.tools,
                     system_prompt=VAA_system_prompt,
                     temperature=0.1,
                     max_tokens=2048
                 )
 
-            # Parse JSON response
-            self.logger.info(f"    LLM Response: {response[:300]}...")
+            self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
 
             # Extract JSON from response (handle multiple formats)
-            extracted_info = None
-
             # Try to extract JSON from markdown code block
+            extracted_info = None
             if '```' in response:
                 parts = response.split('```')
                 for i, part in enumerate(parts):
@@ -194,7 +186,7 @@ Provide your response in the following JSON format ONLY:
             self.vuln_info.refined_vuln_location = extracted_info.get('refined_vuln_location', '')
             self.vuln_info.entry_function = extracted_info.get('entry_function', '')
             self.vuln_info.entry_location = extracted_info.get('entry_location', '')
-            self.vuln_info.call_trace = extracted_info.get('call_trace', '')
+            self.vuln_info.raw_call_trace = extracted_info.get('call_trace', '')
 
             self.logger.info(f"    ✓ Extracted vulnerability information:")
             self.logger.info(f"      Type: {self.vuln_info.vuln_type}")
@@ -205,18 +197,18 @@ Provide your response in the following JSON format ONLY:
             self.logger.error(f"    Failed to extract sanitizer report: {e}", exc_info=True)
             # Return empty values on failure
 
-    def _refine_harness_command(self, project_name, actual_repo_path, harness_command):
-        """Refine harness command to use actual paths using LLM with tools"""
+    def _refine_harness_command(self, project_name, actual_repo_path, raw_harness_command):
+        # Refine harness command to use actual paths using LLM with tools
         try:
             # Prepare the prompt
             prompt = VAA_harness_refine_prompt.format(
                 project_name=project_name,
                 actual_repo_path=actual_repo_path,
-                harness_command=harness_command if harness_command else "Not provided"
+                harness_command=raw_harness_command if raw_harness_command else "Not provided"
             )
 
             # Call LLM with tools - allow multiple rounds for exploration
-            self.logger.info("    Calling LLM to refine harness command...")
+            self.logger.info("  [VulnAnalysisAgent] Calling LLM to refine harness command...")
             max_rounds = 3
             current_prompt = prompt
 
@@ -230,10 +222,11 @@ Provide your response in the following JSON format ONLY:
                     temperature=0.2,
                     max_tokens=4096
                 )
+                # print(f"Round {round_num+1} Response: {response[:300]}...") # debug
 
                 # If no tool calls, LLM is done
                 if not tool_calls:
-                    self.logger.info(f"      LLM finished refining harness command")
+                    self.logger.info(f"  [VulnAnalysisAgent] Found no more tool calls. LLM finished refining harness command")
                     break
 
                 # Execute tool calls
@@ -255,22 +248,19 @@ Provide your response in the following JSON format ONLY:
                             break
 
                 # Prepare next round prompt
-                current_prompt = f"""Previous tool results:
-{json.dumps(tool_results, indent=2)[:1500]}
+                # print(f"Round {round_num+1} Tool Results: {tool_results}") # debug
+                current_prompt = VAA_harness_followup_prompt.format(
+                    project_name=project_name,
+                    actual_repo_path=actual_repo_path,
+                    harness_command=raw_harness_command,
+                    tool_results=json.dumps(tool_results, indent=2)[:1500]
+                )
 
-Now provide the final refined harness information in JSON format:
-{{
-    "binary_path": "absolute/path/to/binary",
-    "refined_harness_command": "concrete executable command"
-}}"""
-
-            # Parse JSON response
-            self.logger.info(f"    LLM Response: {response[:300]}...")
+            self.logger.info(f"  [VulnAnalysisAgent] LLM Final Response (after {round_num + 1} rounds): {response[:300]}...")
 
             # Extract JSON from response
-            refined_info = None
-
             # Try to extract JSON from markdown code block
+            refined_info = None
             if '```' in response:
                 parts = response.split('```')
                 for i, part in enumerate(parts):
@@ -318,12 +308,13 @@ Now provide the final refined harness information in JSON format:
             self.logger.info(f"      Command: {self.vuln_info.refined_harness_command}")
 
         except Exception as e:
-            self.logger.error(f"    Failed to refine harness command: {e}", exc_info=True)
+            self.logger.error(f"  [VulnAnalysisAgent] Failed to refine harness command: {e}", exc_info=True)
+            self.logger.error(f"  [VulnAnalysisAgent] Fallback to use raw harness command.")
             # Fallback: use original harness command
-            self.vuln_info.refined_harness_command = harness_command if harness_command else ""
+            self.vuln_info.refined_harness_command = raw_harness_command if raw_harness_command else ""
             # Try to extract binary path from original command
-            if harness_command:
-                parts = harness_command.split()
+            if raw_harness_command:
+                parts = raw_harness_command.split()
                 if parts:
                     self.vuln_info.binary_path = parts[0]
 
@@ -336,13 +327,14 @@ Now provide the final refined harness information in JSON format:
                 vuln_type=self.vuln_info.vuln_type,
                 refined_vuln_location=self.vuln_info.refined_vuln_location,
                 crash_function=self.vuln_info.crash_function,
+                entry_location=self.vuln_info.entry_location,
                 entry_function=self.vuln_info.entry_function,
                 sanitizer_report=self.config.sanitizer_report[:2000]  # Truncate for brevity
             )
 
             # Call LLM with tools - allow multiple rounds for deep analysis
             self.logger.info("    Calling LLM for root cause analysis...")
-            max_rounds = 5
+            max_rounds = 10
             current_prompt = prompt
             all_responses = []
 
@@ -406,10 +398,9 @@ Provide your complete root cause analysis explanation."""
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
             self.vuln_info.root_cause = f"Root cause analysis failed: {e}"
 
-    def _generate_results(self) -> Dict[str, Any]:
-        # Generate final results as dictionary (kept for backward compatibility)
-        # Note: run() now returns VulnInfo instance directly
-        return self.vuln_info.to_dict()
+    def transform_raw_call_trace(self, raw_call_trace: str) -> List[Any]:
+        # Transform raw call trace string to structured format
+        structured_trace = []
 
 
 @dataclass
@@ -421,7 +412,8 @@ class VulnInfo:
     crash_function: str = ""  # Function in which the crash occurs (i.e., the caller of the sink point)
     entry_location: str = ""  # Entry location (file:line)
     entry_function: str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
-    call_trace: str = ""  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
+    raw_call_trace: str = ""
+    call_trace: List[Any] = field(default_factory=list)  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
     # harness details
     refined_harness_command: str = ""  # Refined harness command #TBD
     binary_path: str = ""  # Path to the binary to be analyzed #TBD
@@ -438,7 +430,7 @@ class VulnInfo:
             'crash_function': self.crash_function,
             'entry_location': self.entry_location,
             'entry_function': self.entry_function,
-            'call_trace': self.call_trace,
+            'raw_call_trace': self.raw_call_trace,
             'refined_harness_command': self.refined_harness_command,
             'binary_path': self.binary_path,
             'vuln_type': self.vuln_type,
@@ -473,8 +465,8 @@ class VulnInfo:
             lines.append(f"  Harness Command:   N/A")
         # Section 3: Call Trace
         lines.append("\n[CALL TRACE]")
-        if self.call_trace:
-            trace_lines = self.call_trace.split('\n')
+        if self.raw_call_trace:
+            trace_lines = self.raw_call_trace.split('\n')
             for trace_line in trace_lines:
                 if trace_line.strip():
                     lines.append(f"  {trace_line}")
