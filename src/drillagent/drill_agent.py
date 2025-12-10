@@ -2,6 +2,7 @@
 import os
 import sys
 import yaml
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -315,7 +316,6 @@ class DrillAgent:
             self.logger.info("  - Running AFLGo instrumentation...")
             
             # Load the YAML config file into a dictionary
-            import yaml
             with open(self.aflgo_config_path, 'r') as f:
                 config_dict = yaml.safe_load(f)
             
@@ -462,9 +462,6 @@ Format your response as a complete, executable test case."""
 
         # Step 2: Save PoV candidates to output directory
         self.logger.info("  - Saving PoV test cases...")
-        import json
-        from pathlib import Path
-
         try:
             output_path = Path(self.config.output_dir)
             output_path.mkdir(parents=True, exist_ok=True)

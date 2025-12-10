@@ -52,6 +52,9 @@ class VulnAnalysisAgent:
             self.logger.info(f"  [VulnAnalysisAgent] Extracting basic vulnerability information...")
             self.logger.info(f"  [VulnAnalysisAgent] Sanitizer report: {len(sanitizer_report)} chars.")
             self._extract_sanitizer_report(project_name, actual_repo_path, sanitizer_report)
+            # TODO: Need to transform raw call trace to structured format, for the following PathExplorationAgent.
+            if len(self.vuln_info.raw_call_trace) > 0:
+                 self.vuln_info.call_trace = self.transform_raw_call_trace(self.vuln_info.raw_call_trace)
             # 
         
         # Substep2: Refine harness command
@@ -183,7 +186,7 @@ class VulnAnalysisAgent:
             self.vuln_info.refined_vuln_location = extracted_info.get('refined_vuln_location', '')
             self.vuln_info.entry_function = extracted_info.get('entry_function', '')
             self.vuln_info.entry_location = extracted_info.get('entry_location', '')
-            self.vuln_info.call_trace = extracted_info.get('call_trace', '')
+            self.vuln_info.raw_call_trace = extracted_info.get('call_trace', '')
 
             self.logger.info(f"    ✓ Extracted vulnerability information:")
             self.logger.info(f"      Type: {self.vuln_info.vuln_type}")
@@ -395,10 +398,9 @@ Provide your complete root cause analysis explanation."""
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
             self.vuln_info.root_cause = f"Root cause analysis failed: {e}"
 
-    def _generate_results(self) -> Dict[str, Any]:
-        # Generate final results as dictionary (kept for backward compatibility)
-        # Note: run() now returns VulnInfo instance directly
-        return self.vuln_info.to_dict()
+    def transform_raw_call_trace(self, raw_call_trace: str) -> List[Any]:
+        # Transform raw call trace string to structured format
+        structured_trace = []
 
 
 @dataclass
@@ -410,7 +412,8 @@ class VulnInfo:
     crash_function: str = ""  # Function in which the crash occurs (i.e., the caller of the sink point)
     entry_location: str = ""  # Entry location (file:line)
     entry_function: str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
-    call_trace: str = ""  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
+    raw_call_trace: str = ""
+    call_trace: List[Any] = field(default_factory=list)  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
     # harness details
     refined_harness_command: str = ""  # Refined harness command #TBD
     binary_path: str = ""  # Path to the binary to be analyzed #TBD
@@ -427,7 +430,7 @@ class VulnInfo:
             'crash_function': self.crash_function,
             'entry_location': self.entry_location,
             'entry_function': self.entry_function,
-            'call_trace': self.call_trace,
+            'raw_call_trace': self.raw_call_trace,
             'refined_harness_command': self.refined_harness_command,
             'binary_path': self.binary_path,
             'vuln_type': self.vuln_type,
@@ -462,8 +465,8 @@ class VulnInfo:
             lines.append(f"  Harness Command:   N/A")
         # Section 3: Call Trace
         lines.append("\n[CALL TRACE]")
-        if self.call_trace:
-            trace_lines = self.call_trace.split('\n')
+        if self.raw_call_trace:
+            trace_lines = self.raw_call_trace.split('\n')
             for trace_line in trace_lines:
                 if trace_line.strip():
                     lines.append(f"  {trace_line}")
