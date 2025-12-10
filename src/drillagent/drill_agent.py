@@ -27,7 +27,10 @@ class DrillAgent:
         self.config = config       # Include all the PoV task information and configuration options.
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, exploring, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
-        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis # Currently we only consider these two skip options.
+        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis 
+        self.skip_path_exploration = config.disable_path_exploration
+        self.skip_pov_generation = config.disable_pov_generation
+
         self.iteration = 0
         self.errors = []
 
@@ -74,6 +77,10 @@ class DrillAgent:
         log_filename = f"drillagent_{repo_name}_{cve_id}.log"
         log_path = log_dir / log_filename
         
+        # Clean the log file if it already exists
+        if log_path.exists():
+            log_path.unlink()
+        
         # Also ensure output_dir exists for other files
         Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
         
@@ -83,7 +90,7 @@ class DrillAgent:
             format='[%(asctime)s] %(levelname)s - %(message)s',
             handlers=[
                 logging.StreamHandler(sys.stdout),
-                logging.FileHandler(str(log_path))
+                logging.FileHandler(str(log_path), mode='w')  # Use 'w' mode to overwrite
             ]
         )
         
@@ -249,10 +256,12 @@ class DrillAgent:
                 self._phase_vulnerability_analysis()
 
             # Phase 3: Path Exploration with the coverage feedback
-            self._phase_exploration()
+            if not self.skip_path_exploration:
+                self._phase_exploration()
 
             # Phase 4: PoV Generation and Verification
-            self._phase_pov_generation()
+            if not self.skip_pov_generation:
+                self._phase_pov_generation()
 
             # Mark as completed
             self.phase = "completed"

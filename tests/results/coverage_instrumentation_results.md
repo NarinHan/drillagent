@@ -4,8 +4,14 @@
 
 exiv2_cve_2017_14864
 faad2_CVE-2018-20198
+gpac_cve-2023-5998
 imagemagick_CVE-2019-13297
 libarchive_CVE-2020-21674
+libdwarf.cve-2022-32200
+libheif-CVE-2023-49460
+libiec61850-CVE-2021-45769
+libjpeg-CVE-2020-13790
+libmodbus-CVE-2022-0367
 njs_cve_2022_29779
 njs_cve_2022_29780
 openexr_cve_2020_16587

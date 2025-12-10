@@ -200,7 +200,8 @@ def main():
         enable_sanitizer=False,
         # Skip other phases
         disable_vulnerability_analysis=True,
-        disable_program_instrumentation=False,
+        disable_path_exploration=True,
+        disable_pov_generation=True,
     )
 
     # Create output directory

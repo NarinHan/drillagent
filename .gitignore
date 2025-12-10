@@ -9,11 +9,9 @@ src/drillagent/scripts/lhy_test.py
 .env
 test_output/
 
-# AFLGO agent
+# Phase 1: instrumentation agents
 instrumented/
-src/instrumentation/configs/
-src/instrumentation/repos/
-src/instrumentation/fuzzing/
+src/instrumentation/
 fuzzing/
 repos/
 output/
