@@ -572,7 +572,7 @@ class FindFileTool(AgentTool):
             # Walk through repository
             for root, dirs, files in os.walk(self.repo_path):
                 # Skip common non-source directories
-                dirs[:] = [d for d in dirs if d not in ['.git', '__pycache__', 'node_modules', 'build', '.venv']]
+                dirs[:] = [d for d in dirs if d not in ['.git', '__pycache__', '.venv', '.claude']] # Fixed: 'build' was in it!
 
                 for filename in files:
                     if fnmatch.fnmatch(filename, filename_pattern):

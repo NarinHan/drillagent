@@ -1,11 +1,12 @@
 # System prompt for VulnAnalysisAgent
-VAA_system_prompt = """You are a security researcher specializing in vulnerability analysis. Your task is to analyze sanitizer reports, source code, and build systems to extract accurate vulnerability information.
+VAA_system_prompt = """You are a security researcher specializing in vulnerability analysis. Your task is to analyze sanitizer reports and corresponding vulnerable source code to extract accurate vulnerability information.
 
-When using tools:
+When using tools and generating paths, please adhere to the following guidelines:
 - Use RELATIVE paths (e.g., src/vm.c NOT /home/user/project/src/vm.c)
 - The repository root is the base directory for all relative paths
 - Be precise and extract information directly from the provided data
-- Do not make assumptions without evidence"""
+- Do not make assumptions without evidence!
+"""
 
 
 # Prompt for extracting information from sanitizer reports
@@ -21,7 +22,7 @@ Sanitizer Report:
 
 Your task is to extract the following information from the sanitizer report:
 
-1. **Vulnerability Type**: Identify the type (e.g., heap-use-after-free, heap-buffer-overflow, stack-buffer-overflow, use-after-return, double-free)
+1. **Vulnerability Type**: Identify the type (e.g., heap-use-after-free, heap-buffer-overflow, stack-buffer-overflow, use-after-return, double-free and so on)
 
 2. **Crash Function**: From the call trace, find the INNERMOST function that is IN THE REPOSITORY CODE (not in libc or system libraries).
    - Look at the stack trace from #0 downwards
@@ -34,21 +35,21 @@ Your task is to extract the following information from the sanitizer report:
    - Format: src/njs_function.c:574 (NOT /home/user/njs/src/njs_function.c:574)
    - The file MUST exist in the repository
 
-4. **Call Trace**: Extract the full stack trace (all lines starting with #)
+4. **Entry Function**: Identify the entry point function (usually the 'main' function or equivalent IN THE REPOSITORY CODE)
 
-5. **Entry Function**: Identify the entry point function (usually 'main')
-
-6. **Entry Location (entry_location)**: Must be in format "file_relative_path:line_number"
+5. **Entry Location (entry_location)**: Must be in format "file_relative_path:line_number"
    - Find the location where the entry function is called or defined in the call trace
    - Look at the LAST frame in the stack trace (typically #N where N is the highest number)
    - The file path must be RELATIVE to the repository root: {actual_repo_path}
    - Format: src/main.c:45 (NOT /home/user/project/src/main.c:45)
    - If entry location is not clearly in the call trace, leave it empty
 
+6. **Call Trace**: Extract the full stack trace (all lines starting with #)   
+
 IMPORTANT PATH REQUIREMENTS:
 - ALL paths must be relative to repository root: {actual_repo_path}
 - Remove any absolute path prefix
-- Verify the file exists in the repository using tools if needed
+- Verify the file exists in the repository using tools if needed!!
 
 Respond in the following JSON format ONLY:
 {{
@@ -60,16 +61,31 @@ Respond in the following JSON format ONLY:
     "call_trace": "full stack trace starting with #0..."
 }}
 
-Be precise. Extract information directly from the report."""
+Be precise. Extract information directly from the report.
+"""
+
+# Follow-up prompt after tool execution for sanitizer extraction
+VAA_sanitizer_followup_prompt = """Based on the file verification results above, now extract the vulnerability information from the sanitizer report.
+
+Provide your response in the following JSON format ONLY:
+{{
+    "vuln_type": "the vulnerability type",
+    "crash_function": "innermost function IN REPOSITORY CODE (not libc)",
+    "refined_vuln_location": "relative/path/file.c:line_number",
+    "entry_function": "main or other entry function",
+    "entry_location": "relative/path/file.c:line_number",
+    "call_trace": "full stack trace starting with #0..."
+}}
+"""
 
 
 # Prompt for refining harness command
-VAA_harness_refine_prompt = """You are refining a harness command to accurately reproduce a vulnerability.
+VAA_harness_refine_prompt = """You are refining a harness command to accurately run target program and reproduce a vulnerability.
 
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current harness command:
+Current harness command: (May contain absolute path prefix not existing in the local machine)
 ```
 {harness_command}
 ```
@@ -77,7 +93,7 @@ Current harness command:
 Your tasks:
 
 1. **Locate the binary**: Find the actual executable binary in the repository
-   - Check common build directories: build/, out/, bin/, .libs/
+   - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/
    - Use find_file or list_dir tools to locate the binary
    - Verify it exists and is executable
 
@@ -89,12 +105,13 @@ Your tasks:
    - The command should be executable when run from: {actual_repo_path}
    - Use relative paths or ./relative/path notation
    - Example: ./build/njs (NOT /absolute/path/to/build/njs)
-   - Do NOT include input file path yet (just the binary and any flags)
+   - Remain all the flags and command line arguments as in the original harness command!!!
+   - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
 
 IMPORTANT PATH REQUIREMENTS:
 - binary_path must be RELATIVE to repository root: {actual_repo_path}
 - refined_harness_command must be runnable from repository root
-- Use ./ prefix for relative paths if needed
+- Verify the program file exists in the repository using tools if needed!!
 
 Use the available tools (find_file, list_dir) to explore the repository structure.
 
@@ -110,10 +127,51 @@ And repo is: "/home/ubuntu/PoV/Repos/njs-cov"
 Then output should be:
 {{
     "binary_path": "build/njs",
-    "refined_harness_command": "./build/njs"
+    "refined_harness_command": "./build/njs <path/to/testcase>"
 }}
 
-Be thorough. Verify paths exist before responding."""
+Be thorough. Verify paths exist before responding.
+"""
+
+# Follow-up prompt after tool execution for harness refinement
+# 2025.12.09: Fixed a tricky bug: {{tool_results}} -> {tool_results}
+VAA_harness_followup_prompt = """You are refining a harness command to accurately run target program and reproduce a vulnerability.
+
+Project: {project_name}
+Repository path: {actual_repo_path}
+
+Current harness command: (May contain absolute path prefix not existing in the local machine)
+```
+{harness_command}
+```
+
+Your tasks:
+
+1. **Locate the binary**: Find the actual executable binary in the repository
+   - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/
+   - Use find_file or list_dir tools to locate the binary
+   - Verify it exists and is executable
+
+2. **Extract binary_path**: The path RELATIVE to the repository root
+   - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
+   - Must be relative to: {actual_repo_path}
+
+3. **Refine the command**: Create a command that can be run from the repository root directory
+   - The command should be executable when run from: {actual_repo_path}
+   - Use relative paths or ./relative/path notation
+   - Example: ./build/njs (NOT /absolute/path/to/build/njs)
+   - Remain all the flags and command line arguments as in the original harness command!!!
+   - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
+
+Previous tool results:
+{tool_results}
+
+Now provide the final refined harness information in JSON format:
+{{
+    "binary_path": "relative/path/to/binary",
+    "refined_harness_command": "executable command with arguments and testcase placeholder (if any)"
+}}
+"""
 
 
 # Prompt for root cause analysis
@@ -122,9 +180,10 @@ VAA_root_cause_analysis_prompt = """You are performing root cause analysis for a
 Project: {project_name}
 
 Vulnerability Information:
-- Type: {vuln_type}
+- Vuln Type: {vuln_type}
 - Crash Location: {refined_vuln_location}
 - Crash Function: {crash_function}
+- Entry Location: {entry_location}
 - Entry Function: {entry_function}
 
 Sanitizer Report:
@@ -146,4 +205,6 @@ Provide a clear, technical explanation of:
 - Why it occurs (the root cause)
 - What code pattern or logic flaw enables it
 
-Be specific and reference actual code when possible."""
+Be specific and reference actual code when possible.
+"""
+
