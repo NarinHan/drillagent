@@ -208,3 +208,59 @@ Provide a clear, technical explanation of:
 Be specific and reference actual code when possible.
 """
 
+
+# Prompt for transforming raw call trace to structured format
+VAA_call_trace_transform_prompt = """You are transforming a raw call trace from a sanitizer report into a structured format.
+
+Project: {project_name}
+Repository path: {actual_repo_path}
+
+Raw Call Trace:
+```
+{raw_call_trace}
+```
+
+Your task is to parse this call trace and extract structured information for each frame.
+
+For each line starting with '#' in the call trace:
+1. Extract the sequence number (the number after #)
+2. Extract the function name (the text after "in" if present, otherwise use empty string)
+3. Extract the file path and convert it to a RELATIVE path based on the repository root: {actual_repo_path}
+4. Extract the line number (the number after the colon in file:line format)
+
+IMPORTANT PATH CONVERSION RULES:
+- If the path contains the project name (e.g., "/home/b/asan/libplist/tools/plistutil.c"), extract the relative part (e.g., "tools/plistutil.c")
+- If the path is a system library (e.g., "/lib/i386-linux-gnu/libc.so.6" or contains libasan, libstdc++, libc), keep it as-is but mark it as external
+- The relative path should start from the repository root
+- Remove any absolute path prefix that includes the repository path
+
+SKIP THE FOLLOWING:
+- Lines that are NOT actual stack frames (like allocation information, summary lines, etc.)
+- System library frames (libc, libasan, etc.) - these should still be included but marked appropriately
+
+Respond in the following JSON format ONLY:
+{{
+    "call_trace": [
+        {{
+            "sequence_num": 0,
+            "function_name": "main",
+            "file_path": "tools/plistutil.c",
+            "line_number": 137,
+            "is_external": false
+        }},
+        {{
+            "sequence_num": 1,
+            "function_name": "",
+            "file_path": "/lib/i386-linux-gnu/libc.so.6",
+            "line_number": 0,
+            "is_external": true
+        }}
+    ]
+}}
+
+IMPORTANT:
+- For frames without line numbers, use 0
+- For frames without function names, use empty string ""
+- Mark system library frames with `"is_external": true`
+"""
+

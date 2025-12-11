@@ -80,6 +80,7 @@ class SecbTask:
         for report_line in self.sanitizer_report.split('\n'):
             if any(keyword in report_line for keyword in skip_line_keywords):
                 continue
+            # This pattern extracts call trace-like lines. 187 outof 200 sanitizer reports can match this pattern.
             pattern0 = re.compile(
                 # rf"in\s([^/\s][^\s]*)\s([^/\s][^\s]*):(\d+)", # The file_path is allowed to start with '/' char.
                 rf"in\s([^/\s][^\s]*)\s(\S+):(\d+)",
@@ -150,6 +151,7 @@ class SecbTask:
         #     print(f"project_name: {self.project_name}") # by LHY
         #     print(f"Sanitizer report for {self.instance_id}:\n{self.sanitizer_report}\nEnd of report.\n") # by LHY
 
+        # Remove the leading debug markers (^^^, &&&, ***)
         if location is not None and len(location) > 3:
             location = location[3:]
         return location
