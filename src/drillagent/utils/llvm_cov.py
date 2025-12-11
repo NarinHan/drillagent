@@ -34,7 +34,6 @@ class LLVMCovUtils:
         self.binary_path = os.path.abspath(binary_path)
         self.llvm_cov_path = llvm_cov_path
         self.llvm_profdata_path = llvm_profdata_path
-        self.profdata_path = "" # init as below
 
         assert profraw_path or profdata_path, "Either profraw_path or profdata_path must be provided."
         if profraw_path:
@@ -42,6 +41,7 @@ class LLVMCovUtils:
         if profdata_path:
             assert profdata_path.endswith('.profdata'), "Suffix of profdata_path must be .profdata"
 
+        self.profdata_path = "" # init as below
         # Auto-convert profraw to profdata if needed
         if len(profdata_path) > 0:
             self.profdata_path = os.path.abspath(profdata_path)
@@ -180,6 +180,73 @@ class LLVMCovUtils:
                 }
 
         raise ValueError(f"Function '{function_name}' not found in file '{file_path}'")
+
+    def get_multi_functions_coverage(self, function_with_filepath_list: List[tuple]) -> Dict[tuple, Dict[str, Any]]:
+        """
+        Get coverage details for multiple functions in batch.
+        This is more efficient than calling get_function_coverage() multiple times.
+        Args:
+            function_with_filepath_list: List of (function_name, file_path) tuples
+        Returns:
+            Dictionary mapping (function_name, file_path) to coverage info dict containing:
+            - is_executed: Whether function was executed
+            - execution_count: Execution count
+            - regions_covered: Number of covered regions
+            - regions_total: Total number of regions
+            - filenames: List of filenames associated with the function
+            - found: Whether the function was found in coverage data
+        Example:
+            >>> functions = [('main', '/path/to/main.c'), ('foo', '/path/to/foo.c')]
+            >>> results = cov_utils.get_multi_functions_coverage(functions)
+            >>> print(results[('main', '/path/to/main.c')]['is_executed'])
+        """
+        # Get coverage data once for all functions
+        coverage_data = self._get_coverage_data()
+
+        # Convert input list to set for faster lookup and normalize file paths
+        target_functions = {}
+        for func_name, file_path in function_with_filepath_list:
+            abs_file_path = os.path.abspath(file_path)
+            target_functions[(func_name, abs_file_path)] = {
+                'found': False,
+                'is_executed': False,
+                'execution_count': 0,
+                'regions_covered': 0,
+                'regions_total': 0,
+                'filenames': []
+            }
+
+        # Traverse all functions in coverage data
+        for function in coverage_data.get('data', [{}])[0].get('functions', []):
+            function_name = function['name']
+            filenames = function.get('filenames', [])
+            abs_filenames = [os.path.abspath(f) for f in filenames]
+
+            # Check if this function matches any target
+            for abs_file_path in abs_filenames:
+                key = (function_name, abs_file_path)
+                if key in target_functions:
+                    # Found a match - get the file_id for the target file
+                    file_id = abs_filenames.index(abs_file_path)
+
+                    # Calculate region coverage
+                    # Region format: [start_line, start_col, end_line, end_col, execution_count, file_id, expanded_file_id, kind]
+                    regions = function.get('regions', [])
+                    regions_in_file = [r for r in regions if r[5] == file_id]
+                    regions_covered = sum(1 for r in regions_in_file if r[4] > 0)
+
+                    # Update result
+                    target_functions[key] = {
+                        'found': True,
+                        'is_executed': function['count'] > 0,
+                        'execution_count': function['count'],
+                        'regions_covered': regions_covered,
+                        'regions_total': len(regions_in_file),
+                        'filenames': filenames
+                    }
+
+        return target_functions
+
 
     def get_function_regions(self, file_path: str, function_name: str) -> List[Dict[str, Any]]:
         """
@@ -323,6 +390,15 @@ class LLVMCovUtils:
         index_path = os.path.join(output_dir, 'index.html')
         assert os.path.isfile(index_path), "llvm-cov: HTML report generation failed."
         return index_path
+
+    def update_profile_data(self, profraw_path: str) -> None:
+        # First clear self.profdata_path and self._coverage_data. Then re-generate these two fields from profraw_path.
+        # Validate profraw_path format
+        assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
+        # Clear cached coverage data
+        self._coverage_data = None
+        # Convert new profraw to profdata and update path
+        self.profdata_path = self._convert_profraw_to_profdata(profraw_path)
 
     def clear_data(self) -> None:
         """

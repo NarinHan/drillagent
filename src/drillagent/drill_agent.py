@@ -255,7 +255,7 @@ class DrillAgent:
                 self._phase_vulnerability_analysis()
 
             # Phase 3: Path Exploration with the coverage feedback
-            self._phase_exploration()
+            self._phase_path_exploration()
 
             # Phase 4: PoV Generation and Verification
             if not self.skip_crash_trigger_analysis:
@@ -383,7 +383,7 @@ class DrillAgent:
             # Keep the VulnInfo instance but mark it with error in root_cause field
             self.vulnerability_info.root_cause = f"Analysis failed: {e}"
 
-    def _phase_exploration(self):
+    def _phase_path_exploration(self):
         """Phase 3: Coverage-guided path exploration"""
         self.logger.info("\n[Phase 3] Path Exploration")
         self.phase = "exploring"

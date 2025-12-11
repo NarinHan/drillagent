@@ -592,7 +592,8 @@ class VulnInfo:
     entry_location: str = ""  # Entry location (file:line)
     entry_function: str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
     raw_call_trace: str = ""  # Call trace leading to the vulnerability (now we only consider CVEs with crash call traces)
-    call_trace: List[Dict[str, Any]] = field(default_factory=list)  # Structured call trace: List of {sequence_num, function_name, file_path, line_number, is_external}
+    # Structured call trace: List of {sequence_num, function_name, file_path, line_number, is_external}
+    call_trace: List[Dict[str, Any]] = field(default_factory=list)
     # harness details
     refined_harness_command: str = ""  # Refined harness command #TBD
     binary_path: str = ""  # Path to the binary to be analyzed #TBD

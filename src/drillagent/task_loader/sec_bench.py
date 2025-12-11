@@ -303,6 +303,15 @@ class RawSecbTaskLoader:
         """
         return list(self.cve_tasks.keys())
 
+    def get_solved_nonbinary_tasks(self) -> Dict[str, SecbTask]:
+        instances_ids = [
+            "njs.cve-2022-27007",
+            "mruby.cve-2022-0631",
+            "mruby.cve-2018-14337",
+        ]
+        return {instance_id:task for instance_id, task in self.cve_tasks.items()
+                if instance_id in instances_ids}
+
     # Get a subset of tasks from SEC-bench
     def get_openhands_solved_tasks(self) -> Dict[str, SecbTask]:
         assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
