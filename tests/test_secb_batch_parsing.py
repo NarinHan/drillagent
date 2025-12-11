@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-# python3 tests/test_secb_batch_parsing.py --output tests/location_and_harness.txt
+# python3 tests/test_secb_batch_parsing.py > tests/location_and_harness.log
 """
 Batch test script for SecbTask parsing
 Tests vulnerability location and harness command extraction for all CVE instances
 """
-import os
 import sys
-import json
 from pathlib import Path
 from typing import List, Dict, Tuple
 
