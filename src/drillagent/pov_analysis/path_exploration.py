@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     from drillagent.config import AgentConfig
     from drillagent.models import LLM
     from drillagent.utils.tools import AgentTool
-    from drillagent.pov_analysis.vuln_analysis import VulnInfo
 
 # 
 # Currently we assume that the PathExplorationAgent **has** usable call trace. (LHY)
@@ -32,7 +31,7 @@ class PathExplorationAgent:
 
         # LHY: Based on the call trace we extratced from the sanitizer report, we can record which nodes have been covered.
         # self.call_trace = None
-        self.call_trace = self.drill_agent.vuln_info.call_trace # Obtained from VulnAnalysisAgent directly
+        self.call_trace = self.drill_agent.vulnerability_info.call_trace # Obtained from VulnAnalysisAgent directly
         self.coverage_state = dict()  # e.g., covered functions/branches # TODO: May split into several finer-grained states.
         self.uncovered_callsites = [] # TODO
 
