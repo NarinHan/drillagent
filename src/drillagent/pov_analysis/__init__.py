@@ -6,7 +6,7 @@ This module contains agents for vulnerability analysis, path exploration, and cr
 
 from .vuln_analysis import VulnAnalysisAgent, VulnInfo
 from .path_exploration import PathExplorationAgent
-from .crash_trigger import CrashTriggerAgent
+from .crash_triggering import CrashTriggerAgent
 
 __all__ = [
     "VulnAnalysisAgent",

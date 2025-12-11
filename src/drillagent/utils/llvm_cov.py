@@ -348,16 +348,16 @@ def main():
         epilog="""
 Usage examples:
   # Generate coverage summary report
-  python llvm-cov.py --binary ./a.out --profdata coverage.profdata --report
+  python llvm_cov.py --binary ./a.out --profdata coverage.profdata --report
 
   # Query function coverage
-  python llvm-cov.py --binary ./a.out --profdata coverage.profdata --function-coverage main.c main
+  python llvm_cov.py --binary ./a.out --profdata coverage.profdata --function-coverage main.c main
 
   # Query line coverage
-  python llvm-cov.py --binary ./a.out --profdata coverage.profdata --line-coverage main.c 42
+  python llvm_cov.py --binary ./a.out --profdata coverage.profdata --line-coverage main.c 42
 
   # Generate HTML report
-  python llvm-cov.py --binary ./a.out --profdata coverage.profdata --html-report ./coverage_html
+  python llvm_cov.py --binary ./a.out --profdata coverage.profdata --html-report ./coverage_html
         """
     )
 

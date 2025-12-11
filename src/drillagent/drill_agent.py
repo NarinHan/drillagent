@@ -30,6 +30,8 @@ class DrillAgent:
         self.skip_instrumentation     = config.disable_program_instrumentation
         self.skip_vulnerability_analysis = config.disable_vulnerability_analysis
         self.skip_crash_trigger_analysis = config.disable_crash_trigger_analysis
+        self.work_dir   = self.config.work_dir
+        self.output_dir = self.config.output_dir
         self.iteration = 0
         self.errors = []
 
@@ -60,14 +62,14 @@ class DrillAgent:
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
         # Determine log directory and filename
-        if self.config.output_dir == str(Path("./output").resolve()):
+        if self.output_dir == str(Path("./output").resolve()):
             # User didn't set custom output_dir, use DrillAgent/logs
             current_file = Path(__file__).resolve()
             project_root = current_file.parent.parent.parent  # Go up to DrillAgent root
             log_dir = project_root / "logs"
         else:
             # User set custom output_dir, use it
-            log_dir = Path(self.config.output_dir)
+            log_dir = Path(self.output_dir)
         
         log_dir.mkdir(parents=True, exist_ok=True)
         
@@ -78,7 +80,7 @@ class DrillAgent:
         log_path = log_dir / log_filename
         
         # Also ensure output_dir exists for other files
-        Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         
         # Configure root logger to INFO to avoid debug spam from third-party libs
         logging.basicConfig(
@@ -327,7 +329,6 @@ class DrillAgent:
             
             # Execute the full instrumentation workflow
             result = instrumentation_agent.run()
-            
             if result['success']:
                 self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
                 self.instrumented_binary = result.get('instrumented_binary')
@@ -463,7 +464,7 @@ Format your response as a complete, executable test case."""
         # Step 2: Save PoV candidates to output directory
         self.logger.info("  - Saving PoV test cases...")
         try:
-            output_path = Path(self.config.output_dir)
+            output_path = Path(self.output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
 
             # Save PoV candidates as JSON

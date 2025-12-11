@@ -3,16 +3,13 @@
 
 import sys
 import os
-import importlib.util
+from pathlib import Path
 
-# Load the module directly from file (since filename has hyphen)
-spec = importlib.util.spec_from_file_location(
-    "llvm_cov",
-    "/home/ubuntu/PoV/DrillAgent/src/drillagent/utils/llvm-cov.py"
-)
-llvm_cov_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(llvm_cov_module)
-LLVMCovUtils = llvm_cov_module.LLVMCovUtils
+# Add src to path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root / 'src'))
+
+from drillagent.utils import LLVMCovUtils
 
 def test_basic_functionality():
     """Test basic functionality of LLVMCovUtils"""

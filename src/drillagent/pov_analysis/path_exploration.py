@@ -31,7 +31,7 @@ class PathExplorationAgent:
 
         # LHY: Based on the call trace we extratced from the sanitizer report, we can record which nodes have been covered.
         # self.call_trace = None
-        self.call_trace = self.drill_agent.vulnerability_info.call_trace # Obtained from VulnAnalysisAgent directly
+        self.vuln_call_trace = self.drill_agent.vulnerability_info.call_trace # Obtained from VulnAnalysisAgent directly
         self.coverage_state = dict()  # e.g., covered functions/branches # TODO: May split into several finer-grained states.
         self.uncovered_callsites = [] # TODO
 
@@ -48,10 +48,11 @@ class PathExplorationAgent:
             self.current_iteration = iteration + 1
 
             # Substep1: Generate initial test case
+            # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
             test_case = self._generate_test_case()
 
             # Substep2: Execute test case dynamically (using actual repo path)
-            # This will alsp generate a profraw/profdata file.
+            # This will also generate a profraw/profdata file.
             exit_code, profile = self._execute_test_case(test_case)
 
             # Substep3: Collect coverage feedback along the vulnerable call trace
