@@ -85,7 +85,8 @@ VAA_harness_refine_prompt = """You are refining a harness command to accurately 
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current harness command: (May contain absolute path prefix not existing in the local machine)
+Current harness command: 
+(May contain absolute path prefix not existing in the local machine, need to be refined)
 ```
 {harness_command}
 ```
@@ -101,16 +102,15 @@ Your tasks:
    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
    - Must be relative to: {actual_repo_path}
 
-3. **Refine the command**: Create a command that can be run from the repository root directory
-   - The command should be executable when run from: {actual_repo_path}
-   - Use relative paths or ./relative/path notation
-   - Example: ./build/njs (NOT /absolute/path/to/build/njs)
+3. **Refine the command**: Create a command that can be run from any directory
+   - The command should be executable when run from arbitrary directories, so try to use absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
    - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
+   - Example: /absolute/path/to/build/njs <path/to/testcase>
 
 IMPORTANT PATH REQUIREMENTS:
 - binary_path must be RELATIVE to repository root: {actual_repo_path}
-- refined_harness_command must be runnable from repository root
+- refined_harness_command must be runnable from any directory (i.e., the binary program in the command should use absolute path)
 - Verify the program file exists in the repository using tools if needed!!
 
 Use the available tools (find_file, list_dir) to explore the repository structure.
@@ -118,7 +118,7 @@ Use the available tools (find_file, list_dir) to explore the repository structur
 Respond in the following JSON format ONLY:
 {{
     "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "./relative/path/to/binary [flags]"
+    "refined_harness_command": "/absolute/path/to/binary [flags] [<path/to/testcase>]"
 }}
 
 Example:
@@ -127,7 +127,7 @@ And repo is: "/home/ubuntu/PoV/Repos/njs-cov"
 Then output should be:
 {{
     "binary_path": "build/njs",
-    "refined_harness_command": "./build/njs <path/to/testcase>"
+    "refined_harness_command": "/home/ubuntu/PoV/Repos/njs-cov/build/njs <path/to/testcase>"
 }}
 
 Be thorough. Verify paths exist before responding.
@@ -140,7 +140,8 @@ VAA_harness_followup_prompt = """You are refining a harness command to accuratel
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current harness command: (May contain absolute path prefix not existing in the local machine)
+Current harness command: 
+(May contain absolute path prefix not existing in the local machine, need to be refined)
 ```
 {harness_command}
 ```
@@ -156,12 +157,16 @@ Your tasks:
    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
    - Must be relative to: {actual_repo_path}
 
-3. **Refine the command**: Create a command that can be run from the repository root directory
-   - The command should be executable when run from: {actual_repo_path}
-   - Use relative paths or ./relative/path notation
-   - Example: ./build/njs (NOT /absolute/path/to/build/njs)
+3. **Refine the command**: Create a command that can be run from any directory
+   - The command should be executable when run from arbitrary directories, so try to use absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
    - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
+   - Example: /absolute/path/to/build/njs <path/to/testcase>
+
+IMPORTANT PATH REQUIREMENTS:
+- binary_path must be RELATIVE to repository root: {actual_repo_path}
+- refined_harness_command must be runnable from any directory (i.e., the binary program in the command should use absolute path)
+- Verify the program file exists in the repository using tools if needed!!
 
 Previous tool results:
 {tool_results}
@@ -169,7 +174,7 @@ Previous tool results:
 Now provide the final refined harness information in JSON format:
 {{
     "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "executable command with arguments and testcase placeholder (if any)"
+    "refined_harness_command": "executable command (from any directory) with arguments and testcase placeholder (if any)"
 }}
 """
 
