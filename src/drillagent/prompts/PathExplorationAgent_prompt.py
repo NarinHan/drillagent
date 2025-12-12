@@ -49,7 +49,8 @@ Your task:
    - How does it aim to reach/trigger the vulnerability?
 
 IMPORTANT:
-- You have {max_generation_turns} turns to use tools and generate the test case
+- You have {max_generation_turns} turns to use tools and generate the test case. 
+  - When using read_file tools, you are encouraged to read more than one line.
 - If it is already the final turn, ensure you respond with a test case in this turn!!!
 - The test case should be pure input data (not a script or code)
 - Do NOT include any analysis text or comments inside the ```testcase code block

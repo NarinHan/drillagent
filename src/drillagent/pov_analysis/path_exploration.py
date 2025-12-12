@@ -49,7 +49,8 @@ class PathExplorationAgent:
 
         # LHY: All of the intermediate PoV results should be stored, and we should maintain a best PoV candidate.
         self.history_pov_candidates = []  # List of XXX
-        self.best_pov_candidate = None    # XXX
+        self.best_pov_candidate = None    # Type:XXX
+        self.crash_input_pov = None       # Type:XXX
 
     def run(self):
         # Run the path exploration process to generate PoV candidates that can reach the vulnerable function.
@@ -59,7 +60,7 @@ class PathExplorationAgent:
         previous_feedback = None
 
         for iteration in range(1, self.max_exp_iterations + 1):
-            print("\n\n")
+            print("\n\n"+"=" * 80)
             self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
@@ -76,32 +77,29 @@ class PathExplorationAgent:
 
             # Substep1: Generate test case (with feedback from previous iteration if available)
             # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
-            print("\n")
+            print("")
             test_case_path = self._generate_test_case(previous_feedback=previous_feedback)
 
             # Substep2: Execute test case dynamically (using actual repo path)
             # This will also generate a profraw/profdata file.
-            print("\n")
+            print("")
             exit_code, exec_output = self._execute_test_case(test_case_path)
-            #
+
+            # Special: Check early-stop after each execution
+            self._detect_stop_status(exit_code, exec_output)
 
             # Substep3: Collect coverage feedback along the vulnerable call trace
             # a. function-level coverage ✅
             # b. source-line-level coverage
             # c. find the first uncovered callsite A
-            print("\n")
+            print("")
             func_level_cov_info = self._collect_coverage_feedback()
 
             # Substep4: Analyze coverage feedback around the first uncovered point A in the call trace
             # Output: reachability failure analysis, test case adjustment suggestion.
-            print("\n")
-            feedback_analysis_results = self._analyze_coverage_feedback(exit_code, exec_output, func_level_cov_info)
+            print("")
+            previous_feedback = self._analyze_coverage_feedback(exit_code, exec_output, func_level_cov_info) # Also store feedback for next iteration
 
-            # Store feedback for next iteration
-            previous_feedback = feedback_analysis_results
-
-            # Check early-stop in each iteration
-            self._detect_stop_status()
 
     def get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
@@ -112,7 +110,7 @@ class PathExplorationAgent:
         # 2. 实例化PEA_generate_testcase_prompt，将驱动LLM (with tools)在roundN子目录下生成能够到达漏洞函数甚至触发漏洞crash的测试用例。（可以带tool calls多轮交互）
         # 3. 检查test case文件是否是纯粹的输入文件（不包含LLM返回的一些分析文字），返回该文件路径。
         # 4. If previous_feedback is provided, include it in the prompt to guide the LLM with coverage information.
-        self.logger.info(f"  [PathExplorationAgent] Round {self.current_exp_iteration} Substep1: Generating test case...")
+        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep1: Generating test case...")
         round_dir = self.get_round_dir(self.current_exp_iteration)
 
         # Step 1: Get vulnerability information and roundN subdirectory
@@ -152,7 +150,7 @@ class PathExplorationAgent:
             elif turn == max_generation_turns:
                 if conversation_history and conversation_history[-1]["role"] == "user":
                     current_prompt = conversation_history.pop()["content"]
-                current_prompt += "\nPlease generate the final test case in a ```testcase code block now, since it is already the last turn."
+                current_prompt += "\nMake sure generate the final test case in a ```testcase code block now, since it is already the last turn!!!"
             else:
                 # Subsequent turns: pop the last user message from conversation_history as current_prompt
                 # This message was added at the end of previous turn (tool results or continuation prompt)
@@ -252,6 +250,7 @@ class PathExplorationAgent:
 
         # Step 5: Verify testcase was extracted
         if not testcase_content:
+            # FIX: TODO: Always stuck here!! For robustness, should use a specific prompt to try again!!
             raise ValueError(f"No testcase code block found after {max_generation_turns} turns of LLM interaction")
 
         # Step 6: Save test case to fixed filename: testcase-round{N}
@@ -268,7 +267,7 @@ class PathExplorationAgent:
         # 1. 从drill_agent.vulnerability_info中获取到binary_path和refined_harness_command，结合test_case_path，整理成一个在roundN目录下可执行的命令。
         # 2. 进入roundN子目录执行该命令，记录stdout和stderr，同时生成profraw文件。
         # 3. 利用LLVMCovUtils把profraw文件转换成profdata文件，连同exit code和exec output(包括stdout和stderr)返回给调用者。
-        self.logger.info(f"  [PathExplorationAgent] Round {self.current_exp_iteration} Substep2: Executing test case...")
+        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
         round_dir = self.get_round_dir(self.current_exp_iteration)
 
         # Step 1: Prepare the command
@@ -352,7 +351,7 @@ class PathExplorationAgent:
         # 1. Extract function information from self.vuln_call_trace
         # 2. Query coverage using self.llvm_cov_utils.get_multi_functions_coverage()
         # 3. Format and return the coverage information as a string for analysis
-        self.logger.info(f"  [PathExplorationAgent] Round {self.current_exp_iteration} Substep3: Collecting coverage feedback...")
+        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep3: Collecting coverage feedback...")
 
         assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!"
 
@@ -404,9 +403,10 @@ class PathExplorationAgent:
             return f"ERROR: Coverage query failed - {str(e)}"
 
         # Step 3: Analyze coverage results and build formatted output
-        functions_covered = []
-        functions_uncovered = []
+        # Build a unified list with coverage status for each callsite in call trace order
+        callsite_coverage_list = []
         first_uncovered_callsite = None
+        covered_count = 0
 
         for callsite in callsite_info:
             func_name = callsite['function_name']
@@ -415,14 +415,20 @@ class PathExplorationAgent:
             line_num = callsite['line_number']
 
             cov_info = coverage_results.get( (func_name, file_path), {} )
+
             if not cov_info.get('found', False):
+                # Function not found in coverage data
                 self.logger.debug(f"  [PathExplorationAgent] Frame #{seq_num} {func_name} not found in coverage data")
-                functions_uncovered.append({
+                callsite_coverage_list.append({
                     'sequence_num': seq_num,
                     'function_name': func_name,
                     'file_path': file_path,
                     'line_number': line_num,
-                    'status': 'not_found'
+                    'is_covered': False,
+                    'status': 'not_found',
+                    'execution_count': 0,
+                    'regions_covered': 0,
+                    'regions_total': 0
                 })
                 if first_uncovered_callsite is None:
                     first_uncovered_callsite = {
@@ -441,23 +447,27 @@ class PathExplorationAgent:
 
             if is_executed:
                 self.logger.debug(f"  [PathExplorationAgent] ✓ Frame #{seq_num} {func_name} - executed {exec_count} times, regions {regions_covered}/{regions_total}")
-                functions_covered.append({
+                callsite_coverage_list.append({
                     'sequence_num': seq_num,
                     'function_name': func_name,
                     'file_path': file_path,
                     'line_number': line_num,
+                    'is_covered': True,
                     'execution_count': exec_count,
                     'regions_covered': regions_covered,
                     'regions_total': regions_total
                 })
+                covered_count += 1
             else:
                 self.logger.debug(f"  [PathExplorationAgent] ✗ Frame #{seq_num} {func_name} - NOT executed")
-                functions_uncovered.append({
+                callsite_coverage_list.append({
                     'sequence_num': seq_num,
                     'function_name': func_name,
                     'file_path': file_path,
                     'line_number': line_num,
+                    'is_covered': False,
                     'status': 'not_executed',
+                    'execution_count': 0,
                     'regions_covered': regions_covered,
                     'regions_total': regions_total
                 })
@@ -471,14 +481,14 @@ class PathExplorationAgent:
                     }
 
         # Step 4: Update coverage state for this round (for internal tracking)
+        uncovered_count = len(callsite_coverage_list) - covered_count
         self.coverage_state[f'round{self.current_exp_iteration}'] = {
-            'functions_covered': functions_covered,
-            'functions_uncovered': functions_uncovered,
+            'callsite_coverage_list': callsite_coverage_list,
             'first_uncovered_callsite': first_uncovered_callsite,
             'coverage_summary': {
                 'total_callsites': len(callsite_info),
-                'covered_count': len(functions_covered),
-                'uncovered_count': len(functions_uncovered)
+                'covered_count': covered_count,
+                'uncovered_count': uncovered_count
             }
         }
 
@@ -489,32 +499,29 @@ class PathExplorationAgent:
         output_lines.append("=" * 80)
 
         # Summary
-        covered_count = len(functions_covered)
-        total_count = len(callsite_info)
+        total_count = len(callsite_coverage_list)
         coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0
         output_lines.append(f"\n[COVERAGE SUMMARY]")
         output_lines.append(f"  Total callsites in trace: {total_count}")
         output_lines.append(f"  Functions executed:       {covered_count} ({coverage_percentage:.1f}%)")
-        output_lines.append(f"  Functions not executed:   {len(functions_uncovered)}")
+        output_lines.append(f"  Functions not executed:   {uncovered_count}")
 
-        # Covered functions
-        if functions_covered:
-            output_lines.append(f"\n[COVERED FUNCTIONS] ({len(functions_covered)} total)")
-            for func in functions_covered:
-                output_lines.append(f"  ✓ #{func['sequence_num']}: {func['function_name']} @ {func['file_path']}:{func['line_number']}")
-                output_lines.append(f"      Executed: {func['execution_count']} times, Regions: {func['regions_covered']}/{func['regions_total']} covered")
-
-        # Uncovered functions
-        if functions_uncovered:
-            output_lines.append(f"\n[UNCOVERED FUNCTIONS] ({len(functions_uncovered)} total)")
-            for func in functions_uncovered:
-                status = func.get('status', 'not_executed')
+        # Output all callsites in call trace order
+        output_lines.append(f"\n[CALL TRACE COVERAGE] (in order)")
+        for callsite in callsite_coverage_list:
+            if callsite['is_covered']:
+                # Covered function - print with checkmark
+                output_lines.append(f"  ✓ #{callsite['sequence_num']}: {callsite['function_name']} @ {callsite['file_path']}:{callsite['line_number']}")
+                output_lines.append(f"      Executed: {callsite['execution_count']} times, Regions: {callsite['regions_covered']}/{callsite['regions_total']} covered")
+            else:
+                # Uncovered function - print with cross
+                status = callsite.get('status', 'not_executed')
                 if status == 'not_found':
-                    output_lines.append(f"  ✗ #{func['sequence_num']}: {func['function_name']} @ {func['file_path']}:{func['line_number']}")
+                    output_lines.append(f"  ✗ #{callsite['sequence_num']}: {callsite['function_name']} @ {callsite['file_path']}:{callsite['line_number']}")
                     output_lines.append(f"      Status: NOT FOUND in coverage data")
                 else:
-                    output_lines.append(f"  ✗ #{func['sequence_num']}: {func['function_name']} @ {func['file_path']}:{func['line_number']}")
-                    output_lines.append(f"      Status: NOT EXECUTED, Regions: {func.get('regions_covered', 0)}/{func.get('regions_total', 0)} covered")
+                    output_lines.append(f"  ✗ #{callsite['sequence_num']}: {callsite['function_name']} @ {callsite['file_path']}:{callsite['line_number']}")
+                    output_lines.append(f"      Status: NOT EXECUTED, Regions: {callsite['regions_covered']}/{callsite['regions_total']} covered")
 
         # First uncovered callsite (critical for next iteration)
         if first_uncovered_callsite:
@@ -544,14 +551,114 @@ class PathExplorationAgent:
 
     def _analyze_coverage_feedback(self, exit_code: int, exec_output: str, func_level_cov_info: str) -> str:
         # TODOO: 这里的分析结果需要整理并返回，作为参数传递给_generate_test_case的下一轮调用。
-        self.logger.info(f"  [PathExplorationAgent] Round {self.current_exp_iteration} Substep4: Analyzing coverage feedback...")
+        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep4: Analyzing coverage feedback...")
+
         feedback_analysis_results  = f"For the finished execution, exit code: {exit_code}\n\nexecution output:\n{exec_output}\n\n"
         feedback_analysis_results += f"Function-level coverage feedback along the vulnerable call trace:\n{func_level_cov_info}\n\n"
         
         # TODO: Currently we just return the raw information.
         return feedback_analysis_results
 
-    def _detect_stop_status(self):
-        # LHY: Check if we should stop path exploration.
-        # For example, if a PoV is found, or max iterations reached.
-        pass
+    def _detect_stop_status(self, exit_code: int, exec_output: str):
+        """
+        Check if we should stop path exploration based on execution results.
+        Handles:
+        - Exit code 127: Command not found (raises error)
+        - Exit code 139/-11: Segmentation fault/crash (updates crash_input_pov)
+        - Other potential stop conditions
+        Args:
+            exit_code: The exit code from test case execution
+            exec_output: The output from test case execution (stdout + stderr)
+        Raises:
+            RuntimeError: If command not found (exit code 127)
+        """
+        # Check for command not found - this is a fatal error
+        if exit_code == 127:
+            self.logger.error(f"  [PathExplorationAgent] Command not found (exit code 127)")
+            self.logger.error(f"  [PathExplorationAgent] Execution output:\n{exec_output}")
+            raise RuntimeError(
+                "Command not found during test case execution of PathExplorationAgent (exit code 127). "
+                "Please check if the binary path and harness command are correct."
+            )
+
+        # Check for segmentation fault (crash) - this is our target!
+        # Exit code 139 = 128 + 11 (SIGSEGV signal)
+        # Exit code -11 = SIGSEGV on some systems
+        if exit_code == 139 or exit_code == -11:
+            self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
+
+            # Get current test case path
+            current_testcase_path = os.path.join(
+                self.get_round_dir(self.current_exp_iteration),
+                f"testcase-round{self.current_exp_iteration}"
+            )
+
+            # Read and store the crashing input
+            try:
+                with open(current_testcase_path, 'rb') as f:
+                    crash_input_content = f.read()
+
+                # Update crash_input_pov with detailed information
+                self.crash_input_pov = {
+                    'testcase_path': current_testcase_path,
+                    'content': crash_input_content,
+                    'iteration': self.current_exp_iteration,
+                    'exit_code': exit_code,
+                    'exec_output': exec_output
+                }
+
+                # Log the crash discovery
+                self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND ***")
+                self.logger.info(f"  [PathExplorationAgent] Test case: {current_testcase_path}")
+                self.logger.info(f"  [PathExplorationAgent] Iteration: {self.current_exp_iteration}")
+                self.logger.info(f"  [PathExplorationAgent] Content size: {len(crash_input_content)} bytes")
+
+                # Print crash information to console for visibility
+                print("\n")
+                print("=" * 80)
+                print("*** CRASH INPUT POV DISCOVERED ***")
+                print("=" * 80)
+                print(f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}")
+                print(f"Exit Code:       {exit_code}")
+                print(f"Test Case Path:  {current_testcase_path}")
+                print(f"Content Size:    {len(crash_input_content)} bytes")
+                print(f"\n--- Test Case Content (hex) ---")
+                # Print hex representation for binary data
+                hex_str = crash_input_content.hex()
+                for i in range(0, min(len(hex_str), 512), 64):  # Print first 256 bytes in hex
+                    print(hex_str[i:i+64])
+                if len(hex_str) > 512:
+                    print(f"... ({len(crash_input_content) - 256} more bytes)")
+
+                # Try to print as text if it's printable
+                try:
+                    text_content = crash_input_content.decode('utf-8', errors='replace')
+                    if text_content.isprintable() or '\n' in text_content:
+                        print(f"\n--- Test Case Content (text) ---")
+                        print(text_content[:500])  # Print first 500 chars
+                        if len(text_content) > 500:
+                            print(f"... ({len(text_content) - 500} more chars)")
+                except:
+                    pass
+
+                print(f"\n--- Execution Output ---")
+                print(exec_output[:1000])  # Print first 1000 chars of output
+                if len(exec_output) > 1000:
+                    print(f"... ({len(exec_output) - 1000} more chars)")
+                print("=" * 80)
+                print("\n")
+
+            except Exception as e:
+                self.logger.error(f"  [PathExplorationAgent] Failed to read crash input: {e}")
+
+        # Check for other interesting exit codes
+        elif exit_code == -6 or exit_code == 134:  # SIGABRT
+            self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code})")
+            self.logger.debug(f"  [PathExplorationAgent] This may indicate assertion failure or abort() call")
+        elif exit_code == -9 or exit_code == 137:  # SIGKILL
+            self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code})")
+        elif exit_code < 0 or exit_code > 128:  # Signal-based exit
+            self.logger.debug(f"  [PathExplorationAgent] Program terminated with signal (exit code {exit_code})")
+
+        # Note: Max iteration check is handled by the for loop in run() method
+        # We don't need to check it here
