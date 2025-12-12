@@ -99,11 +99,12 @@ class VulnAnalysisAgent:
                 max_tokens=4096
             )
 
+            # FIX: TODO: The 3 LLM invokings in this `_extract_sanitizer_report` function is really weird... (by LHY)
             # Check if we need tools (if response doesn't contain JSON)
             has_json = '{' in response and '}' in response
             if not has_json:
                 # Retry with tools if first attempt failed
-                response, tool_calls = self.llm.generate_with_tools(
+                response, tool_calls, _ = self.llm.generate_with_tools(
                     prompt=prompt,
                     tools=self.tools,
                     system_prompt=VAA_system_prompt,
@@ -131,7 +132,7 @@ class VulnAnalysisAgent:
                             break
 
                 # Get final response after tool execution
-                response, _ = self.llm.generate_with_tools(
+                response, _, _ = self.llm.generate_with_tools(
                     prompt=VAA_sanitizer_followup_prompt,
                     tools=self.tools,
                     system_prompt=VAA_system_prompt,
@@ -220,7 +221,7 @@ class VulnAnalysisAgent:
             for round_num in range(max_rounds):
                 self.logger.info(f"      [Round {round_num + 1}/{max_rounds}]")
 
-                response, tool_calls = self.llm.generate_with_tools(
+                response, tool_calls, _ = self.llm.generate_with_tools(
                     prompt=current_prompt,
                     tools=self.tools,
                     system_prompt=VAA_system_prompt,
@@ -258,7 +259,7 @@ class VulnAnalysisAgent:
                     project_name=project_name,
                     actual_repo_path=actual_repo_path,
                     harness_command=raw_harness_command,
-                    tool_results=json.dumps(tool_results, indent=2)[:1500]
+                    tool_results=json.dumps(tool_results, indent=2)[:1500] # Add tool results into the prompt manually!
                 )
 
             self.logger.info(f"  [VulnAnalysisAgent] LLM Final Response (after {round_num + 1} rounds): {response[:300]}...")
@@ -346,7 +347,7 @@ class VulnAnalysisAgent:
             for round_num in range(max_rounds):
                 self.logger.info(f"      [Round {round_num + 1}/{max_rounds}]")
 
-                response, tool_calls = self.llm.generate_with_tools(
+                response, tool_calls, _ = self.llm.generate_with_tools(
                     prompt=current_prompt,
                     tools=self.tools,
                     system_prompt=VAA_system_prompt,
@@ -676,5 +677,5 @@ class VulnInfo:
         #         lines.append(f"  {idx}. {branch}")
 
         lines.append("=" * 80)
-        print('\n'.join(lines))
+        # print('\n'.join(lines))
         return '\n'.join(lines)

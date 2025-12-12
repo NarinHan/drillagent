@@ -58,10 +58,54 @@ IMPORTANT:
 Generate the test case now and return it in a ```testcase code block.
 """
 
-PEA_xxx_prompt = """
+PEA_feedback_section_prompt = """
 
-"""
+================================================================================
+FEEDBACK FROM PREVIOUS ITERATION
+================================================================================
 
-PEA_yyy_prompt = """
+The previous test case (from iteration {previous_iteration}) was executed. Here are the results:
 
+{previous_feedback}
+
+================================================================================
+INSTRUCTIONS FOR THIS ITERATION (Iteration {current_iteration})
+================================================================================
+
+Based on the feedback above, your goal is to improve the test case to reach deeper into the call trace toward the vulnerable function.
+
+**Analysis Guidelines:**
+
+1. **Examine the coverage summary:**
+   - Which functions in the call trace were executed?
+   - Which functions were NOT executed?
+   - What percentage of the call trace was covered?
+
+2. **Identify the FIRST UNCOVERED CALLSITE:**
+   - This is your primary target for this iteration
+   - This function is the next step toward reaching the vulnerability
+   - Understanding why it wasn't reached is critical
+
+3. **Understand the execution results:**
+   - Did the previous test case cause a crash? (check exit code)
+   - Were there any error messages in the execution output?
+   - Did the program accept the input format?
+
+**Test Case Generation Strategy:**
+
+Based on your analysis, generate a NEW test case that:
+
+- **Fixes any errors** from the previous iteration (if any)
+- **Reaches the first uncovered callsite** by adjusting the input to satisfy the conditions needed to enter that function
+- **Goes deeper** into the call trace if some functions were already reached
+- **Considers the program logic** - what input would cause the program to call the uncovered function?
+
+**Key Principles:**
+
+- Each iteration should make progress toward the vulnerable function
+- Don't repeat the exact same test case - analyze what didn't work and adjust
+- If you're stuck, try different input patterns or edge cases
+- Use the coverage feedback to guide your input generation strategy
+
+Now, generate an improved test case and return it in a ```testcase code block.
 """

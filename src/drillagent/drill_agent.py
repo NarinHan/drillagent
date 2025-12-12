@@ -259,7 +259,7 @@ class DrillAgent:
 
             # Phase 4: PoV Generation and Verification
             if not self.skip_crash_trigger_analysis:
-                self._phase_pov_generation()
+                self._phase_crash_triggering()
 
             # Mark as completed
             self.phase = "completed"
@@ -374,7 +374,8 @@ class DrillAgent:
             self.vulnerability_info = vuln_agent.run()
 
             # Print the formatted vulnerability analysis results
-            self.vulnerability_info.format_output()
+            vuln_info_str = self.vulnerability_info.format_output()
+            print(vuln_info_str)
             self.logger.info("  ✓ Vulnerability analysis completed")
 
         except Exception as e:
@@ -411,7 +412,7 @@ class DrillAgent:
         self.logger.info("  ✓ Path exploration completed")
         self.logger.info(f"  - Total PoV candidates generated: {len(self.pov_candidates)}")
 
-    def _phase_pov_generation(self):
+    def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
         self.logger.info("\n[Phase 4] PoV Generation and Verification")
 
