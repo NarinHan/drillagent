@@ -48,8 +48,8 @@ class PathExplorationAgent:
         # self.uncovered_callsites = [] # TODO
 
         # LHY: All of the intermediate PoV results should be stored, and we should maintain a best PoV candidate.
-        # self.history_pov_candidates = []  # List of XXX
-        # self.best_pov_candidate = None    # XXX
+        self.history_pov_candidates = []  # List of XXX
+        self.best_pov_candidate = None    # XXX
 
     def run(self):
         # Run the path exploration process to generate PoV candidates that can reach the vulnerable function.
@@ -59,6 +59,7 @@ class PathExplorationAgent:
         previous_feedback = None
 
         for iteration in range(1, self.max_exp_iterations + 1):
+            print("\n\n")
             self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
@@ -75,10 +76,12 @@ class PathExplorationAgent:
 
             # Substep1: Generate test case (with feedback from previous iteration if available)
             # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
+            print("\n")
             test_case_path = self._generate_test_case(previous_feedback=previous_feedback)
 
             # Substep2: Execute test case dynamically (using actual repo path)
             # This will also generate a profraw/profdata file.
+            print("\n")
             exit_code, exec_output = self._execute_test_case(test_case_path)
             #
 
@@ -86,10 +89,12 @@ class PathExplorationAgent:
             # a. function-level coverage ✅
             # b. source-line-level coverage
             # c. find the first uncovered callsite A
+            print("\n")
             func_level_cov_info = self._collect_coverage_feedback()
 
             # Substep4: Analyze coverage feedback around the first uncovered point A in the call trace
             # Output: reachability failure analysis, test case adjustment suggestion.
+            print("\n")
             feedback_analysis_results = self._analyze_coverage_feedback(exit_code, exec_output, func_level_cov_info)
 
             # Store feedback for next iteration
@@ -117,14 +122,15 @@ class PathExplorationAgent:
         # Possible TODOs:
         # 1.Each round should include a prompt (even a short continuation prompt).
         # 2.Provide different guidance depending on the previous round's behavior (whether tools were invoked or not).
-        max_generation_turns = 5
-        conversation_history = [] # Self maintained conversation history for multi-turn interaction
+        max_generation_turns = 10 # LHY: Need to have enough tool call turns...
+        conversation_history = [] # Self maintained conversation history for multi-turn LLM interaction within this function
         testcase_content = None   # What we want in _generate_test_case.
 
         for turn in range(1, max_generation_turns + 1):
             self.logger.info(f"  [PathExplorationAgent] LLM interaction turn {turn}/{max_generation_turns}")
 
             # Prepare current user prompt
+            current_prompt = ""
             if turn == 1:
                 # First turn: create full prompt
                 current_prompt = PEA_generate_testcase_prompt.format(
@@ -133,8 +139,8 @@ class PathExplorationAgent:
                     generation_turn=turn,
                     max_generation_turns=max_generation_turns
                 )
-
                 # Add previous iteration feedback if available (from round 2 onwards)
+                # `previous_feedback` is from the outer loop. Here, `turn` is the inner loop.
                 if previous_feedback:
                     self.logger.info(f"  [PathExplorationAgent] Including feedback from iteration {self.current_exp_iteration - 1}")
                     feedback_section = PEA_feedback_section_prompt.format(
@@ -143,6 +149,10 @@ class PathExplorationAgent:
                         previous_feedback=previous_feedback
                     )
                     current_prompt = current_prompt + "\n\n" + feedback_section
+            elif turn == max_generation_turns:
+                if conversation_history and conversation_history[-1]["role"] == "user":
+                    current_prompt = conversation_history.pop()["content"]
+                current_prompt += "\nPlease generate the final test case in a ```testcase code block now, since it is already the last turn."
             else:
                 # Subsequent turns: pop the last user message from conversation_history as current_prompt
                 # This message was added at the end of previous turn (tool results or continuation prompt)
@@ -161,7 +171,7 @@ class PathExplorationAgent:
                 conversation_history=conversation_history
             )
 
-            self.logger.debug(f"  [PathExplorationAgent] Turn {turn} LLM response: {response[:500]}...")
+            self.logger.debug(f"  [PathExplorationAgent] _generate_test_case turn {turn}, LLM response: {response[:500]}...")
 
             # Add current turn's user prompt to conversation history
             conversation_history.append({
@@ -175,20 +185,21 @@ class PathExplorationAgent:
             # Step 3: Check if response contains testcase code block
             testcase_pattern = r'```testcase\s*\n(.*?)\n```'
             match = re.search(testcase_pattern, response, re.DOTALL)
-            if not match:
-                # Fallback: try to find any code block and extract test case content
-                fallback_pattern = r'```\s*\n(.*?)\n```'
-                match = re.search(fallback_pattern, response, re.DOTALL)
+            # if not match:
+            #     # Fallback: try to find any code block and extract test case content
+            #     fallback_pattern = r'```\s*\n(.*?)\n```'
+            #     match = re.search(fallback_pattern, response, re.DOTALL)
             if match:
                 testcase_content = match.group(1)
                 self.logger.info(f"  [PathExplorationAgent] Testcase extracted from turn {turn}. Break from the generation loop!")
-                break
+                break # exit the `max_generation_turns` loop
 
             # Step 4: Execute tool calls if any
             if tool_calls and len(tool_calls) > 0:
                 self.logger.info(f"  [PathExplorationAgent] Executing {len(tool_calls)} tool calls...")
                 tool_results = []
 
+                # Traverse and execute each tool call
                 for tool_call in tool_calls:
                     tool_name = tool_call.get('name')
                     tool_args = tool_call.get('arguments', {})
@@ -211,6 +222,7 @@ class PathExplorationAgent:
                 # Create tool result message in official API format
                 tool_result_msg = self.llm.create_tool_result_message(tool_calls, tool_results)
 
+                # FIX: TODO: We should handle different LLM providers in llm.py instead of here.
                 # Handle OpenAI special case (multiple tool messages)
                 if "_openai_tool_messages" in tool_result_msg:
                     # OpenAI: add each tool result message separately
@@ -236,6 +248,7 @@ class PathExplorationAgent:
                         "role": "user",
                         "content": "Please provide the testcase in a ```testcase code block now."
                     })
+        # End for loop
 
         # Step 5: Verify testcase was extracted
         if not testcase_content:
@@ -244,7 +257,6 @@ class PathExplorationAgent:
         # Step 6: Save test case to fixed filename: testcase-round{N}
         test_case_filename = f"testcase-round{self.current_exp_iteration}"
         test_case_path = os.path.join(round_dir, test_case_filename)
-
         with open(test_case_path, 'w') as f:
             f.write(testcase_content)
 
@@ -260,19 +272,23 @@ class PathExplorationAgent:
         round_dir = self.get_round_dir(self.current_exp_iteration)
 
         # Step 1: Prepare the command
+        repo_path = self.drill_agent.config.target_repo_path
         binary_path = self.drill_agent.vulnerability_info.binary_path
+        binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path))
         harness_command = self.drill_agent.vulnerability_info.refined_harness_command
-
         if not binary_path:
             raise ValueError("Binary path not found in vulnerability_info")
         if not harness_command:
             raise ValueError("Refined harness command not found in vulnerability_info")
 
-        # Use absolute path for test case to ensure it works regardless of cwd changes in harness_command
+        # Transform general harness command to executable command
         abs_test_case_path = os.path.abspath(test_case_path)
-
-        # Replace placeholders (<path/to/testcase>) in the harness command
         command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
+        # TODO: LHY: Should be more smart, maybe still need to use LLM here...
+        # if f"./{binary_path} " in command:
+        #     command = command.replace(f"./{binary_path} ", f"{binary_abs_path} ")
+        # elif f"{binary_path} " in command:
+        #     command = command.replace(f"{binary_path} ", f"{binary_abs_path} ")
 
         # Step 2: Set environment variable to generate profraw file
         profraw_path = os.path.join(round_dir, f"test_{self.current_exp_iteration}.profraw")
@@ -309,23 +325,22 @@ class PathExplorationAgent:
 
         self.logger.info(f"  [PathExplorationAgent] Command exit code: {exit_code}")
 
-        # Step 4: Check if profraw file is generated
-        if not os.path.exists(profraw_path):
+        # Step 4: After each execution, use LLVMCovUtils to store the coverage profile data.
+        if not os.path.exists(profraw_path): # Check if profraw file is generated
             self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
             self.logger.warning(f"  [PathExplorationAgent] This might indicate the binary was not instrumented or the execution failed early")
             # Return without initializing llvm_cov_utils (coverage collection will handle this gracefully)
             return exit_code, exec_output
 
-        # Step 5: After each execution, use LLVMCovUtils to store the coverage profile data.
         try:
             if self.llvm_cov_utils is None:
                 self.llvm_cov_utils = LLVMCovUtils(
-                    binary_path=binary_path,
-                    profraw_path=profraw_path
+                    binary_path=binary_abs_path, # absolute path to the instrumented binary
+                    profraw_path=profraw_path    # absolute path?
                 )
             else:
                 # LLVMCovUtils will automatically convert profraw to profdata
-                self.llvm_cov_utils.update_profile_data(profraw_path)
+                self.llvm_cov_utils.update_profile_data(profraw_path) # absolute path?
             self.logger.info(f"  [PathExplorationAgent] current profdata file generated at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
         except Exception as e:
@@ -339,17 +354,14 @@ class PathExplorationAgent:
         # 3. Format and return the coverage information as a string for analysis
         self.logger.info(f"  [PathExplorationAgent] Round {self.current_exp_iteration} Substep3: Collecting coverage feedback...")
 
-        # Check if llvm_cov_utils is initialized (should be done in _execute_test_case)
-        if self.llvm_cov_utils is None:
-            self.logger.warning(f"  [PathExplorationAgent] LLVMCovUtils not initialized, cannot collect coverage")
-            return "ERROR: Coverage data not available (LLVMCovUtils not initialized)"
+        assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!"
 
         # Check if we have a valid call trace
         if not self.vuln_call_trace or len(self.vuln_call_trace) == 0:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
             return "ERROR: No vulnerability call trace available for coverage analysis"
 
-        # Step 1: Extract function information from call trace (only non-external functions)
+        # Step 1: Extract function information from vulnerable call trace
         # Build a list of (function_name, file_path) tuples for batch query
         functions_to_query = []
         callsite_info = []  # Store (sequence_num, function_name, file_path, line_number) for each callsite
@@ -367,7 +379,7 @@ class PathExplorationAgent:
                 continue
 
             # Convert file_path to absolute path (if it's relative to repo)
-            abs_file_path = os.path.abspath(os.path.join(self.drill_agent.repo_path, file_path))
+            abs_file_path = os.path.abspath(os.path.join(self.drill_agent.config.target_repo_path, file_path))
 
             functions_to_query.append((function_name, abs_file_path))
             callsite_info.append({
@@ -385,6 +397,7 @@ class PathExplorationAgent:
 
         # Step 2: Batch query function coverage using LLVMCovUtils
         try:
+            # `coverage_results` is a dict mapping (function_name, file_path) to coverage info dict
             coverage_results = self.llvm_cov_utils.get_multi_functions_coverage(functions_to_query)
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to query function coverage: {e}")
@@ -401,9 +414,7 @@ class PathExplorationAgent:
             seq_num = callsite['sequence_num']
             line_num = callsite['line_number']
 
-            key = (func_name, file_path)
-            cov_info = coverage_results.get(key, {})
-
+            cov_info = coverage_results.get( (func_name, file_path), {} )
             if not cov_info.get('found', False):
                 self.logger.debug(f"  [PathExplorationAgent] Frame #{seq_num} {func_name} not found in coverage data")
                 functions_uncovered.append({
@@ -517,6 +528,8 @@ class PathExplorationAgent:
             output_lines.append(f"  All callsites in the trace were executed!")
 
         output_lines.append("=" * 80)
+
+        print('\n'.join(output_lines)) # For debug
 
         formatted_output = '\n'.join(output_lines)
 

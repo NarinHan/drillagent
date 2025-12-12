@@ -25,7 +25,7 @@ class LLVMCovUtils:
         """
         Initialize LLVMCovUtils.
         Args:
-            binary_path: Path to instrumented binary
+            binary_path: Absolute path to instrumented binary
             profraw_path: Path to profraw file (auto-converts to profdata)
             profdata_path: Path to profdata file
             llvm_cov_path: Path to llvm-cov tool (default: "llvm-cov")
