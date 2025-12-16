@@ -16,12 +16,15 @@ import os
 import subprocess
 import logging
 import yaml
+import re
+import glob
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
 from drillagent.models.llm import LLM
 from drillagent.instrumentation.base_agent import BaseAgent, AgentState
+from drillagent.utils.utils import check_existing_coverage_instrumentation, locate_instrumented_binary
 
 
 class CoverageInstrumentAgent(BaseAgent):
@@ -95,40 +98,6 @@ No explanations, no markdown code blocks, just the raw script content."""
         self.logger.info(f"CoverageInstrumentAgent initialized for {self.project_name} {self.cve_id}")
         self.logger.info(f"Target repository: {self.target_repo}")
 
-    def _check_existing_instrumentation(self) -> bool:
-        """Check if the repository has already been successfully instrumented
-        
-        Returns:
-            True if already instrumented with coverage, False otherwise
-        """
-        # Try to locate the binary first
-        binary = self._locate_instrumented_binary()
-        
-        if not binary or not binary.exists():
-            self.logger.info("  No existing binary found")
-            return False
-        
-        # Check if binary has LLVM coverage symbols
-        try:
-            self.logger.info(f"  Checking existing binary: {binary}")
-            result = subprocess.run(
-                f'strings "{binary}" | grep -q "__llvm_profile"',
-                shell=True,
-                timeout=10
-            )
-            
-            if result.returncode == 0:
-                self.logger.info(f"  ✓ Found instrumented binary with LLVM coverage symbols")
-                self.instrumented_binary_path = binary
-                return True
-            else:
-                self.logger.info(f"  Binary exists but has no LLVM coverage symbols")
-                return False
-                
-        except Exception as e:
-            self.logger.warning(f"  Failed to check existing binary: {e}")
-            return False
-
     def _load_instrumentation_config(self) -> Dict[str, Any]:
         """Load instrumentation config from SEC-bench datasets
         
@@ -142,7 +111,6 @@ No explanations, no markdown code blocks, just the raw script content."""
         config_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
         
         # Search for config file matching CVE ID
-        import glob
         cve_pattern = f"*.{self.cve_id.lower()}.yaml"
         matches = list(config_dir.glob(cve_pattern))
         
@@ -196,10 +164,20 @@ No explanations, no markdown code blocks, just the raw script content."""
             if success:
                 # Phase 4: Test coverage instrumentation
                 self.state.phase = 'testing'
-                test_result = self.test_coverage_instrumentation()
+                self.logger.info("=" * 60)
+                self.logger.info("Testing Coverage Instrumentation")
+                self.logger.info("=" * 60)
+                
+                # Verify the binary has coverage symbols
+                verified_binary = check_existing_coverage_instrumentation(
+                    target_repo=self.target_repo,
+                    instr_config=self.instr_config,
+                    project_name=self.project_name,
+                    logger=self.logger
+                )
                 
                 # Check if coverage instrumentation test passed
-                if test_result and test_result.get('success'):
+                if verified_binary:
                     self.state.phase = 'complete'
                     self.logger.info(f"✓ Coverage instrumentation successful")
                     self.logger.info(f"  Instrumented binary: {self.instrumented_binary_path}")
@@ -208,19 +186,17 @@ No explanations, no markdown code blocks, just the raw script content."""
                         'success': True,
                         'instrumented_binary': str(self.instrumented_binary_path),
                         'build_log': self.build_log,
-                        'coverage_flags': self.coverage_flags,
-                        'test_result': test_result
+                        'coverage_flags': self.coverage_flags
                     }
                 else:
                     self.state.phase = 'failed'
-                    error_msg = test_result.get('error', 'Coverage instrumentation test failed')
+                    error_msg = 'No __llvm_profile symbols found in binary'
                     self.logger.error(f"Coverage instrumentation test failed: {error_msg}")
                     
                     return {
                         'success': False,
                         'error': error_msg,
-                        'build_log': self.build_log,
-                        'test_result': test_result
+                        'build_log': self.build_log
                     }
             else:
                 self.state.phase = 'failed'
@@ -255,7 +231,6 @@ No explanations, no markdown code blocks, just the raw script content."""
             raise ValueError("No build commands found in instrumentation config")
         
         # Step 1: Remove Docker-specific commands that will fail locally
-        import re
         build_commands = re.sub(
             r'\nmkdir\s+-p\s+/(?:src|out|testcase|work)\S*\s*',
             '\n',
@@ -284,7 +259,6 @@ LDFLAGS="${{LDFLAGS:-}}"
         
         # Replace patterns that modify CFLAGS/CXXFLAGS to append to COV_FLAGS instead
         # Handle: export CFLAGS="$CFLAGS -flag" -> export CFLAGS="$COV_FLAGS $CFLAGS -flag"
-        import re
         modified = re.sub(
             r'export (C(?:XX)?FLAGS)="(\$\1\s+[^"]+)"',
             r'export \1="$COV_FLAGS \2"',
@@ -344,8 +318,6 @@ LDFLAGS="${{LDFLAGS:-}}"
         Returns:
             Build commands with Docker paths replaced
         """
-        import re
-        
         # Check if there are any Docker-like patterns that need fixing
         docker_patterns = [
             r'\$\(dirname\s+["\']?\$0["\']?\)',  # $(dirname "$0")
@@ -468,8 +440,6 @@ LDFLAGS="${{LDFLAGS:-}}"
         Returns:
             Build commands with sanitizer flags removed
         """
-        import re
-        
         # Common sanitizer flags to remove
         sanitizer_patterns = [
             r'-fsanitize=\S+',           # Any -fsanitize flag
@@ -608,8 +578,15 @@ LDFLAGS="${{LDFLAGS:-}}"
             
             if success:
                 self.logger.info("✓ Build completed successfully")
-                # Locate the instrumented binary
-                self._locate_instrumented_binary()
+                # Locate the instrumented binary using utils function
+                binary = locate_instrumented_binary(
+                    self.target_repo,
+                    self.instr_config,
+                    self.project_name,
+                    self.logger
+                )
+                if binary:
+                    self.instrumented_binary_path = binary
             else:
                 self.logger.error(f"✗ Build failed with exit code {result.returncode}")
             
@@ -623,95 +600,6 @@ LDFLAGS="${{LDFLAGS:-}}"
             error_msg = f"Build execution failed: {str(e)}"
             self.logger.error(error_msg)
             return False, "", error_msg
-
-    def _locate_instrumented_binary(self) -> Optional[Path]:
-        """Locate the instrumented binary after build using config
-        
-        Returns:
-            Path to binary if found, None otherwise
-        """
-        binary_name = self.instr_config.get('binary_name', '')
-        binary_path = self.instr_config.get('binary_path', '')
-        
-        if binary_path:
-            # binary_path may be Docker path like "/src/njs/build/njs"
-            # Try multiple path variations:
-            # 1. Strip Docker prefix and use relative to repo root
-            # 2. Use just the relative part after project name
-            
-            # Remove leading slash and common Docker prefixes
-            rel_path = binary_path.lstrip('/')
-            
-            # Try stripping /src/ prefix
-            if rel_path.startswith('src/'):
-                rel_path = rel_path[4:]
-            
-            # If path contains project name, try using part after it
-            parts = Path(rel_path).parts
-            if self.project_name in parts:
-                idx = parts.index(self.project_name)
-                rel_path = str(Path(*parts[idx+1:])) if idx + 1 < len(parts) else rel_path
-            
-            full_path = self.target_repo / rel_path
-            
-            if full_path.exists() and os.access(full_path, os.X_OK):
-                # Check if it's a libtool wrapper script
-                if self._is_libtool_wrapper(full_path):
-                    # Try to find actual binary in .libs directory
-                    libs_binary = full_path.parent / '.libs' / full_path.name
-                    if libs_binary.exists() and os.access(libs_binary, os.X_OK):
-                        self.instrumented_binary_path = libs_binary
-                        self.logger.debug(f"Found actual binary (libtool): {libs_binary}")
-                        return libs_binary
-                
-                self.instrumented_binary_path = full_path
-                self.logger.debug(f"Found binary at: {full_path}")
-                return full_path
-        
-        # Fallback: search by binary name
-        if binary_name:
-            candidates = list(self.target_repo.rglob(binary_name))
-            executables = [c for c in candidates if os.access(c, os.X_OK)]
-            
-            if executables:
-                # Prefer binaries in build directories, and actual binaries over wrappers
-                for exe in executables:
-                    if 'build' in str(exe).lower() and not self._is_libtool_wrapper(exe):
-                        self.instrumented_binary_path = exe
-                        self.logger.debug(f"Found binary at: {exe}")
-                        return exe
-                
-                # If all are wrappers, try .libs version
-                for exe in executables:
-                    if self._is_libtool_wrapper(exe):
-                        libs_binary = exe.parent / '.libs' / exe.name
-                        if libs_binary.exists() and os.access(libs_binary, os.X_OK):
-                            self.instrumented_binary_path = libs_binary
-                            self.logger.debug(f"Found actual binary (libtool): {libs_binary}")
-                            return libs_binary
-                
-                self.instrumented_binary_path = executables[0]
-                self.logger.debug(f"Found binary at: {executables[0]}")
-                return executables[0]
-        
-        self.logger.debug(f"Could not locate binary: {binary_name}")
-        return None
-
-    def _is_libtool_wrapper(self, path: Path) -> bool:
-        """Check if a file is a libtool wrapper script
-        
-        Args:
-            path: Path to check
-            
-        Returns:
-            True if it's a libtool wrapper, False otherwise
-        """
-        try:
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                first_lines = f.read(200)
-                return 'libtool' in first_lines.lower() and 'wrapper' in first_lines.lower()
-        except:
-            return False
 
     def _diagnose_and_fix_build_error(
         self,
@@ -824,82 +712,3 @@ Output the fixed build script now:"""
         if repeated:
             return "\n".join([f"- {sig[:100]}" for sig, count in repeated[:3]])
         return "None"
-
-    def test_coverage_instrumentation(self) -> Dict[str, Any]:
-        """Test the instrumented binary to verify coverage instrumentation works
-        
-        Uses strings command to check for __llvm_profile symbols in the binary.
-        
-        Returns:
-            Dictionary with test results including:
-                - success: bool
-                - has_llvm_profile_symbols: bool
-                - symbols_found: list of __llvm_profile symbols
-                - error: str if failed
-        """
-        if not self.instrumented_binary_path:
-            return {
-                'success': False,
-                'error': 'No instrumented binary found'
-            }
-        
-        binary = self.instrumented_binary_path
-        
-        self.logger.info("=" * 60)
-        self.logger.info("Testing Coverage Instrumentation")
-        self.logger.info("=" * 60)
-        
-        try:
-            # Run strings command and grep for __llvm_profile symbols
-            self.logger.info(f"Checking binary for LLVM coverage symbols: {binary}")
-            
-            result = subprocess.run(
-                f'strings "{binary}" | grep "__llvm_profile"',
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            # Parse the output to get symbols
-            symbols = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-            
-            if symbols:
-                self.logger.info(f"✓ LLVM coverage instrumentation SUCCESSFUL")
-                self.logger.info(f"  Found {len(symbols)} __llvm_profile symbols:")
-                for symbol in symbols[:10]:  # Show first 10 symbols
-                    self.logger.info(f"    - {symbol}")
-                if len(symbols) > 10:
-                    self.logger.info(f"    ... and {len(symbols) - 10} more")
-                
-                return {
-                    'success': True,
-                    'has_llvm_profile_symbols': True,
-                    'symbols_found': symbols,
-                    'binary_path': str(binary)
-                }
-            else:
-                self.logger.error(f"✗ LLVM coverage instrumentation FAILED")
-                self.logger.error(f"  No __llvm_profile symbols found in binary")
-                
-                return {
-                    'success': False,
-                    'has_llvm_profile_symbols': False,
-                    'symbols_found': [],
-                    'error': 'No __llvm_profile symbols found in binary',
-                    'binary_path': str(binary)
-                }
-            
-        except subprocess.TimeoutExpired:
-            error_msg = "strings command timed out"
-            self.logger.error(error_msg)
-            return {
-                'success': False,
-                'error': error_msg
-            }
-        except Exception as e:
-            self.logger.error(f"Coverage test failed: {e}", exc_info=True)
-            return {
-                'success': False,
-                'error': str(e)
-            }

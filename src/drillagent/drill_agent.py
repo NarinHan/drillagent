@@ -6,7 +6,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
@@ -14,6 +14,7 @@ from drillagent.models import LLM
 from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent, CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
+from drillagent.utils.utils import check_coverage_binary_exists
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -231,6 +232,20 @@ class DrillAgent:
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
 
         try:
+            # Always check if coverage instrumentation already exists
+            existing_binary = check_coverage_binary_exists(
+                target_repo_path=Path(self.config.target_repo_path),
+                cve_id=self.config.cve_id,
+                logger=self.logger
+            )
+            if existing_binary:
+                self.logger.info(f"✓ Using existing coverage-instrumented binary: {existing_binary}")
+                self.coverage_binary = existing_binary
+                # Disable coverage instrumentation since binary already exists
+                self.config.enable_coverage = False
+            else:
+                self.logger.info("No existing coverage-instrumented binary found; proceeding with instrumentation")
+            
             # Phase 1: Code Instrumentation
             if not self.skip_instrumentation:
                 self._phase_instrumentation()
@@ -326,33 +341,23 @@ class DrillAgent:
 
         # Step 3: Build with coverage instrumentation
         if self.config.enable_coverage:
-            self.logger.info("  - Checking existing coverage instrumentation...")
+            self.logger.info("  - Building with coverage instrumentation...")
             coverage_agent = CoverageInstrumentAgent(self)
             
-            # Use the agent's test method to check if already instrumented
-            if coverage_agent._check_existing_instrumentation():
-                self.logger.info("  ✓ Coverage instrumentation already exists, skipping build")
-                self.coverage_binary = coverage_agent.instrumented_binary_path
-            else:
-                # Need to instrument - first clean and checkout
-                self.logger.info("  - Coverage instrumentation needed, preparing repository...")
+            # Clean and checkout before instrumentation
+            self._clean_repository()
+            self._checkout_base_commit()
 
-                self._clean_repository()
-                self._checkout_base_commit()
-
-                # Run coverage instrumentation
-                self.logger.info("  - Running coverage instrumentation...")
-                result = coverage_agent.run()
+            # Run coverage instrumentation
+            result = coverage_agent.run()
                 
-                if result['success']:
-                    self.logger.info(f"    ✓ Coverage instrumentation completed")
-                    self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
-                    self.coverage_binary = result.get('instrumented_binary')
-                else:
-                    self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
-                    self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-
-        # Step 4: Build with memory sanitizer
+            if result['success']:
+                self.logger.info(f"    ✓ Coverage instrumentation completed")
+                self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
+                self.coverage_binary = result.get('instrumented_binary')
+            else:
+                self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
+                self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
         if self.config.enable_sanitizer:
             self.logger.info("  - Applying memory sanitizer...")
             # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)
