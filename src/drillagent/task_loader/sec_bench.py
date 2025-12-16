@@ -80,6 +80,7 @@ class SecbTask:
         for report_line in self.sanitizer_report.split('\n'):
             if any(keyword in report_line for keyword in skip_line_keywords):
                 continue
+            # This pattern extracts call trace-like lines. 187 outof 200 sanitizer reports can match this pattern.
             pattern0 = re.compile(
                 # rf"in\s([^/\s][^\s]*)\s([^/\s][^\s]*):(\d+)", # The file_path is allowed to start with '/' char.
                 rf"in\s([^/\s][^\s]*)\s(\S+):(\d+)",
@@ -150,6 +151,7 @@ class SecbTask:
         #     print(f"project_name: {self.project_name}") # by LHY
         #     print(f"Sanitizer report for {self.instance_id}:\n{self.sanitizer_report}\nEnd of report.\n") # by LHY
 
+        # Remove the leading debug markers (^^^, &&&, ***)
         if location is not None and len(location) > 3:
             location = location[3:]
         return location
@@ -300,6 +302,15 @@ class RawSecbTaskLoader:
             List of instance IDs
         """
         return list(self.cve_tasks.keys())
+
+    def get_solved_nonbinary_tasks(self) -> Dict[str, SecbTask]:
+        instances_ids = [
+            "njs.cve-2022-27007",
+            "mruby.cve-2022-0631",
+            "mruby.cve-2018-14337",
+        ]
+        return {instance_id:task for instance_id, task in self.cve_tasks.items()
+                if instance_id in instances_ids}
 
     # Get a subset of tasks from SEC-bench
     def get_openhands_solved_tasks(self) -> Dict[str, SecbTask]:

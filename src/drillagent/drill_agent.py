@@ -33,6 +33,8 @@ class DrillAgent:
         self.skip_path_exploration = config.disable_path_exploration
         self.skip_pov_generation = config.disable_pov_generation
 
+        self.work_dir   = self.config.work_dir
+        self.output_dir = self.config.output_dir
         self.iteration = 0
         self.errors = []
 
@@ -63,14 +65,14 @@ class DrillAgent:
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
         # Determine log directory and filename
-        if self.config.output_dir == str(Path("./output").resolve()):
+        if self.output_dir == str(Path("./output").resolve()):
             # User didn't set custom output_dir, use DrillAgent/logs
             current_file = Path(__file__).resolve()
             project_root = current_file.parent.parent.parent  # Go up to DrillAgent root
             log_dir = project_root / "logs"
         else:
             # User set custom output_dir, use it
-            log_dir = Path(self.config.output_dir)
+            log_dir = Path(self.output_dir)
         
         log_dir.mkdir(parents=True, exist_ok=True)
         
@@ -85,7 +87,7 @@ class DrillAgent:
             log_path.unlink()
         
         # Also ensure output_dir exists for other files
-        Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         
         # Configure root logger to INFO to avoid debug spam from third-party libs
         logging.basicConfig(
@@ -239,11 +241,11 @@ class DrillAgent:
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:
-                self._phase_exploration()
+                self._phase_path_exploration()
 
             # Phase 4: PoV Generation and Verification
             if not self.skip_pov_generation:
-                self._phase_pov_generation()
+                self._phase_crash_triggering()
 
             # Mark as completed
             self.phase = "completed"
@@ -313,7 +315,6 @@ class DrillAgent:
             
             # Execute the full instrumentation workflow
             result = instrumentation_agent.run()
-            
             if result['success']:
                 self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
                 self.instrumented_binary = result.get('instrumented_binary')
@@ -373,7 +374,8 @@ class DrillAgent:
             self.vulnerability_info = vuln_agent.run()
 
             # Print the formatted vulnerability analysis results
-            self.vulnerability_info.format_output()
+            vuln_info_str = self.vulnerability_info.format_output()
+            print(vuln_info_str)
             self.logger.info("  ✓ Vulnerability analysis completed")
 
         except Exception as e:
@@ -382,7 +384,7 @@ class DrillAgent:
             # Keep the VulnInfo instance but mark it with error in root_cause field
             self.vulnerability_info.root_cause = f"Analysis failed: {e}"
 
-    def _phase_exploration(self):
+    def _phase_path_exploration(self):
         """Phase 3: Coverage-guided path exploration"""
         self.logger.info("\n[Phase 3] Path Exploration")
         self.phase = "exploring"
@@ -410,7 +412,7 @@ class DrillAgent:
         self.logger.info("  ✓ Path exploration completed")
         self.logger.info(f"  - Total PoV candidates generated: {len(self.pov_candidates)}")
 
-    def _phase_pov_generation(self):
+    def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
         self.logger.info("\n[Phase 4] PoV Generation and Verification")
 
@@ -463,7 +465,7 @@ Format your response as a complete, executable test case."""
         # Step 2: Save PoV candidates to output directory
         self.logger.info("  - Saving PoV test cases...")
         try:
-            output_path = Path(self.config.output_dir)
+            output_path = Path(self.output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
 
             # Save PoV candidates as JSON

@@ -87,7 +87,7 @@ class AgentConfig:
 
     def print_config(self):
         print("=" * 80)
-        print("Agent Configuration:")
+        print("Agent Configuration")
         print("=" * 80)
 
         print("[PoV Task Information]")

@@ -85,7 +85,8 @@ VAA_harness_refine_prompt = """You are refining a harness command to accurately 
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current harness command: (May contain absolute path prefix not existing in the local machine)
+Current harness command: 
+(May contain absolute path prefix not existing in the local machine, need to be refined)
 ```
 {harness_command}
 ```
@@ -101,16 +102,15 @@ Your tasks:
    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
    - Must be relative to: {actual_repo_path}
 
-3. **Refine the command**: Create a command that can be run from the repository root directory
-   - The command should be executable when run from: {actual_repo_path}
-   - Use relative paths or ./relative/path notation
-   - Example: ./build/njs (NOT /absolute/path/to/build/njs)
+3. **Refine the command**: Create a command that can be run from any directory
+   - The command should be executable when run from arbitrary directories, so try to use absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
    - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
+   - Example: /absolute/path/to/build/njs <path/to/testcase>
 
 IMPORTANT PATH REQUIREMENTS:
 - binary_path must be RELATIVE to repository root: {actual_repo_path}
-- refined_harness_command must be runnable from repository root
+- refined_harness_command must be runnable from any directory (i.e., the binary program in the command should use absolute path)
 - Verify the program file exists in the repository using tools if needed!!
 
 Use the available tools (find_file, list_dir) to explore the repository structure.
@@ -118,7 +118,7 @@ Use the available tools (find_file, list_dir) to explore the repository structur
 Respond in the following JSON format ONLY:
 {{
     "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "./relative/path/to/binary [flags]"
+    "refined_harness_command": "/absolute/path/to/binary [flags] [<path/to/testcase>]"
 }}
 
 Example:
@@ -127,7 +127,7 @@ And repo is: "/home/ubuntu/PoV/Repos/njs-cov"
 Then output should be:
 {{
     "binary_path": "build/njs",
-    "refined_harness_command": "./build/njs <path/to/testcase>"
+    "refined_harness_command": "/home/ubuntu/PoV/Repos/njs-cov/build/njs <path/to/testcase>"
 }}
 
 Be thorough. Verify paths exist before responding.
@@ -140,7 +140,8 @@ VAA_harness_followup_prompt = """You are refining a harness command to accuratel
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current harness command: (May contain absolute path prefix not existing in the local machine)
+Current harness command: 
+(May contain absolute path prefix not existing in the local machine, need to be refined)
 ```
 {harness_command}
 ```
@@ -156,12 +157,16 @@ Your tasks:
    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
    - Must be relative to: {actual_repo_path}
 
-3. **Refine the command**: Create a command that can be run from the repository root directory
-   - The command should be executable when run from: {actual_repo_path}
-   - Use relative paths or ./relative/path notation
-   - Example: ./build/njs (NOT /absolute/path/to/build/njs)
+3. **Refine the command**: Create a command that can be run from any directory
+   - The command should be executable when run from arbitrary directories, so try to use absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
    - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
+   - Example: /absolute/path/to/build/njs <path/to/testcase>
+
+IMPORTANT PATH REQUIREMENTS:
+- binary_path must be RELATIVE to repository root: {actual_repo_path}
+- refined_harness_command must be runnable from any directory (i.e., the binary program in the command should use absolute path)
+- Verify the program file exists in the repository using tools if needed!!
 
 Previous tool results:
 {tool_results}
@@ -169,7 +174,7 @@ Previous tool results:
 Now provide the final refined harness information in JSON format:
 {{
     "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "executable command with arguments and testcase placeholder (if any)"
+    "refined_harness_command": "executable command (from any directory) with arguments and testcase placeholder (if any)"
 }}
 """
 
@@ -206,5 +211,61 @@ Provide a clear, technical explanation of:
 - What code pattern or logic flaw enables it
 
 Be specific and reference actual code when possible.
+"""
+
+
+# Prompt for transforming raw call trace to structured format
+VAA_call_trace_transform_prompt = """You are transforming a raw call trace from a sanitizer report into a structured format.
+
+Project: {project_name}
+Repository path: {actual_repo_path}
+
+Raw Call Trace:
+```
+{raw_call_trace}
+```
+
+Your task is to parse this call trace and extract structured information for each frame.
+
+For each line starting with '#' in the call trace:
+1. Extract the sequence number (the number after #)
+2. Extract the function name (the text after "in" if present, otherwise use empty string)
+3. Extract the file path and convert it to a RELATIVE path based on the repository root: {actual_repo_path}
+4. Extract the line number (the number after the colon in file:line format)
+
+IMPORTANT PATH CONVERSION RULES:
+- If the path contains the project name (e.g., "/home/b/asan/libplist/tools/plistutil.c"), extract the relative part (e.g., "tools/plistutil.c")
+- If the path is a system library (e.g., "/lib/i386-linux-gnu/libc.so.6" or contains libasan, libstdc++, libc), keep it as-is but mark it as external
+- The relative path should start from the repository root
+- Remove any absolute path prefix that includes the repository path
+
+SKIP THE FOLLOWING:
+- Lines that are NOT actual stack frames (like allocation information, summary lines, etc.)
+- System library frames (libc, libasan, etc.) - these should still be included but marked appropriately
+
+Respond in the following JSON format ONLY:
+{{
+    "call_trace": [
+        {{
+            "sequence_num": 0,
+            "function_name": "main",
+            "file_path": "tools/plistutil.c",
+            "line_number": 137,
+            "is_external": false
+        }},
+        {{
+            "sequence_num": 1,
+            "function_name": "",
+            "file_path": "/lib/i386-linux-gnu/libc.so.6",
+            "line_number": 0,
+            "is_external": true
+        }}
+    ]
+}}
+
+IMPORTANT:
+- For frames without line numbers, use 0
+- For frames without function names, use empty string ""
+- Mark system library frames with `"is_external": true`
 """
 
