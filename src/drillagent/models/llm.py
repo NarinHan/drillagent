@@ -154,7 +154,7 @@ class LLM:
             model=self.model_name,
             messages=messages,
             temperature=temperature,
-            max_tokens=max_tokens,
+            max_completion_tokens=max_tokens,
         )
 
         return response.choices[0].message.content
@@ -251,7 +251,7 @@ class LLM:
             tools=tool_schemas,
             tool_choice="auto",  # LLM decides whether to use tools
             temperature=temperature,
-            max_tokens=max_tokens
+            max_completion_tokens=max_tokens
         )
 
         # Parse response

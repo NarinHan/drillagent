@@ -35,6 +35,11 @@ class DrillAgent:
         self.iteration = 0
         self.errors = []
 
+        # LLM interface
+        self.llm: LLM = None
+        self.reasoning_llm: LLM = None
+        self.low_cost_llm:  LLM = None
+
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD

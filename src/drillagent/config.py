@@ -25,9 +25,13 @@ class AgentConfig:
     # 
     # LLM configuration
     # 
+    # General-purpose LLM model (may have latent reasoning capabilities).
     model_provider: str = "openai"  # claude or openai
     model_name: str = "gpt-4o-2024-05-13"
     api_key: Optional[str] = None
+    # TODO: Provide more specific model configurations.
+    reasoning_model : tuple = ("", "")
+    low_cost_model  : tuple = ("", "") # (provider, model name)
 
     # 
     # Ablation options
