@@ -1,13 +1,15 @@
 # Customized Items
+.env
 .claude/
 cache/
 output/
 workspace/
 logs/
-openai.key
-src/drillagent/scripts/lhy_test.py
-.env
 test_output/
+openai.key
+claude.key
+gemini.key
+src/drillagent/scripts/lhy_test.py
 
 # AFLGO agent
 instrumented/
