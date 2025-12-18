@@ -211,8 +211,7 @@ Your task is to explain the ROOT CAUSE of this vulnerability:
 
 Use the provided tools (mainly read_file) to examine relevant source files.
 - All the relative file paths are based on the repository root: {actual_repo_path}
-- Some source file line numbers may be inaccurate (i.e., target source line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion.
-- You may need to read a few more lines further down, and use the callee functionn name in the next stack frame to pinpoint the correct call-site code snippet!!
+- Some source file line numbers may be inaccurate (i.e., target source line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion. You may need to read a few more lines further down, and use the callee functionn name in the next stack frame to pinpoint the correct call-site code snippet!!
 
 Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE ANALYSIS" and covering:
 - What the vulnerability is
