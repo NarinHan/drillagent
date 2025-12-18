@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
 from drillagent.models import LLM
-from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent, CoverageInstrumentAgent
+from drillagent.instrumentation import ConfigGeneratorAgent, DistanceAgent, CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.utils.utils import check_coverage_binary_exists
@@ -322,7 +322,7 @@ class DrillAgent:
             with open(self.aflgo_config_path, 'r') as f:
                 config_dict = yaml.safe_load(f)
             
-            instrumentation_agent = InstrumentationAgent(
+            instrumentation_agent = DistanceAgent(
                 config=config_dict,
                 llm=self.llm,
                 logger=self.logger

@@ -10,21 +10,26 @@ This agent handles AFLGo instrumentation for directed fuzzing, including:
 """
 
 import os
-import sys
 import subprocess
 import shutil
 import json
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
 
 from drillagent.instrumentation.base_agent import BaseAgent, AgentState
 from drillagent.models.llm import LLM
+from drillagent.prompts.DistanceAgent_prompt import (
+    DA_system_prompt,
+    DA_extract_target_prompt,
+    DA_identify_paragraph_prompt,
+    DA_build_prompt,
+    DA_distance_generation_prompt
+)
 
 
-class InstrumentationAgent(BaseAgent):
-    """AFLGo-based instrumentation agent for directed fuzzing
+class DistanceAgent(BaseAgent):
+    """AFLGo-based distance agent for directed fuzzing
     
     This agent inherits from BaseAgent and specializes in:
     - Setting up target repositories
@@ -35,80 +40,10 @@ class InstrumentationAgent(BaseAgent):
     """
     
     # AFLGo-specific system prompt
-    AFLGO_SYSTEM_PROMPT = """You are an expert systems engineer and security researcher specializing in 
-directed fuzzing with AFLGo. Your task is to instrument programs for directed fuzzing following this workflow:
-
-**Phase 1: Repository Setup**
-- Clone or update the git repository from GITHUB_URL
-- The repository goes to: $REPOS_DIR/<repo_name> (configurable via repos_dir in config)
-
-**Phase 2: Target Extraction**
-- Extract targets from SEC-bench sanitizer reports (CVE-sanitizer_reports directory)
-- Find the LAST (deepest) target in the stack trace (#0, the actual bug location)
-- Extend to include surrounding lines (default: 4 lines before, 3 lines after)
-- COMMIT_ID refers to the vulnerable version (before patch)
-- Save to BBtargets.txt in format: <file>:<line>
-
-**Phase 3: CG/CFG Generation (First Build)**
-- Set AFLGo compilers: CC=$AFLGO/instrument/aflgo-clang, CXX=$AFLGO/instrument/aflgo-clang++
-- Set instrumentation flags: -targets=$TMP_DIR/BBtargets.txt -outdir=$TMP_DIR -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps
-- Checkout to vulnerable version: git checkout $COMMIT_ID (already vulnerable version)
-- Build using the BUILD_SCRIPT from config file
-- This generates BBnames.txt and BBcalls.txt
-
-**Phase 4: Distance Calculation**
-- Clean BBnames.txt: cat BBnames.txt | grep -v "^$"| rev | cut -d: -f2- | rev | sort | uniq
-- Clean BBcalls.txt: cat BBcalls.txt | grep -Ev "^[^,]*$|^([^,]*,){2,}[^,]*$"| sort | uniq
-- Run: $AFLGO/distance/gen_distance_fast.py $SUBJECT $TMP_DIR <binary_name>
-- This generates distance.cfg.txt
-
-**Phase 5: Final Instrumented Build**
-- Set distance flag: -distance=$TMP_DIR/distance.cfg.txt (replace CG/CFG flags)
-- Rebuild the project using the BUILD_SCRIPT from config file
-- Final instrumented binary is ready for fuzzing
-
-**CRITICAL CONSTRAINTS - DO NOT VIOLATE:**
-1. NEVER modify, rebuild, or reinstall AFLGo itself
-2. NEVER change AFLGo compiler paths (aflgo-clang, aflgo-clang++)
-3. NEVER suggest installing different versions of AFLGo
-4. NEVER modify files in $AFLGO directory (configurable via aflgo_dir in config)
-5. ONLY modify the TARGET PROJECT being instrumented (libredwg, jq, etc.)
-6. You can modify build scripts, Makefiles, configure.ac in the TARGET PROJECT
-7. You can change environment variables (CFLAGS, CXXFLAGS, CPPFLAGS, etc.)
-8. You can patch source files in the TARGET PROJECT if needed
-9. AFLGo toolchain is WORKING and TESTED - trust it completely
-10. All fixes must be in the TARGET PROJECT'S build configuration
-
-**CRITICAL: Always respond in valid JSON format:**
-{
-  "reasoning": "Your detailed analysis and thought process",
-  "commands": ["exact shell command 1", "exact shell command 2", ...],
-  "action": "cmake|autotools|make|continue",
-  "confidence": 0.9
-}
-
-For build questions:
-- Analyze the build system type (cmake/autotools/make)
-- Provide EXACT shell commands to execute
-- For CMake: ["mkdir -p build", "cd build", "cmake ..", "make -j$(nproc)"]
-- For autotools: ["autoreconf -i", "./configure", "make -j$(nproc)"]
-- For make: ["make clean || true", "make -j$(nproc)"]
-- Account for the environment variables (CC, CXX, CFLAGS, etc.) already being set
-- If build fails, analyze the error and suggest different commands
-- SOLUTIONS MUST TARGET THE PROJECT, NOT AFLGO:
-  * ✓ Modify project's Makefile.am or configure.ac
-  * ✓ Change CFLAGS/CXXFLAGS/CPPFLAGS environment variables
-  * ✓ Add/modify configure arguments (--disable-shared, --enable-static, etc.)
-  * ✓ Patch project source files if needed
-  * ✗ NEVER modify aflgo-clang or aflgo-clang++ compilers
-  * ✗ NEVER reinstall or rebuild AFLGo
-  * ✗ NEVER change AFLGo instrumentation scripts
-
-Handle errors by analyzing messages and providing alternative commands in your response.
-"""
+    AFLGO_SYSTEM_PROMPT = DA_system_prompt
     
     def __init__(self, config: Dict, llm: Optional[LLM] = None, logger=None):
-        """Initialize InstrumentationAgent
+        """Initialize DistanceAgent
         
         Args:
             config: Configuration dictionary containing:
@@ -152,7 +87,7 @@ Handle errors by analyzing messages and providing alternative commands in your r
             'LDFLAGS': os.environ.get('LDFLAGS', '')
         }
         
-        self.logger.info(f"Initialized InstrumentationAgent for {self.repo_name}")
+        self.logger.info(f"Initialized DistanceAgent for {self.repo_name}")
     
     def setup_environment(self):
         """Setup directory structure and environment variables for AFLGo"""
@@ -364,22 +299,10 @@ Handle errors by analyzing messages and providing alternative commands in your r
         
         self.logger.info(f"Using sanitizer report from config (length: {len(report_content)} chars)")
         
-        parse_question = f"""I need to extract the LAST (deepest) vulnerability target location from this sanitizer report.
-
-Repository name: {self.repo_name}
-Report content (first 1500 chars):
-{report_content[:1500]}
-
-IMPORTANT: I need ONLY the LAST target in the stack trace (typically #0, the actual bug location).
-
-Extract format: <relative_path>:<line_number>
-For example: src/md4c.c:5985
-
-Respond in JSON:
-{{
-  "reasoning": "your analysis identifying the last/deepest bug location",
-  "target": "src/file.c:123"
-}}"""
+        parse_question = DA_extract_target_prompt.format(
+            repo_name=self.repo_name,
+            report_content=report_content[:1500]
+        )
         
         parse_response = self.ask_llm(parse_question)
         self.log_llm_reasoning("LLM parsing:", parse_response.get('reasoning', ''))
@@ -481,23 +404,11 @@ Respond in JSON:
             return extended_targets
         
         # Ask LLM for paragraph range
-        paragraph_question = f"""Identify the complete code paragraph containing a bug.
-
-**Bug Location:** {file_path}:{base_line}
-
-**Source Code:**
-```c
-{context_text}
-```
-
-**Task:** Identify a 5-line paragraph containing line {base_line}.
-
-Respond in JSON:
-{{
-  "reasoning": "explain your range choice",
-  "start_line": <number>,
-  "end_line": <number>
-}}"""
+        paragraph_question = DA_identify_paragraph_prompt.format(
+            file_path=file_path,
+            base_line=base_line,
+            context_text=context_text
+        )
         
         paragraph_response = self.ask_llm(paragraph_question)
         self.log_llm_reasoning("LLM paragraph analysis:", paragraph_response.get('reasoning', ''))
@@ -585,7 +496,10 @@ Respond in JSON:
         return False
     
     def phase_build_with_llm(self, phase_num: int = 1) -> bool:
-        """Phase 2/4: Build with LLM guidance"""
+        """Phase 2/4: Build with LLM guidance
+        
+        Uses BaseAgent's diagnose_and_fix_build_error for error recovery.
+        """
         phase_name = "CG/CFG Generation" if phase_num == 1 else "Distance Instrumentation"
         self.logger.info(f"=== Phase {phase_num + 1}: {phase_name} ===")
         
@@ -593,108 +507,187 @@ Respond in JSON:
         distance_file = self.temp_dir / 'distance.cfg.txt'
         
         build_commands_str = self.config.get('build_config', {}).get('build_commands', '')
+        current_build_script = build_commands_str  # Track current build script for error recovery
         
         max_build_attempts = 5
         for attempt in range(max_build_attempts):
             self.logger.info(f"Build attempt {attempt + 1}/{max_build_attempts}")
+            self.state.attempts = attempt + 1
             
-            # Reset environment
-            for key in ['CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS']:
-                if self.original_env[key]:
-                    os.environ[key] = self.original_env[key]
-                elif key in os.environ:
-                    del os.environ[key]
+            # Reset and setup environment for this attempt
+            self._setup_build_environment(phase_num, targets_file, distance_file)
             
-            # Set compiler flags
-            if phase_num == 1:
-                additional = f"-targets={targets_file} -outdir={self.temp_dir} -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps"
-                os.environ['CFLAGS'] = f"{additional} -g"
-                os.environ['CXXFLAGS'] = f"{additional} -g"
-            else:
-                os.environ['CFLAGS'] = f"-distance={distance_file.resolve()}"
-                os.environ['CXXFLAGS'] = f"-distance={distance_file.resolve()}"
-            
-            custom_cflags = self.config.get('build_config', {}).get('cflags', '')
-            if custom_cflags:
-                os.environ['CFLAGS'] = f"{custom_cflags} {os.environ['CFLAGS']}"
-                os.environ['CXXFLAGS'] = f"{custom_cflags} {os.environ['CXXFLAGS']}"
-            
-            # Try config commands first
+            # First attempt: try config commands directly
             if attempt == 0 and build_commands_str:
                 commands = [cmd.strip() for cmd in build_commands_str.split('\n') 
                            if cmd.strip() and not cmd.strip().startswith('#')]
                 
                 if commands:
-                    success = self._execute_commands(commands)
+                    success, stdout, stderr = self._execute_commands(commands)
                     if success:
-                        validation_success = self._validate_cg_cfg_artifacts() if phase_num == 1 else self._validate_instrumented_binary()
+                        validation_success = self._validate_build_phase(phase_num)
                         if validation_success:
                             self.logger.info("Build successful with config commands!")
                             return True
+                    else:
+                        # Use BaseAgent's diagnose_and_fix_build_error for recovery
+                        self.logger.info("Analyzing build error with LLM...")
+                        fixed_script = self.diagnose_and_fix_build_error(
+                            error=stderr,
+                            output=stdout,
+                            build_commands=current_build_script,
+                            project_name=self.repo_name,
+                            context=f"Phase: {phase_name}, CVE: {self.config.get('cve_id', 'N/A')}",
+                            system_prompt=self.AFLGO_SYSTEM_PROMPT,
+                            fallback_fixes=self._aflgo_fallback_fixes
+                        )
+                        if fixed_script:
+                            current_build_script = fixed_script
+                        continue
             
-            # Use LLM
-            has_cmake = (self.subject_dir / 'CMakeLists.txt').exists()
-            has_configure_ac = (self.subject_dir / 'configure.ac').exists()
-            has_configure = (self.subject_dir / 'configure').exists()
-            has_makefile = (self.subject_dir / 'Makefile').exists()
-            has_autogen = (self.subject_dir / 'autogen.sh').exists()
-            
-            question = f"""Build project for AFLGo instrumentation.
-Phase: {phase_name}
-Attempt: {attempt + 1}
-
-Environment:
-- CC: {os.environ.get('CC')}
-- CXX: {os.environ.get('CXX')}
-- CFLAGS: {os.environ.get('CFLAGS')}
-- CXXFLAGS: {os.environ.get('CXXFLAGS')}
-
-Project structure:
-- CMakeLists.txt: {has_cmake}
-- configure.ac: {has_configure_ac}
-- configure: {has_configure}
-- Makefile: {has_makefile}
-- autogen.sh: {has_autogen}"""
-            
-            if build_commands_str:
-                question += f"\n\nReference build script:\n```bash\n{build_commands_str}\n```"
-            
-            question += """
-
-Provide exact shell commands. Respond in JSON:
-{{
-  "reasoning": "your analysis",
-  "commands": ["command1", "command2"]
-}}"""
-            
-            if attempt > 0:
-                recent_errors = self.state.errors[-min(3, len(self.state.errors)):]
-                repeated = self.state.get_repeated_errors(2)
-                question += "\n\n=== BUILD FAILURE ANALYSIS ==="
-                if repeated:
-                    question += "\n\nREPEATED ERRORS:"
-                    for sig, count in repeated[:5]:
-                        question += f"\n  [{count}x] {sig[:300]}"
-                question += "\n\nRECENT ERRORS:"
-                for i, err in enumerate(recent_errors, 1):
-                    question += f"\n\nAttempt {attempt - len(recent_errors) + i + 1}:\n{err[:2000]}"
+            # Subsequent attempts: use LLM for build guidance
+            question = self._build_llm_question(phase_name, attempt, build_commands_str)
             
             response = self.ask_llm(question)
             self.log_llm_reasoning("LLM reasoning:", response.get('reasoning', ''))
             
-            success = self._execute_build(response)
+            success, stdout, stderr = self._execute_build(response)
             
             if success:
-                validation_success = self._validate_cg_cfg_artifacts() if phase_num == 1 else self._validate_instrumented_binary()
+                validation_success = self._validate_build_phase(phase_num)
                 if validation_success:
                     self.logger.info("Build successful and validated!")
                     return True
+            else:
+                # Use BaseAgent's diagnose_and_fix_build_error for recovery
+                if attempt < max_build_attempts - 1:
+                    self.logger.info("Analyzing build error with LLM...")
+                    # Get current commands from response for error context
+                    commands = response.get('commands', [])
+                    script_content = self._prepare_build_script(commands) if commands else current_build_script
+                    
+                    fixed_script = self.diagnose_and_fix_build_error(
+                        error=stderr,
+                        output=stdout,
+                        build_commands=script_content,
+                        project_name=self.repo_name,
+                        context=f"Phase: {phase_name}, CVE: {self.config.get('cve_id', 'N/A')}",
+                        system_prompt=self.AFLGO_SYSTEM_PROMPT,
+                        fallback_fixes=self._aflgo_fallback_fixes
+                    )
+                    if fixed_script:
+                        current_build_script = fixed_script
         
         self.state.record_error(f"Build failed after {max_build_attempts} attempts", context=f"build_{phase_num}")
         return False
     
-    def _execute_build(self, llm_response: Dict) -> bool:
-        """Execute build based on LLM guidance"""
+    def _setup_build_environment(self, phase_num: int, targets_file: Path, distance_file: Path):
+        """Setup environment variables for build phase"""
+        # Reset environment
+        for key in ['CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS']:
+            if self.original_env[key]:
+                os.environ[key] = self.original_env[key]
+            elif key in os.environ:
+                del os.environ[key]
+        
+        # Set compiler flags based on phase
+        if phase_num == 1:
+            additional = f"-targets={targets_file} -outdir={self.temp_dir} -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps"
+            os.environ['CFLAGS'] = f"{additional} -g"
+            os.environ['CXXFLAGS'] = f"{additional} -g"
+        else:
+            os.environ['CFLAGS'] = f"-distance={distance_file.resolve()}"
+            os.environ['CXXFLAGS'] = f"-distance={distance_file.resolve()}"
+        
+        custom_cflags = self.config.get('build_config', {}).get('cflags', '')
+        if custom_cflags:
+            os.environ['CFLAGS'] = f"{custom_cflags} {os.environ['CFLAGS']}"
+            os.environ['CXXFLAGS'] = f"{custom_cflags} {os.environ['CXXFLAGS']}"
+    
+    def _validate_build_phase(self, phase_num: int) -> bool:
+        """Validate build artifacts for the given phase"""
+        if phase_num == 1:
+            return self._validate_cg_cfg_artifacts()
+        else:
+            return self._validate_instrumented_binary()
+    
+    def _build_llm_question(self, phase_name: str, attempt: int, build_commands_str: str) -> str:
+        """Build the LLM question for build guidance"""
+        has_cmake = (self.subject_dir / 'CMakeLists.txt').exists()
+        has_configure_ac = (self.subject_dir / 'configure.ac').exists()
+        has_configure = (self.subject_dir / 'configure').exists()
+        has_makefile = (self.subject_dir / 'Makefile').exists()
+        has_autogen = (self.subject_dir / 'autogen.sh').exists()
+        
+        build_script_section = ""
+        if build_commands_str:
+            build_script_section = f"Reference build script:\n```bash\n{build_commands_str}\n```"
+        
+        question = DA_build_prompt.format(
+            phase_name=phase_name,
+            attempt=attempt + 1,
+            cc=os.environ.get('CC'),
+            cxx=os.environ.get('CXX'),
+            cflags=os.environ.get('CFLAGS'),
+            cxxflags=os.environ.get('CXXFLAGS'),
+            has_cmake=has_cmake,
+            has_configure_ac=has_configure_ac,
+            has_configure=has_configure,
+            has_makefile=has_makefile,
+            has_autogen=has_autogen,
+            build_script_section=build_script_section
+        )
+        
+        if attempt > 0:
+            recent_errors = self.state.errors[-min(3, len(self.state.errors)):]
+            repeated = self.state.get_repeated_errors(2)
+            question += "\n\n=== BUILD FAILURE ANALYSIS ==="
+            if repeated:
+                question += "\n\nREPEATED ERRORS:"
+                for sig, count in repeated[:5]:
+                    question += f"\n  [{count}x] {sig[:300]}"
+            question += "\n\nRECENT ERRORS:"
+            for i, err in enumerate(recent_errors, 1):
+                question += f"\n\nAttempt {attempt - len(recent_errors) + i + 1}:\n{err[:2000]}"
+        
+        return question
+    
+    def _aflgo_fallback_fixes(self, error: str, build_commands: str) -> Optional[str]:
+        """AFLGo-specific fallback fixes for common build errors
+        
+        Args:
+            error: Build error message
+            build_commands: Current build commands
+            
+        Returns:
+            Fixed build commands if a fix is found, None otherwise
+        """
+        # Handle common AFLGo-specific errors
+        error_lower = error.lower()
+        
+        # LTO/gold linker issues
+        if 'plugin-opt' in error_lower or 'gold' in error_lower:
+            self.logger.info("Attempting fix: LTO/gold linker issue")
+            # Remove -flto and gold linker flags
+            fixed = build_commands.replace('-flto', '')
+            fixed = fixed.replace('-fuse-ld=gold', '')
+            fixed = re.sub(r'-Wl,-plugin-opt[^\s]*', '', fixed)
+            return fixed
+        
+        # Missing pthread
+        if 'pthread' in error_lower and 'undefined reference' in error_lower:
+            self.logger.info("Attempting fix: pthread linking issue")
+            if '-lpthread' not in build_commands:
+                return build_commands + '\nexport LDFLAGS="$LDFLAGS -lpthread"'
+        
+        return None
+    
+    def _execute_build(self, llm_response: Dict) -> Tuple[bool, str, str]:
+        """Execute build based on LLM guidance
+        
+        Returns:
+            Tuple of (success, stdout, stderr)
+        """
         try:
             commands = llm_response.get('commands', [])
             if not commands:
@@ -704,12 +697,13 @@ Provide exact shell commands. Respond in JSON:
             
             if not commands:
                 self.state.record_error("LLM provided no commands", context="build")
-                return False
+                return False, "", "LLM provided no commands"
             
             return self._execute_commands(commands)
         except Exception as e:
-            self.state.record_error(f"Exception in _execute_build: {str(e)}", context="build")
-            return False
+            error_msg = f"Exception in _execute_build: {str(e)}"
+            self.state.record_error(error_msg, context="build")
+            return False, "", error_msg
     
     def _extract_commands_from_reasoning(self, reasoning: str) -> List[str]:
         """Extract commands from LLM reasoning"""
@@ -749,13 +743,16 @@ Provide exact shell commands. Respond in JSON:
         self.logger.info(f"Found instrumented binary: {binary_path}")
         return True
     
-    def _execute_commands(self, commands: List[str]) -> bool:
-        """Execute commands in single shell session"""
-        if not commands:
-            return True
+    def _execute_commands(self, commands: List[str]) -> Tuple[bool, str, str]:
+        """Execute commands in single shell session using BaseAgent's run_build
         
-        # Safety checks
-        aflgo_protected_paths = [str(self.aflgo_dir), 'aflgo-clang', 'aflgo/instrument']
+        Returns:
+            Tuple of (success, stdout, stderr)
+        """
+        if not commands:
+            return True, "", ""
+        
+        # Safety checks for AFLGo-specific paths
         dangerous_patterns = [
             (r'\brm\s+.*aflgo/(instrument|distance)', 'removing AFLGo files'),
             (r'\bmv\s+.*aflgo/(instrument|distance)', 'moving AFLGo files'),
@@ -772,9 +769,40 @@ Provide exact shell commands. Respond in JSON:
                     error_msg = f"BLOCKED: {description}: {cmd}"
                     self.logger.error(error_msg)
                     self.state.record_error(error_msg, context="safety")
-                    return False
+                    return False, "", error_msg
         
-        # Build script
+        # Build script content
+        script_content = self._prepare_build_script(commands)
+        
+        GREEN = '\033[92m'
+        RESET = '\033[0m'
+        self.logger.info(f"{GREEN}Executing build commands:{RESET}")
+        for i, cmd in enumerate(commands):
+            if cmd.strip():
+                self.logger.info(f"{GREEN}  [{i+1}] {cmd.strip()}{RESET}")
+        
+        # Use BaseAgent's run_build method
+        success, stdout, stderr = self.run_build(
+            build_commands=script_content,
+            cwd=self.subject_dir,
+            timeout=1200  # 20 minutes for AFLGo builds
+        )
+        
+        if not success:
+            error_context = f"Commands failed\nOutput:\n{stdout}\nError:\n{stderr}"
+            self.state.record_error(error_context, context=f"phase_{self.state.phase}")
+        
+        return success, stdout, stderr
+    
+    def _prepare_build_script(self, commands: List[str]) -> str:
+        """Prepare build script from command list
+        
+        Args:
+            commands: List of commands to execute
+            
+        Returns:
+            Shell script content
+        """
         script_lines = ['#!/bin/bash', 'set -e', '']
         
         for i, cmd in enumerate(commands):
@@ -788,51 +816,7 @@ Provide exact shell commands. Respond in JSON:
             script_lines.append(cmd)
             script_lines.append('')
         
-        script_content = '\n'.join(script_lines)
-        
-        GREEN = '\033[92m'
-        RESET = '\033[0m'
-        self.logger.info(f"{GREEN}Executing build commands:{RESET}")
-        for i, cmd in enumerate(commands):
-            if cmd.strip():
-                self.logger.info(f"{GREEN}  [{i+1}] {cmd.strip()}{RESET}")
-        
-        # Execute with streaming output
-        process = subprocess.Popen(
-            script_content,
-            shell=True,
-            cwd=self.subject_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            executable='/bin/bash',
-            bufsize=1
-        )
-        
-        output_lines = []
-        for line in process.stdout:
-            # Write to console
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            # Log to file (strip ANSI color codes for clean logs)
-            clean_line = re.sub(r'\x1b\[[0-9;]*m', '', line.rstrip())
-            if clean_line:
-                self.logger.info(f"BUILD: {clean_line}")
-            output_lines.append(line)
-        
-        process.wait()
-        result_stdout = ''.join(output_lines)
-        
-        if process.returncode != 0:
-            error_context = f"Commands failed\nExit code: {process.returncode}\nOutput:\n{result_stdout}"
-            self.logger.error(f"Build failed with exit code {process.returncode}")
-            self.logger.error(f"Last 1000 chars of output: {result_stdout[-1000:]}")
-            self.state.record_error(error_context, context=f"phase_{self.state.phase}")
-            return False
-        
-        self.logger.info(f"Build commands completed successfully")
-        
-        return True
+        return '\n'.join(script_lines)
     
     def phase_generate_distance(self) -> bool:
         """Phase 3: Generate distance file"""
@@ -890,29 +874,14 @@ Provide exact shell commands. Respond in JSON:
         # Fallback to LLM if direct approach failed
         self.logger.info("Falling back to LLM for distance generation")
         
-        question = f"""Distance generation FAILED with this error:
-{stderr[:500] if stderr else 'Unknown error'}
-
-**Configuration:**
-- Subject directory: {self.subject_dir}
-- Temp directory: {self.temp_dir}
-- Binary name: {binary_name}
-- Binary path tried: {binary_path_resolved}
-
-**Command format:**
-python3 $AFLGO/distance/gen_distance_fast.py <binary_path> <temp_dir> <fuzzer_name>
-
-**Examples that work:**
-- python3 gen_distance_fast.py $SUBJECT $TMP_DIR jq
-- python3 gen_distance_fast.py $SUBJECT/build $TMP_DIR njs
-
-**Your task:** Provide ONE command that will work. Do NOT use 'find' or other diagnostic commands.
-
-Respond in JSON:
-{{
-  "reasoning": "why this binary_path and fuzzer_name will work",
-  "commands": ["python3 {self.aflgo_dir}/distance/gen_distance_fast.py <correct_path> {self.temp_dir} {binary_name}"]
-}}"""
+        question = DA_distance_generation_prompt.format(
+            error=stderr[:500] if stderr else 'Unknown error',
+            subject_dir=self.subject_dir,
+            temp_dir=self.temp_dir,
+            binary_name=binary_name,
+            binary_path=binary_path_resolved,
+            aflgo_dir=self.aflgo_dir
+        )
         
         response = self.ask_llm(question)
         self.log_llm_reasoning("LLM reasoning:", response.get('reasoning', ''))
