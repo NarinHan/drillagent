@@ -1,96 +1,26 @@
 import os
 import subprocess
 import logging
+import yaml
 from pathlib import Path
-from typing import Optional, Union, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from drillagent.task_loader.sec_bench import SecbTask
+from typing import Optional
 
 def get_file_size(file_path: str) -> int:
     # Get the size of a file in bytes.
     return os.path.getsize(file_path)
 
-def get_repo_commit(repo_path: Path, logger: logging.Logger = None) -> Optional[str]:
-    """Get the current commit SHA of a git repository
-    
-    Args:
-        repo_path: Path to the git repository
-        logger: Logger instance (optional)
-    
-    Returns:
-        40-character commit SHA if successful, None otherwise
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-    
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', 'HEAD'],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
-        if result.returncode == 0:
-            commit = result.stdout.strip()
-            if len(commit) == 40:  # Valid SHA
-                return commit
-            else:
-                logger.warning(f"Invalid commit SHA: {commit}")
-                return None
-        else:
-            logger.warning(f"git rev-parse failed: {result.stderr}")
-            return None
-            
-    except Exception as e:
-        logger.warning(f"Failed to get repo commit: {e}")
-        return None
-
-def check_repo_at_commit(
-    repo_path: Path,
-    expected_commit: str,
-    logger: logging.Logger = None
-) -> bool:
-    """Check if a repository is at the expected commit
-    
-    Args:
-        repo_path: Path to the git repository
-        expected_commit: Expected 40-character commit SHA
-        logger: Logger instance (optional)
-    
-    Returns:
-        True if repo is at expected commit, False otherwise
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-    
-    current_commit = get_repo_commit(repo_path, logger)
-    
-    if not current_commit:
-        logger.warning("Could not determine current commit")
-        return False
-    
-    if current_commit == expected_commit:
-        logger.debug(f"Repo at expected commit: {current_commit[:12]}...")
-        return True
-    else:
-        logger.debug(f"Commit mismatch: current={current_commit[:12]}..., expected={expected_commit[:12]}...")
-        return False
-
 def check_coverage_binary_exists(
     target_repo_path: Path,
-    secb_task: "SecbTask" = None,
+    cve_id: str,
     logger: logging.Logger = None
 ) -> Optional[Path]:
     """High-level function to check if coverage-instrumented binary exists for a CVE
     
-    This function uses SecbTask data to check for existing instrumented binary.
+    This function handles loading the instrumentation config and checking for existing binary.
     
     Args:
         target_repo_path: Path to the target repository
-        secb_task: SecbTask instance with binary_name, binary_path, project_name
+        cve_id: CVE ID (e.g., 'CVE-2022-43284')
         logger: Logger instance (optional)
     
     Returns:
@@ -99,16 +29,35 @@ def check_coverage_binary_exists(
     if logger is None:
         logger = logging.getLogger(__name__)
     
-    if not secb_task:
-        logger.debug("No SecbTask provided, cannot check for existing binary")
-        return None
-    
     try:
+        # Load instrumentation config
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent.parent.parent  # Go up from src/drillagent/utils/utils.py to DrillAgent root
+        config_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
+        cve_pattern = f"*.{cve_id.lower()}.yaml"
+        matches = list(config_dir.glob(cve_pattern))
+        
+        if not matches:
+            logger.debug(f"No instrumentation config found for {cve_id}")
+            return None
+        
+        config_path = matches[0]
+        with open(config_path, 'r') as f:
+            instr_config = yaml.safe_load(f)
+        
+        # Extract project name from repo_url
+        repo_url = instr_config.get('repo_url', '')
+        if repo_url:
+            project_name = repo_url.rstrip('/').rstrip('.git').split('/')[-1]
+        else:
+            # Fallback to extracting from target_repo_path
+            project_name = target_repo_path.name
+        
+        # Check for existing instrumentation
         return check_existing_coverage_instrumentation(
             target_repo=Path(target_repo_path),
-            binary_name=secb_task.binary_name,
-            binary_path=secb_task.binary_path,
-            project_name=secb_task.project_name,
+            instr_config=instr_config,
+            project_name=project_name,
             logger=logger
         )
     except Exception as e:
@@ -117,8 +66,7 @@ def check_coverage_binary_exists(
 
 def check_existing_coverage_instrumentation(
     target_repo: Path,
-    binary_name: str,
-    binary_path: str,
+    instr_config: dict,
     project_name: str,
     logger: logging.Logger = None
 ) -> Optional[Path]:
@@ -126,8 +74,7 @@ def check_existing_coverage_instrumentation(
     
     Args:
         target_repo: Path to the target repository
-        binary_name: Name of the binary (e.g., 'njs')
-        binary_path: Path to binary from secb_sh (e.g., '/src/njs/build/njs')
+        instr_config: Instrumentation configuration dictionary
         project_name: Name of the project
         logger: Logger instance (optional)
     
@@ -138,7 +85,7 @@ def check_existing_coverage_instrumentation(
         logger = logging.getLogger(__name__)
     
     # Try to locate the binary first
-    binary = locate_instrumented_binary(target_repo, binary_name, binary_path, project_name, logger)
+    binary = locate_instrumented_binary(target_repo, instr_config, project_name, logger)
     
     if not binary or not binary.exists():
         logger.info("  No existing binary found")
@@ -166,23 +113,24 @@ def check_existing_coverage_instrumentation(
 
 def locate_instrumented_binary(
     target_repo: Path,
-    binary_name: str,
-    binary_path: str,
+    instr_config: dict,
     project_name: str,
     logger: logging.Logger
 ) -> Optional[Path]:
-    """Locate the instrumented binary after build
+    """Locate the instrumented binary after build using config
     
     Args:
         target_repo: Path to the target repository
-        binary_name: Name of the binary (e.g., 'njs')
-        binary_path: Path to binary from secb_sh (e.g., '/src/njs/build/njs')
+        instr_config: Instrumentation configuration dictionary
         project_name: Name of the project
         logger: Logger instance
     
     Returns:
         Path to binary if found, None otherwise
     """
+    binary_name = instr_config.get('binary_name', '')
+    binary_path = instr_config.get('binary_path', '')
+    
     if binary_path:
         # binary_path may be Docker path like "/src/njs/build/njs"
         # Try multiple path variations:
