@@ -109,7 +109,7 @@ class VulnAnalysisAgent:
 
 
     def run(self) -> 'VulnInfo':
-        # Run vulnerability analysis
+        # Run vulnerability analysis with a VulnInfo object returned.
         self.logger.info("  [VulnAnalysisAgent] Starting vulnerability analysis...")
 
         if not self.llm or not self.tools:
@@ -124,7 +124,7 @@ class VulnAnalysisAgent:
         raw_harness_command  = self.config.harness_command
         self.logger.info(f"  [VulnAnalysisAgent] Actual repo path: {len(actual_repo_path)}.")
 
-        # Try to load from cache first.
+        # Before all, Try to load from cache first.
         if self.load_from_cache():
             self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
             return self.vuln_info
@@ -152,9 +152,11 @@ class VulnAnalysisAgent:
             self.logger.info(f"  [VulnAnalysisAgent] Refining harness command complete!")
 
         # Substep3: Perform root cause analysis
-        # self.logger.info("  [VulnAnalysisAgent] Performing root cause analysis...")
-        # self._root_cause_analysis()
-        # LHY: Currently we skip this step to save cost and time.
+        if not self.config.disable_root_cause_analysis:
+            self.logger.info("  [VulnAnalysisAgent] Performing root cause analysis...")
+            self._root_cause_analysis()
+        else:
+            self.logger.info("  [VulnAnalysisAgent] Root cause analysis is disabled by configuration. Skipping!")
 
         # Store results to cache for future use
         self.store_to_cache()
@@ -163,6 +165,7 @@ class VulnAnalysisAgent:
 
     def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report):
         # Extract vulnerability information from sanitizer report using LLM with tools
+        # LLM: Non-loop invocations.
         try:
             # Prepare the prompt
             prompt = VAA_sanitizer_extraction_prompt.format(
@@ -180,7 +183,8 @@ class VulnAnalysisAgent:
                 max_tokens=4096
             )
 
-            # FIX: TODO: The 3 LLM invokings in this `_extract_sanitizer_report` function is really weird... (by LHY)
+            # FIX: The 3 LLM invokings in this `_extract_sanitizer_report` function is really weird... (by LHY)
+            # TODO: Use the updated message and tool call history management in LLM class here!!!
             # Check if we need tools (if response doesn't contain JSON)
             has_json = '{' in response and '}' in response
             if not has_json:
@@ -221,8 +225,8 @@ class VulnAnalysisAgent:
                     max_tokens=2048
                 )
 
-            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
-            self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response}")
+            self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
+            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response}")
 
             # Extract JSON from response (handle multiple formats)
             # Try to extract JSON from markdown code block
@@ -287,6 +291,7 @@ class VulnAnalysisAgent:
 
     def _refine_harness_command(self, project_name, actual_repo_path, raw_harness_command):
         # Refine harness command to use actual paths using LLM with tools
+        # LLM: Little-loop invocations.
         try:
             # Prepare the prompt
             prompt = VAA_harness_refine_prompt.format(
@@ -407,32 +412,55 @@ class VulnAnalysisAgent:
                     self.vuln_info.binary_path = parts[0]
 
     def _root_cause_analysis(self):
-        """Perform root cause analysis using LLM with tools"""
+        # Perform root cause analysis using LLM with tools.
+        ### Core idea here is to let LLM explore the codebase along call trace with tools.
+        ### Results will be stored in a markdown file in store_to_cache().
+        # LLM: Loop invocations with proper conversation history management.
         try:
-            # Prepare the prompt
-            prompt = VAA_root_cause_analysis_prompt.format(
-                project_name=self.config.project_name,
-                vuln_type=self.vuln_info.vuln_type,
-                refined_vuln_location=self.vuln_info.refined_vuln_location,
-                crash_function=self.vuln_info.crash_function,
-                entry_location=self.vuln_info.entry_location,
-                entry_function=self.vuln_info.entry_function,
-                sanitizer_report=self.config.sanitizer_report[:2000]  # Truncate for brevity
-            )
-
             # Call LLM with tools - allow multiple rounds for deep analysis
             self.logger.info("    Calling LLM for root cause analysis...")
-            max_rounds = 10
-            current_prompt = prompt
+            max_rca_rounds = 20
+            conversation_history = []  # Maintain conversation history for multi-turn LLM interaction
             all_responses = []
 
-            for round_num in range(max_rounds):
-                self.logger.info(f"      [Round {round_num + 1}/{max_rounds}]")
+            for round_num in range(max_rca_rounds):
+                self.logger.info(f"      [Round {round_num + 1}/{max_rca_rounds}]")
 
-                response, tool_calls, _ = self.llm.generate_with_tools(
+                # Prepare current user prompt
+                if round_num == 0:
+                    # First round: create full initial prompt
+                    current_prompt = VAA_root_cause_analysis_prompt.format(
+                        project_name=self.config.project_name,
+                        actual_repo_path=self.config.target_repo_path,
+                        vuln_type=self.vuln_info.vuln_type,
+                        crash_location=self.vuln_info.refined_vuln_location,
+                        crash_function=self.vuln_info.crash_function,
+                        entry_location=self.vuln_info.entry_location,
+                        entry_function=self.vuln_info.entry_function,
+                        refined_harness_command=self.vuln_info.refined_harness_command,
+                        refined_call_trace=self.vuln_info.get_refined_call_trace_as_string()
+                    )
+                elif round_num == max_rca_rounds - 1:
+                    # Last round: urge LLM to provide final analysis
+                    if conversation_history and conversation_history[-1]["role"] == "user":
+                        current_prompt = conversation_history.pop()["content"]
+                    else:
+                        current_prompt = ""
+                    current_prompt += "\n\nThis is the last round. Please provide your complete root cause analysis now."
+                else:
+                    # Subsequent rounds: pop the last user message from conversation_history
+                    # This message was added at the end of previous round (tool results with continuation prompt)
+                    if conversation_history and conversation_history[-1]["role"] == "user":
+                        current_prompt = conversation_history.pop()["content"]
+                    else:
+                        current_prompt = "Please continue your root cause analysis."
+
+                # Invoke LLM with conversation history
+                response, tool_calls, assistant_message = self.llm.generate_with_tools(
                     prompt=current_prompt,
                     tools=self.tools,
                     system_prompt=VAA_system_prompt,
+                    conversation_history=conversation_history,
                     temperature=0.3,
                     max_tokens=4096
                 )
@@ -440,9 +468,18 @@ class VulnAnalysisAgent:
                 self.logger.info(f"      LLM Response: {response[:200]}...")
                 all_responses.append(response)
 
+                # Add current turn's user prompt to conversation history
+                conversation_history.append({
+                    "role": "user",
+                    "content": current_prompt
+                })
+
+                # Add assistant's complete response (in official API format) to conversation history
+                conversation_history.append(assistant_message)
+
                 # If no tool calls, LLM is done with analysis
                 if not tool_calls:
-                    self.logger.info(f"      LLM finished root cause analysis")
+                    self.logger.info(f"      LLM finished root cause analysis (no more tool calls).")
                     self.vuln_info.root_cause = response
                     break
 
@@ -454,28 +491,46 @@ class VulnAnalysisAgent:
                     tool_args = tool_call.get('arguments', {})
                     self.logger.debug(f"        {tool_name}({json.dumps(tool_args)})")
 
+                    result = None
                     for tool in self.tools:
                         if tool.name() == tool_name:
                             try:
                                 result = tool.execute(**tool_args)
-                                tool_results.append(result)
                                 # Show preview of result
                                 if result.get('success') and 'content' in result:
                                     lines = result['content'].split('\n')[:5]
                                     self.logger.debug(f"        Result preview: {chr(10).join(lines)}")
                             except Exception as e:
                                 self.logger.error(f"        Tool error: {e}")
+                                result = f"Error: {str(e)}"
                             break
 
-                # Prepare next round prompt
-                current_prompt = f"""Based on the code you examined, continue your root cause analysis.
+                    # Store result (handle case where tool wasn't found)
+                    tool_results.append(result if result is not None else "No result")
 
-Tool results:
-{json.dumps(tool_results, indent=2)[:3000]}
+                # Create tool result message in official API format
+                tool_result_msg = self.llm.create_tool_result_message(tool_calls, tool_results)
 
-Provide your complete root cause analysis explanation."""
+                # Handle different LLM providers
+                if "_openai_tool_messages" in tool_result_msg:
+                    # OpenAI: add each tool result message separately
+                    for msg in tool_result_msg["_openai_tool_messages"]:
+                        conversation_history.append(msg)
+                    # Add continuation prompt as the last user message
+                    conversation_history.append({
+                        "role": "user",
+                        "content": "Please continue your root cause analysis based on the code you examined."
+                    })
+                else:
+                    # Claude: single user message with tool_result blocks
+                    # Append continuation prompt to the tool result message
+                    tool_result_msg["content"].append({
+                        "type": "text",
+                        "text": "Please continue your root cause analysis based on the code you examined."
+                    })
+                    conversation_history.append(tool_result_msg)
 
-            # Use last response as root cause if not set
+            # Use last response as root cause if not set (fallback)
             if not self.vuln_info.root_cause and all_responses:
                 self.vuln_info.root_cause = all_responses[-1]
 
@@ -495,6 +550,7 @@ Provide your complete root cause analysis explanation."""
             List of structured call trace entries with validated file paths,
             from entry_function to crash_function
         """
+        # LLM: Non-loop single invocation.
         structured_trace = []
 
         try:
@@ -779,3 +835,17 @@ class VulnInfo:
         lines.append("=" * 80)
         # print('\n'.join(lines))
         return '\n'.join(lines)
+
+    def get_refined_call_trace_as_string(self) -> str:
+        # Get the refined call trace as a formatted string
+        if not self.call_trace or len(self.call_trace) == 0:
+            return self.raw_call_trace if self.raw_call_trace else "N/A"
+        lines = []
+        for entry in self.call_trace:
+            seq_num = entry.get('sequence_num', 'N/A')
+            func_name = entry.get('function_name', 'N/A')
+            file_path = entry.get('file_path', 'N/A')
+            line_number = entry.get('line_number', 'N/A')
+            lines.append(f"  #{seq_num}: {func_name} @ {file_path}:{line_number}")
+        return '\n'.join(lines)
+

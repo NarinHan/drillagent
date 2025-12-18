@@ -184,34 +184,42 @@ Now provide the final refined harness information in JSON format:
 VAA_root_cause_analysis_prompt = """You are performing root cause analysis for a vulnerability.
 
 Project: {project_name}
+Repository path: {actual_repo_path}
 
 Vulnerability Information:
 - Vuln Type: {vuln_type}
-- Crash Location: {refined_vuln_location}
+- Crash Location: {crash_location}
 - Crash Function: {crash_function}
 - Entry Location: {entry_location}
 - Entry Function: {entry_function}
 
-Sanitizer Report:
+Command to trigger the vulnerability crash:
 ```
-{sanitizer_report}
+{refined_harness_command}
+```
+
+Call trace to trigger the vulnerability crash (from a sanitizer report):
+```
+{refined_call_trace}
 ```
 
 Your task is to explain the ROOT CAUSE of this vulnerability:
 
-1. Examine the source code at the crash location
-2. Trace back through the call stack to understand the flow
-3. Identify WHY the vulnerability occurs (e.g., missing bounds check, use-after-free due to dangling pointer)
-4. Explain what conditions trigger it
+1. Examine the source code at the crash location.
+2. Follow the above call trace to retrieve the source code around the corresponding locations, and analyze the data flow along the function calls, with particular attention to the call sites at each layer.
+3. Identify WHY the vulnerability occurs during analysis. (e.g., missing bounds check, use-after-free due to dangling pointer)
 
-Use the read_file tool to examine relevant source files.
+Use the provided tools (mainly read_file) to examine relevant source files.
+- All the relative file paths are based on the repository root: {actual_repo_path}
+- Some source file line numbers may be inaccurate (i.e., target source line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion.
+- You may need to read a few more lines further down, and use the callee functionn name in the next stack frame to pinpoint the correct call-site code snippet!!
 
-Provide a clear, technical explanation of:
+Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE ANALYSIS" and covering:
 - What the vulnerability is
 - Why it occurs (the root cause)
 - What code pattern or logic flaw enables it
+- Explain what conditions trigger it!
 
-Be specific and reference actual code when possible.
 """
 
 

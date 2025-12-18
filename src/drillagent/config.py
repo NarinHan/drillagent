@@ -44,6 +44,8 @@ class AgentConfig:
     disable_crash_trigger_analysis: bool     = False
     disable_advanced_agent_tools: bool       = False # To be discussed
     disable_in_context_rl: bool              = False # To be discussed
+    # More fine-grained ablation options can be added here.
+    disable_root_cause_analysis: bool        = False
     # Instrumentation options are not needed (LHY: The instrumentation choice should be fixed by us.)
 
     #

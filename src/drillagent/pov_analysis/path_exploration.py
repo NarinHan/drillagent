@@ -86,6 +86,7 @@ class PathExplorationAgent:
             exit_code, exec_output = self._execute_test_case(test_case_path)
 
             # Special: Check early-stop after each execution
+            # TODO: Handle after stop detected.
             self._detect_stop_status(exit_code, exec_output)
 
             # Substep3: Collect coverage feedback along the vulnerable call trace
@@ -501,7 +502,7 @@ class PathExplorationAgent:
         # Summary
         total_count = len(callsite_coverage_list)
         coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0
-        output_lines.append(f"\n[COVERAGE SUMMARY]")
+        output_lines.append(f"[COVERAGE SUMMARY]")
         output_lines.append(f"  Total callsites in trace: {total_count}")
         output_lines.append(f"  Functions executed:       {covered_count} ({coverage_percentage:.1f}%)")
         output_lines.append(f"  Functions not executed:   {uncovered_count}")
@@ -616,8 +617,9 @@ class PathExplorationAgent:
                 # Print crash information to console for visibility
                 print("\n")
                 print("=" * 80)
-                print("*** CRASH INPUT POV DISCOVERED ***")
+                print("CRASH INPUT POV DISCOVERED")
                 print("=" * 80)
+                print(f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!")
                 print(f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}")
                 print(f"Exit Code:       {exit_code}")
                 print(f"Test Case Path:  {current_testcase_path}")
