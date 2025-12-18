@@ -11,11 +11,9 @@ claude.key
 gemini.key
 src/drillagent/scripts/lhy_test.py
 
-# AFLGO agent
+# Phase 1: instrumentation agents
 instrumented/
-src/instrumentation/configs/
-src/instrumentation/repos/
-src/instrumentation/fuzzing/
+src/instrumentation/
 fuzzing/
 repos/
 output/

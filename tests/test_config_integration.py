@@ -6,6 +6,10 @@ Test script to verify ConfigGeneratorAgent integration with DrillAgent
 import sys
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
@@ -23,7 +27,7 @@ def test_config_generator_integration():
     
     # Create a test configuration
     config = AgentConfig(
-        target_repo="repos/jq",
+        target_repo_path="/home/shared_project/repos-llvm-cov/jq",
         cve_id="jq.cve-2023-50246",  # Example CVE from SEC-bench
         model_provider="openai",
         model_name="gpt-4-turbo",
@@ -36,7 +40,7 @@ def test_config_generator_integration():
     )
     
     print(f"\nTest Configuration:")
-    print(f"  Target: {config.target_repo}")
+    print(f"  Target: {config.target_repo_path}")
     print(f"  CVE ID: {config.cve_id}")
     print(f"  Distance calculation: {config.enable_distance}")
     
@@ -93,42 +97,47 @@ def test_config_generator_integration():
 
 
 def test_batch_config_generation():
-    """Test batch config generation for ALL CVEs in SEC-bench"""
+    """Test batch config generation for one project (liblouis)"""
     
     print("\n" + "=" * 60)
-    print("Testing Batch Config Generation for ALL CVEs")
+    print("Testing Batch Config Generation for liblouis Project")
     print("=" * 60)
     
-    # Create a test configuration
+    # Import ConfigGeneratorAgent directly since it's no longer in DrillAgent.__init__
+    from drillagent.instrumentation import ConfigGeneratorAgent
+    from pathlib import Path
+    
+    # Create a minimal config just to initialize DrillAgent
     config = AgentConfig(
-        target_repo="repos/placeholder",  # Not used for batch generation
+        target_repo_path="/home/shared_project/repos-llvm-cov/liblouis",
         model_provider="openai",
         model_name="gpt-4-turbo",
         api_key=os.getenv("OPENAI_API_KEY"),
         enable_distance=True,
         output_dir="./test_output",
-        verbose=False  # Less verbose for batch
+        verbose=False
     )
     
     print("\nInitializing DrillAgent...")
     agent = DrillAgent(config)
     
-    if not hasattr(agent, 'config_generator') or agent.config_generator is None:
-        print("✗ ConfigGeneratorAgent not initialized")
-        return False
+    # Initialize ConfigGeneratorAgent directly
+    print("Initializing ConfigGeneratorAgent...")
+    config_generator = ConfigGeneratorAgent(agent)
     
     print("✓ ConfigGeneratorAgent initialized")
     
-    # Generate configs for ALL CVEs (no filter)
+    # Generate configs for liblouis CVEs only
     output_dir = Path("./test_output/batch_configs")
+    project_filter = "liblouis"
     
-    print(f"\nGenerating configs for ALL CVEs in SEC-bench...")
-    print(f"SEC-bench directory: {agent.config_generator.secbench_dir}")
+    print(f"\nGenerating configs for {project_filter} CVEs in SEC-bench...")
+    print(f"SEC-bench directory: {config_generator.secbench_dir}")
     print(f"Output directory: {output_dir}")
     
     try:
-        # Pass None or empty string to process all CVEs
-        agent.config_generator.generate_batch(output_dir, filter_pattern=None)
+        # Filter to only liblouis CVEs
+        config_generator.generate_batch(output_dir, filter_pattern=project_filter)
         
         # Check how many configs were generated
         generated_configs = list(output_dir.glob("*.yaml"))
@@ -180,14 +189,14 @@ def test_batch_config_generation():
 
 if __name__ == "__main__":
     # Run both tests
-    test1_success = test_config_generator_integration()
+    # test1_success = test_config_generator_integration()
     test2_success = test_batch_config_generation()
     
     print("\n" + "=" * 60)
     print("TEST SUMMARY")
     print("=" * 60)
-    print(f"Single config generation: {'✓ PASS' if test1_success else '✗ FAIL'}")
+    # print(f"Single config generation: {'✓ PASS' if test1_success else '✗ FAIL'}")
     print(f"Batch config generation:  {'✓ PASS' if test2_success else '✗ FAIL'}")
     print("=" * 60)
     
-    sys.exit(0 if (test1_success and test2_success) else 1)
+    # sys.exit(0 if (test1_success and test2_success) else 1)

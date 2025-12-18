@@ -5,7 +5,7 @@ This module handles code instrumentation for coverage tracking, distance calcula
 """
 
 from .base_agent import BaseAgent, AgentState
-from .instrumentation_agent import InstrumentationAgent
+from .distance_agent import DistanceAgent
 from .config_generator import ConfigGeneratorAgent
 from .coverage_agent import CoverageInstrumentAgent
 
@@ -16,7 +16,7 @@ from .coverage_agent import CoverageInstrumentAgent
 __all__ = [
     'BaseAgent', 
     'AgentState', 
-    'InstrumentationAgent', 
+    'DistanceAgent', 
     'ConfigGeneratorAgent',
     'CoverageInstrumentAgent'
 ]

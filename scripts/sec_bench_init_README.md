@@ -39,7 +39,7 @@ The script clones these 29 projects:
 
 | # | Project | Repository URL | CVE Count |
 |---|---------|---------------|-----------|
-| 1 | exiv2 | https://github.com/exiv2/exiv2 | 10 |
+| 1 | exiv2 | https://github.com/exiv2/exiv2 | 10 | 
 | 2 | faad2 | https://github.com/knik0/faad2 | 12 |
 | 3 | gpac | https://github.com/gpac/gpac | 43 |
 | 4 | imagemagick | https://github.com/imagemagick/imagemagick | 33 |

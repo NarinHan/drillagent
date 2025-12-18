@@ -198,9 +198,11 @@ def main():
         enable_coverage=True,
         enable_distance=False,
         enable_sanitizer=False,
+        # disable_program_instrumentation=True,
         # Skip other phases
         disable_vulnerability_analysis=True,
-        disable_program_instrumentation=False,
+        disable_path_exploration=True,
+        disable_pov_generation=True,
     )
 
     # Create output directory

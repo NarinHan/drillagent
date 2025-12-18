@@ -6,14 +6,15 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
 from drillagent.models import LLM
-from drillagent.instrumentation import ConfigGeneratorAgent, InstrumentationAgent, CoverageInstrumentAgent
+from drillagent.instrumentation import ConfigGeneratorAgent, DistanceAgent, CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
+from drillagent.utils.utils import check_coverage_binary_exists
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -28,8 +29,11 @@ class DrillAgent:
         self.config = config       # Include all the PoV task information and configuration options.
         self.phase = "initialized" # TODO: initialized, instrumented, analyzing, exploring, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
-        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis
+        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis 
         self.skip_crash_trigger_analysis = config.disable_crash_trigger_analysis
+        self.skip_path_exploration = config.disable_path_exploration
+        self.skip_pov_generation = config.disable_pov_generation
+
         self.work_dir   = self.config.work_dir
         self.output_dir = self.config.output_dir
         self.iteration = 0
@@ -84,6 +88,10 @@ class DrillAgent:
         log_filename = f"drillagent_{repo_name}_{cve_id}.log"
         log_path = log_dir / log_filename
         
+        # Clean the log file if it already exists
+        if log_path.exists():
+            log_path.unlink()
+        
         # Also ensure output_dir exists for other files
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         
@@ -93,7 +101,7 @@ class DrillAgent:
             format='[%(asctime)s] %(levelname)s - %(message)s',
             handlers=[
                 logging.StreamHandler(sys.stdout),
-                logging.FileHandler(str(log_path))
+                logging.FileHandler(str(log_path), mode='w')  # Use 'w' mode to overwrite
             ]
         )
         
@@ -144,96 +152,75 @@ class DrillAgent:
 
         self.logger.info("Components initialized")
 
+    def _clean_repository(self):
+        # Clean build artifacts and git repository state
+        self.logger.info("Cleaning repository...")
+
+        # Clean build artifacts (make clean or equivalent)
+        self.logger.info("Cleaning build artifacts...")
+        clean_result = subprocess.run(
+            ['make', 'clean'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if clean_result.returncode == 0:
+            self.logger.info("✓ Build artifacts cleaned")
+        else:
+            self.logger.warning(f"make clean failed or not available (this is OK if no Makefile exists)")
+        
+        # Reset git repository state - discard all local changes
+        self.logger.info("Resetting git repository state...")
+        subprocess.run(
+            ['git', 'reset', '--hard', 'HEAD'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.logger.info("✓ Git repository reset to HEAD")
+        
+        # Clean untracked files and directories
+        self.logger.info("Cleaning untracked files...")
+        subprocess.run(
+            ['git', 'clean', '-fdx'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.logger.info("✓ Untracked files cleaned")
+
     def _checkout_base_commit(self):
         # Checkout the target repository to the specified base commit
         self.logger.info(f"Checking out base commit: {self.config.base_commit}")
 
-        # Verify target repo path exists
-        if not os.path.exists(self.config.target_repo_path):
-            error_msg = f"Target repository path does not exist: {self.config.target_repo_path}"
-            self.logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
+        # Checkout the target commit
+        result = subprocess.run(
+            ['git', 'checkout', self.config.base_commit],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
 
-        # Verify it's a git repository
-        git_dir = os.path.join(self.config.target_repo_path, '.git')
-        if not os.path.exists(git_dir):
-            error_msg = f"Target path is not a git repository: {self.config.target_repo_path}"
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        try:
-            # Step 1: Clean build artifacts (make clean or equivalent)
-            self.logger.info("Cleaning build artifacts...")
-            clean_result = subprocess.run(
-                ['make', 'clean'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            if clean_result.returncode == 0:
-                self.logger.info("✓ Build artifacts cleaned")
-            else:
-                self.logger.warning(f"make clean failed or not available (this is OK if no Makefile exists)")
-            
-            # Step 2: Reset git repository state - discard all local changes
-            self.logger.info("Resetting git repository state...")
-            subprocess.run(
-                ['git', 'reset', '--hard', 'HEAD'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            self.logger.info("✓ Git repository reset to HEAD")
-            
-            # Step 3: Clean untracked files and directories
-            self.logger.info("Cleaning untracked files...")
-            subprocess.run(
-                ['git', 'clean', '-fdx'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            self.logger.info("✓ Untracked files cleaned")
-            
-            # Step 4: Checkout the target commit
-            result = subprocess.run(
-                ['git', 'checkout', self.config.base_commit],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-
-            self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
-            if result.stdout:
-                self.logger.debug(f"Git output: {result.stdout.strip()}")
-            
-            # Step 5: Update git submodules
-            self.logger.info("Updating git submodules...")
-            result = subprocess.run(
-                ['git', 'submodule', 'update', '--init', '--recursive'],
-                cwd=self.config.target_repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            self.logger.info("✓ Successfully updated git submodules")
-            if result.stdout:
-                self.logger.debug(f"Submodule output: {result.stdout.strip()}")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = f"Failed to checkout commit {self.config.base_commit}: {e.stderr}"
-            self.logger.error(error_msg)
-            self.errors.append(error_msg)
-            raise RuntimeError(error_msg) from e
-        except Exception as e:
-            error_msg = f"Unexpected error during git checkout: {str(e)}"
-            self.logger.error(error_msg)
-            self.errors.append(error_msg)
-            raise
+        self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
+        if result.stdout:
+            self.logger.debug(f"Git output: {result.stdout.strip()}")
+        
+        # Update git submodules
+        self.logger.info("Updating git submodules...")
+        result = subprocess.run(
+            ['git', 'submodule', 'update', '--init', '--recursive'],
+            cwd=self.config.target_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.logger.info("✓ Successfully updated git submodules")
+        if result.stdout:
+            self.logger.debug(f"Submodule output: {result.stdout.strip()}")
 
     def run(self) -> Dict[str, Any]:
         """
@@ -248,9 +235,22 @@ class DrillAgent:
 
         # Checkout the base commit for the target repository
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
-        # self._checkout_base_commit() # Annotate before fixing Ray's "make clean" bug
 
         try:
+            # Always check if coverage instrumentation already exists
+            existing_binary = check_coverage_binary_exists(
+                target_repo_path=Path(self.config.target_repo_path),
+                cve_id=self.config.cve_id,
+                logger=self.logger
+            )
+            if existing_binary:
+                self.logger.info(f"✓ Using existing coverage-instrumented binary: {existing_binary}")
+                self.coverage_binary = existing_binary
+                # Disable coverage instrumentation since binary already exists
+                self.config.enable_coverage = False
+            else:
+                self.logger.info("No existing coverage-instrumented binary found; proceeding with instrumentation")
+            
             # Phase 1: Code Instrumentation
             if not self.skip_instrumentation:
                 self._phase_instrumentation()
@@ -260,10 +260,11 @@ class DrillAgent:
                 self._phase_vulnerability_analysis()
 
             # Phase 3: Path Exploration with the coverage feedback
-            self._phase_path_exploration()
+            if not self.skip_path_exploration:
+                self._phase_path_exploration()
 
             # Phase 4: PoV Generation and Verification
-            if not self.skip_crash_trigger_analysis:
+            if not self.skip_pov_generation:
                 self._phase_crash_triggering()
 
             # Mark as completed
@@ -326,7 +327,7 @@ class DrillAgent:
             with open(self.aflgo_config_path, 'r') as f:
                 config_dict = yaml.safe_load(f)
             
-            instrumentation_agent = InstrumentationAgent(
+            instrumentation_agent = DistanceAgent(
                 config=config_dict,
                 llm=self.llm,
                 logger=self.logger
@@ -345,10 +346,16 @@ class DrillAgent:
 
         # Step 3: Build with coverage instrumentation
         if self.config.enable_coverage:
-            self.logger.info("  - Running coverage instrumentation...")
+            self.logger.info("  - Building with coverage instrumentation...")
             coverage_agent = CoverageInstrumentAgent(self)
-            result = coverage_agent.run()
             
+            # Clean and checkout before instrumentation
+            self._clean_repository()
+            self._checkout_base_commit()
+
+            # Run coverage instrumentation
+            result = coverage_agent.run()
+                
             if result['success']:
                 self.logger.info(f"    ✓ Coverage instrumentation completed")
                 self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
@@ -356,8 +363,6 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-
-        # Step 4: Build with memory sanitizer
         if self.config.enable_sanitizer:
             self.logger.info("  - Applying memory sanitizer...")
             # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)
