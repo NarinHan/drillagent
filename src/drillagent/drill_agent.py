@@ -14,7 +14,7 @@ from drillagent.instrumentation import DistanceAgent, CoverageInstrumentAgent
 from drillagent.task_loader.sec_bench import RawSecbTaskLoader, SecbTask
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
-from drillagent.utils.utils import check_coverage_binary_exists
+from drillagent.utils.utils import check_coverage_binary_exists, check_repo_at_commit
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -127,6 +127,8 @@ class DrillAgent:
         # Initialize LLM interface
         try:
             self.logger.info(f"Initializing {self.config.model_provider} LLM...")
+            self.logger.info(f"Config model_name: '{self.config.model_name}'")
+            
             self.llm = LLM(
                 provider=self.config.model_provider,
                 model_name=self.config.model_name,
@@ -281,21 +283,17 @@ class DrillAgent:
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
 
         try:
-            # Check if coverage instrumentation already exists (requires secb_task)
-            existing_binary = None
-            if self.secb_task:
+            # Check if we can reuse existing coverage binary (check commit first to save time)
+            if check_repo_at_commit(Path(self.config.target_repo_path), self.config.base_commit, self.logger):
                 existing_binary = check_coverage_binary_exists(
                     target_repo_path=Path(self.config.target_repo_path),
                     secb_task=self.secb_task,
                     logger=self.logger
                 )
-            if existing_binary:
-                self.logger.info(f"✓ Using existing coverage-instrumented binary: {existing_binary}")
-                self.coverage_binary = existing_binary
-                # Disable coverage instrumentation since binary already exists
-                self.config.enable_coverage = False
-            else:
-                self.logger.info("No existing coverage-instrumented binary found; proceeding with instrumentation")
+                if existing_binary:
+                    self.logger.info(f"✓ Reusing existing coverage binary: {existing_binary}")
+                    self.coverage_binary = existing_binary
+                    self.config.enable_coverage = False
             
             # Phase 1: Code Instrumentation
             if not self.skip_instrumentation:
@@ -328,42 +326,26 @@ class DrillAgent:
         self.logger.info("\n[Phase 1] Code Instrumentation")
         self.phase = "instrumentation"
 
-        # Task data already loaded in __init__ via _init_task_loader()
-        if not self.secb_task:
-            self.logger.error("  No task data available - skipping instrumentation")
-            self.errors.append("No task data available for instrumentation")
-            return
-
         # Step 1: Run AFLGo instrumentation if enabled
         if self.config.enable_distance:
             self.logger.info("  - Running AFLGo instrumentation...")
             
-            # Build config dict directly from SecbTask (no YAML files needed)
+            # Runtime config only - task data comes from secb_task
             config_dict = {
-                'repo_url': self.secb_task.repo,
-                'commit_id': self.secb_task.base_commit,
-                'cve_id': self.secb_task.cve_id,
                 'repos_dir': 'repos',
-                'binary_name': self.secb_task.binary_name,
-                'binary_path': self.secb_task.binary_path,
-                'sanitizer_report': self.secb_task.sanitizer_report,
-                'vuln_location': self.secb_task.vuln_location,
-                'harness_command': self.secb_task.harness_command,
-                'build_config': {
-                    'build_commands': self.secb_task.build_sh
-                },
                 'log_level': 'INFO',
                 'log_file': f'aflgo_{self.secb_task.project_name}.log'
             }
             
-            instrumentation_agent = DistanceAgent(
+            distance_agent = DistanceAgent(
                 config=config_dict,
+                secb_task=self.secb_task,
                 llm=self.llm,
                 logger=self.logger
             )
             
             # Execute the full instrumentation workflow
-            result = instrumentation_agent.run()
+            result = distance_agent.run()
             if result['success']:
                 self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
                 self.instrumented_binary = result.get('instrumented_binary')
@@ -392,6 +374,8 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
+
+        # Step 3: Apply memory sanitizer if enabled
         if self.config.enable_sanitizer:
             self.logger.info("  - Applying memory sanitizer...")
             # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)

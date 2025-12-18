@@ -15,7 +15,7 @@ import shutil
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from drillagent.instrumentation.base_agent import BaseAgent, AgentState
 from drillagent.models.llm import LLM
@@ -26,6 +26,9 @@ from drillagent.prompts.DistanceAgent_prompt import (
     DA_build_prompt,
     DA_distance_generation_prompt
 )
+
+if TYPE_CHECKING:
+    from drillagent.task_loader.sec_bench import SecbTask
 
 
 class DistanceAgent(BaseAgent):
@@ -42,21 +45,26 @@ class DistanceAgent(BaseAgent):
     # AFLGo-specific system prompt
     AFLGO_SYSTEM_PROMPT = DA_system_prompt
     
-    def __init__(self, config: Dict, llm: Optional[LLM] = None, logger=None):
+    def __init__(self, config: Dict, secb_task: "SecbTask" = None, llm: Optional[LLM] = None, logger=None):
         """Initialize DistanceAgent
         
         Args:
             config: Configuration dictionary containing:
-                - repo_url: Git repository URL
-                - commit_id: Commit to instrument
-                - cve_id: CVE identifier (optional)
-                - sanitizer_report: Sanitizer report content (optional)
-                - build_config: Build configuration
                 - aflgo_dir, repos_dir, temps_dir: Directory paths
+                - llm_model, openai_api_key: LLM configuration
+                - output_dir: Output directory for artifacts
+            secb_task: SecbTask instance with task-specific data:
+                - repo: Git repository URL
+                - base_commit: Commit to instrument
+                - instance_id: CVE identifier
+                - sanitizer_report: Sanitizer report content
+                - build_sh: Build commands
+                - binary_name, binary_path: Binary information
             llm: LLM instance (will create if not provided)
             logger: Logger instance (will create if not provided)
         """
         self.config = config
+        self.secb_task = secb_task
         
         # Setup environment first
         self.setup_environment()
@@ -111,17 +119,18 @@ class DistanceAgent(BaseAgent):
         self.repos_dir = Path(self.config.get('repos_dir', default_repos)).resolve()
         self.temps_dir = Path(self.config.get('temps_dir', default_temps)).resolve()
         
-        # Repository info
-        self.repo_url = self.config['repo_url']
-        self.repo_name = Path(self.repo_url).stem.replace('.git', '')
+        # Repository info - prefer secb_task, fallback to config
+        self.repo_url = self.secb_task.repo if self.secb_task else self.config.get('repo_url', '')
+        self.repo_name = self.secb_task.project_name if self.secb_task else Path(self.repo_url).stem.replace('.git', '')
         
         # Subject and temp directories
         self.subject_dir = self.repos_dir / self.repo_name
         
         # Create temp directory name
         temp_name = f"temp_{self.repo_name}"
-        if self.config.get('cve_id'):
-            cve_suffix = self.config['cve_id'].replace('CVE-', '').replace('-', '_')
+        cve_id = self.secb_task.instance_id if self.secb_task else self.config.get('cve_id')
+        if cve_id:
+            cve_suffix = cve_id.replace('CVE-', '').replace('-', '_')
             temp_name += f"_{cve_suffix}"
         self.temp_dir = self.temps_dir / temp_name
         
@@ -292,9 +301,9 @@ class DistanceAgent(BaseAgent):
     
     def _extract_targets_from_sanitizer_report(self) -> Optional[List[str]]:
         """Extract targets from sanitizer report using LLM guidance"""
-        report_content = self.config.get('sanitizer_report')
+        report_content = self.secb_task.sanitizer_report if self.secb_task else self.config.get('sanitizer_report')
         if not report_content:
-            self.logger.warning("No sanitizer_report field in config")
+            self.logger.warning("No sanitizer_report available")
             return None
         
         self.logger.info(f"Using sanitizer report from config (length: {len(report_content)} chars)")
@@ -335,8 +344,8 @@ class DistanceAgent(BaseAgent):
             return None
         
         # Checkout to vulnerable version before reading source
-        if self.config.get('commit_id'):
-            commit_id = self.config['commit_id']
+        commit_id = self.secb_task.base_commit if self.secb_task else self.config.get('commit_id')
+        if commit_id:
             self.logger.info(f"Checking out vulnerable version: {commit_id}")
             self.run_command(f"git checkout {commit_id}", self.subject_dir)
             self.run_command("git submodule update --init --recursive", self.subject_dir)
@@ -469,7 +478,8 @@ class DistanceAgent(BaseAgent):
             return True
         
         # Extract from sanitizer report
-        if self.config.get('cve_id'):
+        cve_id = self.secb_task.instance_id if self.secb_task else self.config.get('cve_id')
+        if cve_id:
             sanitizer_targets = self._extract_targets_from_sanitizer_report()
             
             if sanitizer_targets:
@@ -506,7 +516,8 @@ class DistanceAgent(BaseAgent):
         targets_file = self.temp_dir / 'BBtargets.txt'
         distance_file = self.temp_dir / 'distance.cfg.txt'
         
-        build_commands_str = self.config.get('build_config', {}).get('build_commands', '')
+        # Get build commands from secb_task or config
+        build_commands_str = self.secb_task.build_sh if self.secb_task else self.config.get('build_config', {}).get('build_commands', '')
         current_build_script = build_commands_str  # Track current build script for error recovery
         
         max_build_attempts = 5
@@ -532,12 +543,13 @@ class DistanceAgent(BaseAgent):
                     else:
                         # Use BaseAgent's diagnose_and_fix_build_error for recovery
                         self.logger.info("Analyzing build error with LLM...")
+                        cve_id = self.secb_task.instance_id if self.secb_task else self.config.get('cve_id', 'N/A')
                         fixed_script = self.diagnose_and_fix_build_error(
                             error=stderr,
                             output=stdout,
                             build_commands=current_build_script,
                             project_name=self.repo_name,
-                            context=f"Phase: {phase_name}, CVE: {self.config.get('cve_id', 'N/A')}",
+                            context=f"Phase: {phase_name}, CVE: {cve_id}",
                             system_prompt=self.AFLGO_SYSTEM_PROMPT,
                             fallback_fixes=self._aflgo_fallback_fixes
                         )
@@ -566,12 +578,13 @@ class DistanceAgent(BaseAgent):
                     commands = response.get('commands', [])
                     script_content = self._prepare_build_script(commands) if commands else current_build_script
                     
+                    cve_id = self.secb_task.instance_id if self.secb_task else self.config.get('cve_id', 'N/A')
                     fixed_script = self.diagnose_and_fix_build_error(
                         error=stderr,
                         output=stdout,
                         build_commands=script_content,
                         project_name=self.repo_name,
-                        context=f"Phase: {phase_name}, CVE: {self.config.get('cve_id', 'N/A')}",
+                        context=f"Phase: {phase_name}, CVE: {cve_id}",
                         system_prompt=self.AFLGO_SYSTEM_PROMPT,
                         fallback_fixes=self._aflgo_fallback_fixes
                     )
@@ -599,7 +612,8 @@ class DistanceAgent(BaseAgent):
             os.environ['CFLAGS'] = f"-distance={distance_file.resolve()}"
             os.environ['CXXFLAGS'] = f"-distance={distance_file.resolve()}"
         
-        custom_cflags = self.config.get('build_config', {}).get('cflags', '')
+        # Custom cflags from config (runtime configuration, not task data)
+        custom_cflags = self.config.get('cflags', '')
         if custom_cflags:
             os.environ['CFLAGS'] = f"{custom_cflags} {os.environ['CFLAGS']}"
             os.environ['CXXFLAGS'] = f"{custom_cflags} {os.environ['CXXFLAGS']}"
@@ -715,7 +729,7 @@ class DistanceAgent(BaseAgent):
                     commands.append(cmd)
         
         if not commands:
-            build_commands = self.config.get('build_config', {}).get('build_commands', '')
+            build_commands = self.secb_task.build_sh if self.secb_task else self.config.get('build_config', {}).get('build_commands', '')
             if build_commands:
                 commands = [cmd.strip() for cmd in build_commands.split('\n') if cmd.strip() and not cmd.strip().startswith('#')]
         return commands
@@ -841,11 +855,11 @@ class DistanceAgent(BaseAgent):
         if bbcalls.exists():
             self.run_command(f"cat {bbcalls} | grep -Ev '^[^,]*$|^([^,]*,){{2,}}[^,]*$' | sort | uniq > {self.temp_dir}/BBcalls2.txt && mv {self.temp_dir}/BBcalls2.txt {bbcalls}")
         
-        # Get binary path and binary name from config
+        # Get binary path and binary name from secb_task or config
         # binary_path: directory to search for .bc files (e.g., $SUBJECT, $SUBJECT/build)
         # binary_name: fuzzer binary name used to filter .bc files (e.g., jq, njs)
-        binary_path = self.config.get('build_config', {}).get('binary_path', '$SUBJECT')
-        binary_name = self.config.get('binary_name', self.repo_name)
+        binary_path = self.secb_task.binary_path if self.secb_task and self.secb_task.binary_path else self.config.get('build_config', {}).get('binary_path', '$SUBJECT')
+        binary_name = self.secb_task.binary_name if self.secb_task and self.secb_task.binary_name else self.config.get('binary_name', self.repo_name)
         
         # Resolve binary_path (replace $SUBJECT with actual path)
         binary_path = binary_path.replace('$SUBJECT', str(self.subject_dir))
@@ -902,7 +916,7 @@ class DistanceAgent(BaseAgent):
     
     def find_instrumented_binary(self) -> Optional[Path]:
         """Find instrumented binary"""
-        binary_name = self.config.get('binary_name', self.repo_name)
+        binary_name = self.secb_task.binary_name if self.secb_task and self.secb_task.binary_name else self.config.get('binary_name', self.repo_name)
         
         search_paths = [
             self.subject_dir / binary_name,
@@ -929,8 +943,9 @@ class DistanceAgent(BaseAgent):
         """Copy artifacts to output directory"""
         try:
             output_name = f"instrumented_{self.repo_name}"
-            if self.config.get('cve_id'):
-                cve_suffix = self.config['cve_id'].replace('CVE-', '').replace('-', '_')
+            cve_id = self.secb_task.instance_id if self.secb_task else self.config.get('cve_id')
+            if cve_id:
+                cve_suffix = cve_id.replace('CVE-', '').replace('-', '_')
                 output_name += f"_{cve_suffix}"
             
             script_dir = Path(__file__).resolve().parent
@@ -954,7 +969,7 @@ class DistanceAgent(BaseAgent):
             
             binary_path = self.find_instrumented_binary()
             if binary_path:
-                binary_name = self.config.get('binary_name', self.repo_name)
+                binary_name = self.secb_task.binary_name if self.secb_task and self.secb_task.binary_name else self.config.get('binary_name', self.repo_name)
                 dest_binary = output_dir / binary_name
                 shutil.copy2(binary_path, dest_binary)
                 dest_binary.chmod(binary_path.stat().st_mode)

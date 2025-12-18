@@ -68,7 +68,7 @@ Examples:
 
     parser.add_argument(
         "--model-name",
-        default="gpt-4o",
+        # default="gpt-4o",
         help="Specific model name to use"
     )
 
@@ -189,8 +189,8 @@ def main():
         cve_id=args.cve_id,
         project_name=cve_data.get('project_name'),  # Needed to locate instance file
         base_commit=cve_data.get('base_commit'),    # Needed for git checkout
-        model_provider=args.model,
-        model_name=args.model_name,
+        # model_provider=args.model,
+        # model_name=args.model_name,
         api_key=args.api_key,
         output_dir=args.output_dir,
         verbose=args.verbose,

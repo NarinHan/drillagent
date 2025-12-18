@@ -11,6 +11,74 @@ def get_file_size(file_path: str) -> int:
     # Get the size of a file in bytes.
     return os.path.getsize(file_path)
 
+def get_repo_commit(repo_path: Path, logger: logging.Logger = None) -> Optional[str]:
+    """Get the current commit SHA of a git repository
+    
+    Args:
+        repo_path: Path to the git repository
+        logger: Logger instance (optional)
+    
+    Returns:
+        40-character commit SHA if successful, None otherwise
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            commit = result.stdout.strip()
+            if len(commit) == 40:  # Valid SHA
+                return commit
+            else:
+                logger.warning(f"Invalid commit SHA: {commit}")
+                return None
+        else:
+            logger.warning(f"git rev-parse failed: {result.stderr}")
+            return None
+            
+    except Exception as e:
+        logger.warning(f"Failed to get repo commit: {e}")
+        return None
+
+def check_repo_at_commit(
+    repo_path: Path,
+    expected_commit: str,
+    logger: logging.Logger = None
+) -> bool:
+    """Check if a repository is at the expected commit
+    
+    Args:
+        repo_path: Path to the git repository
+        expected_commit: Expected 40-character commit SHA
+        logger: Logger instance (optional)
+    
+    Returns:
+        True if repo is at expected commit, False otherwise
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    current_commit = get_repo_commit(repo_path, logger)
+    
+    if not current_commit:
+        logger.warning("Could not determine current commit")
+        return False
+    
+    if current_commit == expected_commit:
+        logger.debug(f"Repo at expected commit: {current_commit[:12]}...")
+        return True
+    else:
+        logger.debug(f"Commit mismatch: current={current_commit[:12]}..., expected={expected_commit[:12]}...")
+        return False
+
 def check_coverage_binary_exists(
     target_repo_path: Path,
     secb_task: "SecbTask" = None,
