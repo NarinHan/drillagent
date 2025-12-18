@@ -39,6 +39,11 @@ class DrillAgent:
         self.iteration = 0
         self.errors = []
 
+        # LLM interface
+        self.llm: LLM = None
+        self.reasoning_llm: LLM = None
+        self.low_cost_llm:  LLM = None
+
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD
@@ -474,11 +479,11 @@ Format your response as a complete, executable test case."""
             output_path.mkdir(parents=True, exist_ok=True)
 
             # Save PoV candidates as JSON
-            pov_output_file = output_path / "pov_candidates.json"
-            with open(pov_output_file, 'w', encoding='utf-8') as f:
-                json.dump(self.pov_candidates, f, indent=2)
+            # pov_output_file = output_path / "pov_candidates.json"
+            # with open(pov_output_file, 'w', encoding='utf-8') as f:
+            #     json.dump(self.pov_candidates, f, indent=2)
 
-            self.logger.info(f"    ✓ Saved PoV candidates to {pov_output_file}")
+            # self.logger.info(f"    ✓ Saved PoV candidates to {pov_output_file}")
 
             # Save individual PoV scripts
             for idx, candidate in enumerate(self.pov_candidates):
