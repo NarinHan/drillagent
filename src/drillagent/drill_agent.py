@@ -424,90 +424,19 @@ class DrillAgent:
 
     def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
-        self.logger.info("\n[Phase 4] PoV Generation and Verification")
+        self.logger.info("\n[Phase 4] Crash Triggering and PoV Validation")
 
-        # Step 1: Convert PoV candidates to concrete test cases
-        self.logger.info("  - Refining PoV candidates into concrete test cases...")
+        # Step 1: Analyze the vulnerability from a pwner perspective.
 
-        if self.llm and len(self.pov_candidates) > 0:
-            self.logger.info(f"  - Processing {len(self.pov_candidates)} PoV candidates...")
+        # Step 2: Generate PoVs based on the analysis results, (the only goal is to trigger the crash).
 
-            for idx, candidate in enumerate(self.pov_candidates):
-                self.logger.info(f"    - Processing candidate {idx + 1}/{len(self.pov_candidates)}...")
-
-                # Use LLM to generate concrete PoV code/script
-                pov_generation_prompt = f"""Generate a concrete proof-of-vulnerability (PoV) test case based on the following:
-
-Input Mutations: {candidate.get('input_mutations', 'N/A')[:500]}
-
-Path Suggestions: {candidate.get('path_suggestions', 'N/A')[:300]}
-
-Harness Command: {self.config.harness_command or 'To be determined'}
-
-CVE ID: {self.config.cve_id or 'N/A'}
-
-Please generate:
-1. A concrete test input file or command-line arguments
-2. Steps to execute the test
-3. Expected crash behavior or sanitizer output
-
-Format your response as a complete, executable test case."""
-
-                try:
-                    pov_code = self.llm.generate(
-                        prompt=pov_generation_prompt,
-                        system_prompt="You are an expert in writing PoV test cases for vulnerabilities.",
-                        temperature=0.5,  # Lower temperature for more deterministic output
-                        max_tokens=3072
-                    )
-
-                    # Update candidate with generated PoV
-                    candidate['pov_code'] = pov_code
-                    candidate['status'] = 'generated'
-
-                    self.logger.info(f"      ✓ PoV generated ({len(pov_code)} chars)")
-
-                except Exception as e:
-                    self.logger.warning(f"      Failed to generate PoV: {e}")
-                    candidate['status'] = 'failed'
-                    candidate['error'] = str(e)
-
-        # Step 2: Save PoV candidates to output directory
-        self.logger.info("  - Saving PoV test cases...")
-        try:
-            output_path = Path(self.output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-
-            # Save PoV candidates as JSON
-            # pov_output_file = output_path / "pov_candidates.json"
-            # with open(pov_output_file, 'w', encoding='utf-8') as f:
-            #     json.dump(self.pov_candidates, f, indent=2)
-
-            # self.logger.info(f"    ✓ Saved PoV candidates to {pov_output_file}")
-
-            # Save individual PoV scripts
-            for idx, candidate in enumerate(self.pov_candidates):
-                if candidate.get('status') == 'generated':
-                    pov_script_file = output_path / f"pov_{idx + 1}.txt"
-                    with open(pov_script_file, 'w', encoding='utf-8') as f:
-                        f.write(candidate.get('pov_code', ''))
-                    self.logger.info(f"    ✓ Saved PoV script to {pov_script_file}")
-
-        except Exception as e:
-            self.logger.error(f"    Failed to save PoVs: {e}")
-            self.errors.append(f"Failed to save PoVs: {e}")
-
-        # TODO: Step 3: Actually verify PoVs by executing them with harness
-        # This requires:
-        # - Implementing harness execution logic
-        # - Detecting crashes from sanitizer output
-        # - Validating that the crash matches the expected vulnerability
-        self.logger.info("  - PoV verification (TODO: implement harness execution)")
-        self.logger.info("    For now, PoVs are generated but not automatically verified")
+        # Step 3: Actually verify PoVs by executing them with sanitizers.
 
         # Step 4: Generate summary report
-        successful_povs = sum(1 for c in self.pov_candidates if c.get('status') == 'generated')
-        self.logger.info(f"\n  ✓ PoV generation completed: {successful_povs}/{len(self.pov_candidates)} successful")
+
+        self.logger.info("  ✓ Crash triggering analysis completed")
+        # successful_povs = sum(1 for c in self.pov_candidates if c.get('status') == 'generated')
+        # self.logger.info(f"\n  ✓ PoV generation completed: {successful_povs}/{len(self.pov_candidates)} successful")
 
     def _generate_report(self) -> Dict[str, Any]:
         """Generate final analysis report"""
