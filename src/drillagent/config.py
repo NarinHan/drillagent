@@ -27,7 +27,7 @@ class AgentConfig:
     # 
     # General-purpose LLM model (may have latent reasoning capabilities).
     model_provider: str = "openai"  # claude or openai
-    model_name: str = "gpt-4o-2024-05-13"
+    model_name: str = "gpt-5.1-2025-11-13"
     api_key: Optional[str] = None
     # TODO: Provide more specific model configurations.
     reasoning_model : tuple = ("", "")
@@ -44,6 +44,8 @@ class AgentConfig:
     disable_crash_trigger_analysis: bool     = False
     disable_advanced_agent_tools: bool       = False # To be discussed
     disable_in_context_rl: bool              = False # To be discussed
+    # More fine-grained ablation options can be added here.
+    disable_root_cause_analysis: bool        = False
     # Instrumentation options are not needed (LHY: The instrumentation choice should be fixed by us.)
 
     #
@@ -67,8 +69,8 @@ class AgentConfig:
     # 
     # Output options
     # 
-    work_dir: str = "./workspace"
-    output_dir: str = "./output"
+    work_dir: str = "./workspace" # Including: Intermidiate results in each round and cache dir.
+    output_dir: str = "./output"  # Including: Final PoV inputs and analysis logs.
     verbose: bool = False
     # TODO: logging level?
 

@@ -86,7 +86,11 @@ class PathExplorationAgent:
             exit_code, exec_output = self._execute_test_case(test_case_path)
 
             # Special: Check early-stop after each execution
-            self._detect_stop_status(exit_code, exec_output)
+            # TODO: If all callsites are covered, we can also stop early(?).
+            found_pov = self._detect_stop_status(exit_code, exec_output)
+            if found_pov:
+                self.logger.info(f"  [PathExplorationAgent] Crash-inducing PoV found! Triggered early stop.")
+                break
 
             # Substep3: Collect coverage feedback along the vulnerable call trace
             # a. function-level coverage ✅
@@ -100,6 +104,7 @@ class PathExplorationAgent:
             print("")
             previous_feedback = self._analyze_coverage_feedback(exit_code, exec_output, func_level_cov_info) # Also store feedback for next iteration
 
+        self.logger.info(f"  [PathExplorationAgent] Leave the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
     def get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
@@ -501,7 +506,7 @@ class PathExplorationAgent:
         # Summary
         total_count = len(callsite_coverage_list)
         coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0
-        output_lines.append(f"\n[COVERAGE SUMMARY]")
+        output_lines.append(f"[COVERAGE SUMMARY]")
         output_lines.append(f"  Total callsites in trace: {total_count}")
         output_lines.append(f"  Functions executed:       {covered_count} ({coverage_percentage:.1f}%)")
         output_lines.append(f"  Functions not executed:   {uncovered_count}")
@@ -559,7 +564,7 @@ class PathExplorationAgent:
         # TODO: Currently we just return the raw information.
         return feedback_analysis_results
 
-    def _detect_stop_status(self, exit_code: int, exec_output: str):
+    def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
         """
         Check if we should stop path exploration based on execution results.
         Handles:
@@ -569,6 +574,8 @@ class PathExplorationAgent:
         Args:
             exit_code: The exit code from test case execution
             exec_output: The output from test case execution (stdout + stderr)
+        Returns:
+            bool: True if a crash input pov is found, False otherwise
         Raises:
             RuntimeError: If command not found (exit code 127)
         """
@@ -616,8 +623,9 @@ class PathExplorationAgent:
                 # Print crash information to console for visibility
                 print("\n")
                 print("=" * 80)
-                print("*** CRASH INPUT POV DISCOVERED ***")
+                print("CRASH INPUT POV DISCOVERED")
                 print("=" * 80)
+                print(f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!")
                 print(f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}")
                 print(f"Exit Code:       {exit_code}")
                 print(f"Test Case Path:  {current_testcase_path}")
@@ -647,6 +655,7 @@ class PathExplorationAgent:
                     print(f"... ({len(exec_output) - 1000} more chars)")
                 print("=" * 80)
                 print("\n")
+                return True  # Indicate that we found a crash input pov
 
             except Exception as e:
                 self.logger.error(f"  [PathExplorationAgent] Failed to read crash input: {e}")
@@ -660,5 +669,5 @@ class PathExplorationAgent:
         elif exit_code < 0 or exit_code > 128:  # Signal-based exit
             self.logger.debug(f"  [PathExplorationAgent] Program terminated with signal (exit code {exit_code})")
 
-        # Note: Max iteration check is handled by the for loop in run() method
-        # We don't need to check it here
+        return False  # No crash input pov found
+
