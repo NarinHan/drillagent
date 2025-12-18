@@ -27,6 +27,8 @@ class SecbTask:
     cve_id: Optional[str] = None
     vuln_location: Optional[str] = None 
     harness_command: Optional[str] = None
+    binary_name: Optional[str] = None  # e.g., "exiv2"
+    binary_path: Optional[str] = None  # e.g., "/src/exiv2/build/bin/exiv2"
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'SecbTask':
@@ -210,6 +212,32 @@ class SecbTask:
         # Join multiple commands with newlines
         return '\n'.join(commands)
 
+    def get_binary_info(self) -> tuple[Optional[str], Optional[str]]:
+        """Extract binary name and path from secb_sh repro script.
+        
+        Returns:
+            tuple: (binary_name, binary_path) e.g., ('exiv2', '/src/exiv2/build/bin/exiv2')
+                   Returns (None, None) if extraction fails.
+        """
+        if not self.secb_sh:
+            return None, None
+        
+        # Look for repro() function execution paths like /src/faad2/frontend/faad
+        # Pattern: /src/<project>/...path.../binary_name followed by space, arg, or end of line
+        # Handle paths with multiple directory levels (build/bin/, frontend/, .libs/, etc.)
+        match = re.search(
+            r'(/src/[^/]+/(?:[^/\s]+/)*(?:frontend/|build/bin/|build/|bin/|\.libs/)?([a-zA-Z0-9_-]+))(?:\s|$)',
+            self.secb_sh
+        )
+        if match:
+            full_path = match.group(1)
+            binary = match.group(2)
+            # Skip common directory names
+            if binary not in ['bin', 'build', 'frontend', 'libs', 'src']:
+                return binary, full_path
+        
+        return None, None
+
     def __post_init__(self):
         self.repo_name = self.instance_id.split('.')[0]  # e.g., "openssl" from "openssl.cve-2021-3711"
         self.cve_id = self.instance_id.split('.')[1] 
@@ -219,6 +247,9 @@ class SecbTask:
         # Parse harness_command if not provided
         if self.harness_command is None:
             self.harness_command = self.get_harness_command()
+        # Parse binary info if not provided
+        if self.binary_name is None or self.binary_path is None:
+            self.binary_name, self.binary_path = self.get_binary_info()
 
 class RawSecbTaskLoader:
     # Responsible for loading security benchmark tasks from JSON files.
@@ -451,6 +482,35 @@ class RawSecbTaskLoader:
         """
         task = self.get_task(instance_id)
         return task.sanitizer_report if task else None
+
+    def get_binary_info(self, instance_id: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Get the binary name and path for a specific task.
+        Returns:
+            tuple: (binary_name, binary_path) or (None, None) if not found
+        """
+        task = self.get_task(instance_id)
+        if task:
+            return task.binary_name, task.binary_path
+        return None, None
+
+    def get_vuln_location(self, instance_id: str) -> Optional[str]:
+        """
+        Get the vulnerability location for a specific task.
+        Returns:
+            Vulnerability location string or None if not found
+        """
+        task = self.get_task(instance_id)
+        return task.vuln_location if task else None
+
+    def get_harness_command(self, instance_id: str) -> Optional[str]:
+        """
+        Get the harness command for a specific task.
+        Returns:
+            Harness command string or None if not found
+        """
+        task = self.get_task(instance_id)
+        return task.harness_command if task else None
 
     def print_task_summary(self, instance_id: str):
         """
