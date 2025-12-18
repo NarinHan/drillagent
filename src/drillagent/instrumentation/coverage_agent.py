@@ -13,7 +13,6 @@ The agent:
 """
 
 import os
-import subprocess
 import logging
 import yaml
 import re
@@ -25,6 +24,10 @@ from dataclasses import dataclass
 from drillagent.models.llm import LLM
 from drillagent.instrumentation.base_agent import BaseAgent, AgentState
 from drillagent.utils.utils import check_existing_coverage_instrumentation, locate_instrumented_binary
+from drillagent.prompts.CoverageInstrumentAgent_prompt import (
+    CIA_system_prompt,
+    CIA_replace_docker_paths_prompt
+)
 
 
 class CoverageInstrumentAgent(BaseAgent):
@@ -34,24 +37,7 @@ class CoverageInstrumentAgent(BaseAgent):
     injects LLVM coverage flags, and builds the instrumented binary.
     """
     
-    SYSTEM_PROMPT = """You are an expert in LLVM compiler tooling and build systems.
-Your task is to help with:
-1. Replacing Docker paths with actual repository paths in build scripts
-2. Diagnosing and fixing build errors when instrumenting C/C++ programs with LLVM coverage
-
-**Coverage Instrumentation:**
-LLVM coverage uses these flags:
-- Compilation: -fprofile-instr-generate -fcoverage-mapping
-- Linking: -fprofile-instr-generate
-
-**Common issues:**
-- -Werror blocking builds → suggest removing it
-- Conflicting optimization flags → suggest compatible levels
-- Missing dependencies → suggest installation commands
-
-**Output format:**
-When replacing paths or fixing build scripts, output ONLY the corrected script/commands.
-No explanations, no markdown code blocks, just the raw script content."""
+    SYSTEM_PROMPT = CIA_system_prompt
 
     def __init__(self, drill_agent):
         """Initialize coverage instrumentation agent
@@ -112,20 +98,7 @@ No explanations, no markdown code blocks, just the raw script content."""
         
         # Search for config file matching CVE ID
         cve_pattern = f"*.{self.cve_id.lower()}.yaml"
-        matches = list(config_dir.glob(cve_pattern))
-        
-        if not matches:
-            raise FileNotFoundError(f"No instrumentation config found for CVE ID: {self.cve_id}")
-        
-        if len(matches) > 1:
-            raise ValueError(f"Multiple configs found for {self.cve_id}: {[m.name for m in matches]}")
-        
-        config_path = matches[0]
-        
-        if not config_path.exists():
-            raise FileNotFoundError(f"Instrumentation config not found: {config_path}")
-        
-        self.logger.info(f"Loading instrumentation config: {config_path.name}")
+        config_path = list(config_dir.glob(cve_pattern))[0]
         
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
@@ -157,9 +130,18 @@ No explanations, no markdown code blocks, just the raw script content."""
             build_env = self._prepare_environment()
             self.logger.info("Build environment prepared")
             
-            # Phase 3: Execute build with retries
+            # Phase 3: Execute build with retries using base class method
             self.state.phase = 'build'
-            success = self._execute_build_with_retries(build_env, modified_commands)
+            success, self.build_log = self.execute_build_with_retries(
+                build_commands=modified_commands,
+                cwd=self.target_repo,
+                env=build_env,
+                project_name=self.project_name,
+                context=f"CVE: {self.cve_id}, Coverage instrumentation",
+                system_prompt=self.SYSTEM_PROMPT,
+                fallback_fixes=self._coverage_fallback_fixes,
+                on_success=self._on_build_success
+            )
             
             if success:
                 # Phase 4: Test coverage instrumentation
@@ -335,35 +317,11 @@ LDFLAGS="${{LDFLAGS:-}}"
             # Use LLM for intelligent path replacement
             self.logger.info("Using LLM to replace Docker paths with actual repository path")
             
-            prompt = f"""Fix this build script by replacing Docker-specific paths and removing problematic commands.
-
-**Context:**
-- Target repository: {self.target_repo}
-- Project name: {self.project_name}
-- The script will be executed with cwd={self.target_repo} (already in the repo directory)
-- $0 will be /bin/bash (not a script file), so $(dirname "$0") will fail
-
-**Original build commands:**
-{build_commands}
-
-**Common Docker patterns to fix:**
-1. Remove: cd "$(dirname "$0")/project" → This fails because $0=/bin/bash
-2. Remove: cd /src/project or cd /out/... → Absolute Docker paths
-3. Remove: cd "$LIBHEIF_PATH" or cd $SRC → Docker environment variables
-4. Keep: cd build or cd src → Legitimate relative subdirectories (these are OK!)
-5. Replace: /src/{self.project_name}/... → {self.target_repo}/... (in other contexts)
-6. Replace: WORK_DIR="${{WORK:-/work}}" → WORK_DIR="${{WORK:-{self.target_repo}/work}}"
-
-**Instructions:**
-1. Remove problematic cd commands that navigate to Docker paths
-2. Keep legitimate cd commands to subdirectories like "cd build"
-3. Replace absolute Docker paths with {self.target_repo}
-4. Update Docker environment variable defaults to use {self.target_repo}
-5. Preserve all other commands unchanged
-6. Output ONLY the corrected build commands
-7. Do NOT wrap in markdown code blocks
-8. Do NOT add explanations
-"""
+            prompt = CIA_replace_docker_paths_prompt.format(
+                target_repo=self.target_repo,
+                project_name=self.project_name,
+                build_commands=build_commands
+            )
             
             try:
                 response = self.llm.generate(
@@ -491,217 +449,51 @@ LDFLAGS="${{LDFLAGS:-}}"
         
         return env
 
-    def _execute_build_with_retries(self, env: Dict[str, str], build_commands: str) -> bool:
-        """Execute build with intelligent retries using LLM
+    def _on_build_success(self, stdout: str, stderr: str) -> None:
+        """Callback when build succeeds - locate the instrumented binary
         
         Args:
-            env: Environment variables for build
-            build_commands: Modified build commands with coverage flags
-            
-        Returns:
-            True if build succeeded, False otherwise
+            stdout: Build stdout
+            stderr: Build stderr
         """
-        max_attempts = self.state.max_attempts
-        
-        for attempt in range(1, max_attempts + 1):
-            self.state.attempts = attempt
-            self.logger.info(f"Build attempt {attempt}/{max_attempts}")
-            
-            # Execute build
-            success, output, error = self._run_build(env, build_commands)
-            
-            # Log the output
-            self.build_log.append({
-                'attempt': attempt,
-                'success': success,
-                'output': output,
-                'error': error
-            })
-            
-            if success:
-                return True
-            
-            # Record error
-            self.state.record_error(error, context=f"Build attempt {attempt}")
-            
-            # If we have more attempts and LLM is available, ask for help
-            if attempt < max_attempts and self.llm:
-                self.logger.info("Analyzing build error with LLM...")
-                fixed_commands = self._diagnose_and_fix_build_error(
-                    error, output, build_commands, attempt
-                )
-                if fixed_commands:
-                    build_commands = fixed_commands
-                    self.logger.info("Retrying with LLM-suggested fixes...")
-                else:
-                    self.logger.warning("LLM could not suggest a fix")
-            else:
-                self.logger.error(f"Build failed (attempt {attempt})")
-        
-        return False
+        # Locate the instrumented binary using utils function
+        binary = locate_instrumented_binary(
+            self.target_repo,
+            self.instr_config,
+            self.project_name,
+            self.logger
+        )
+        if binary:
+            self.instrumented_binary_path = binary
 
-    def _run_build(self, env: Dict[str, str], build_commands: str) -> tuple[bool, str, str]:
-        """Execute the actual build command
+    def _coverage_fallback_fixes(self, error: str, build_commands: str) -> Optional[str]:
+        """Coverage-specific fallback fixes when LLM doesn't provide a valid fix
         
         Args:
-            env: Environment variables
-            build_commands: Build script to execute
-            
-        Returns:
-            Tuple of (success, stdout, stderr)
-        """
-        try:
-            self.logger.info(f"Executing build in {self.target_repo}")
-            self.logger.info(f"Build commands:\n{build_commands}")
-            
-            # Execute build script
-            result = subprocess.run(
-                build_commands,
-                shell=True,
-                executable='/bin/bash',
-                cwd=self.target_repo,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minute timeout
-            )
-            
-            success = result.returncode == 0
-            
-            # Log stdout
-            if result.stdout:
-                self.logger.info(f"Build stdout:\n{result.stdout}")
-            
-            # Log stderr
-            if result.stderr:
-                self.logger.error(f"Build stderr:\n{result.stderr}")
-            
-            if success:
-                self.logger.info("✓ Build completed successfully")
-                # Locate the instrumented binary using utils function
-                binary = locate_instrumented_binary(
-                    self.target_repo,
-                    self.instr_config,
-                    self.project_name,
-                    self.logger
-                )
-                if binary:
-                    self.instrumented_binary_path = binary
-            else:
-                self.logger.error(f"✗ Build failed with exit code {result.returncode}")
-            
-            return success, result.stdout, result.stderr
-            
-        except subprocess.TimeoutExpired:
-            error_msg = "Build command timed out after 10 minutes"
-            self.logger.error(error_msg)
-            return False, "", error_msg
-        except Exception as e:
-            error_msg = f"Build execution failed: {str(e)}"
-            self.logger.error(error_msg)
-            return False, "", error_msg
-
-    def _diagnose_and_fix_build_error(
-        self,
-        error: str,
-        output: str,
-        build_commands: str,
-        attempt: int
-    ) -> Optional[str]:
-        """Use LLM to diagnose build error and suggest fixes
-        
-        Args:
-            error: Error output from build
-            output: Standard output from build
+            error: Build error message
             build_commands: Current build commands
-            attempt: Current attempt number
             
         Returns:
-            Updated build commands if fix found, None otherwise
+            Fixed build commands or None
         """
-        if not self.llm:
-            return None
-        
-        # Prepare diagnostic prompt - ask for complete fixed script
-        prompt = f"""A build with LLVM coverage instrumentation failed. Fix the build script.
-
-**Project:** {self.project_name}
-**CVE:** {self.cve_id}
-
-**Current Build Commands:**
-{build_commands}
-
-**Build Error:**
-{error}
-
-**Common issues and fixes:**
-- Unbound variable (like LIB_FUZZING_ENGINE): Export it with empty value or remove references
-- Missing headers: Add -include <header> to flags or remove problematic code
-- -Werror blocking builds: Remove it from commands
-
-**Instructions:**
-1. Analyze the error and identify the fix needed
-2. Output the COMPLETE CORRECTED build script
-3. Do NOT use markdown code blocks (```bash)
-4. Do NOT add explanations - just the fixed script
-5. Keep all the original structure (#!/bin/bash, COV_FLAGS, etc.)
-
-Output the fixed build script now:"""
-
-        try:
-            response = self.llm.generate(
-                prompt=prompt,
-                system_prompt=self.SYSTEM_PROMPT,
-                temperature=0.2,
-                max_tokens=2048
+        # Fix for unbound LIB_FUZZING_ENGINE variable
+        if 'LIB_FUZZING_ENGINE' in error:
+            self.logger.info("Applying fallback fix: Setting LIB_FUZZING_ENGINE=\"\"")
+            modified = build_commands.replace(
+                'export CFLAGS=',
+                'export LIB_FUZZING_ENGINE=""\nexport CFLAGS='
             )
-            
-            # Clean up response - remove markdown code blocks if present
-            response = response.strip()
-            if '```' in response:
-                # Extract content between code blocks
-                lines = response.split('\n')
-                in_code_block = False
-                cleaned_lines = []
-                
-                for line in lines:
-                    if line.strip().startswith('```'):
-                        in_code_block = not in_code_block
-                        continue
-                    if in_code_block or (not line.strip().startswith('```') and not in_code_block):
-                        cleaned_lines.append(line)
-                
-                response = '\n'.join(cleaned_lines).strip()
-            
-            # Check if response looks like a valid script
-            if response and (response.startswith('#!/bin/bash') or 'COV_FLAGS' in response):
-                self.logger.info(f"LLM provided fixed build script:\n{response}")
-                return response
-            else:
-                self.logger.warning(f"LLM response doesn't look like a valid build script:\n{response}")
-                
-                # Try specific pattern-based fixes as fallback
-                if 'LIB_FUZZING_ENGINE' in error:
-                    self.logger.info("Applying fallback fix: Setting LIB_FUZZING_ENGINE=\"\"")
-                    # Add export before the line that fails
-                    modified = build_commands.replace(
-                        'export CFLAGS=',
-                        'export LIB_FUZZING_ENGINE=""\nexport CFLAGS='
-                    )
-                    if modified != build_commands:
-                        return modified
-                
-                if '-Werror' in error or 'warnings being treated as errors' in error.lower():
-                    self.logger.info("Applying fallback fix: Removing -Werror")
-                    modified = build_commands.replace('-Werror', '').replace('-WARNINGS_AS_ERRORS', '')
-                    if modified != build_commands:
-                        return modified
-                
-                return None
-            
-        except Exception as e:
-            self.logger.error(f"LLM diagnosis failed: {e}")
-            return None
+            if modified != build_commands:
+                return modified
+        
+        # Fix for -Werror blocking builds
+        if '-Werror' in error or 'warnings being treated as errors' in error.lower():
+            self.logger.info("Applying fallback fix: Removing -Werror")
+            modified = build_commands.replace('-Werror', '').replace('-WARNINGS_AS_ERRORS', '')
+            if modified != build_commands:
+                return modified
+        
+        return None
 
     def _format_error_history(self) -> str:
         """Format error history for LLM context"""
