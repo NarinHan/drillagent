@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import yaml
 import json
 import logging
 import subprocess
@@ -10,11 +11,10 @@ from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
 from drillagent.models import LLM
-from drillagent.instrumentation import DistanceAgent, CoverageInstrumentAgent
-from drillagent.task_loader.sec_bench import RawSecbTaskLoader, SecbTask
+from drillagent.instrumentation import ConfigGeneratorAgent, DistanceAgent, CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
-from drillagent.utils.utils import check_coverage_binary_exists, check_repo_at_commit
+from drillagent.utils.utils import check_coverage_binary_exists
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -53,8 +53,7 @@ class DrillAgent:
         self.closest_pov_candidate = None
         
         # Instrumentation results
-        self.task_loader: RawSecbTaskLoader = None  # Dataset task loader (general interface)
-        self.secb_task: SecbTask = None  # SEC-bench task data (dataset-specific)
+        self.aflgo_config_path  = None # Path to AFLGo configuration file
         self.instrumented_binary = None
 
         # Final analysis results
@@ -63,7 +62,6 @@ class DrillAgent:
         # # Initialize logger and components (TODO: implement these)
         self.logger = self._setup_logger()
         self._init_components()
-        self._init_task_loader()  # Load task data early for fail-fast behavior
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
         self.logger.info(f"Skip instrumentation: {self.skip_instrumentation}")
@@ -127,8 +125,6 @@ class DrillAgent:
         # Initialize LLM interface
         try:
             self.logger.info(f"Initializing {self.config.model_provider} LLM...")
-            self.logger.info(f"Config model_name: '{self.config.model_name}'")
-            
             self.llm = LLM(
                 provider=self.config.model_provider,
                 model_name=self.config.model_name,
@@ -155,48 +151,6 @@ class DrillAgent:
             self.agent_tools = []
 
         self.logger.info("Components initialized")
-
-    def _init_task_loader(self):
-        """Initialize dataset-specific task loader and load task data.
-        
-        This method loads task data early for fail-fast behavior.
-        Currently only SEC-bench dataset is supported.
-        
-        Future: Support multiple datasets by checking config.dataset_type
-        and instantiating the appropriate loader (SecbTaskLoader, PrimevulTaskLoader, etc.)
-        """
-        self.logger.info("Initializing task loader...")
-        
-        try:
-            # Get project root for dataset paths
-            project_root = Path(__file__).resolve().parent.parent.parent
-            instances_dir = project_root / 'datasets' / 'sec-bench' / 'CVE-instances'
-            
-            # Build instance_id from project_name and cve_id
-            instance_id = f"{self.config.project_name}.{self.config.cve_id.lower()}"
-            
-            # Initialize task loader
-            self.task_loader = RawSecbTaskLoader(
-                dataset_path=str(instances_dir),
-                instance_ids=[instance_id]
-            )
-            self.task_loader.load_cve_tasks()
-            
-            # Load the specific task
-            self.secb_task = self.task_loader.get_task(instance_id)
-            
-            if not self.secb_task:
-                raise ValueError(f"Task {instance_id} not found in CVE-instances")
-            
-            self.logger.info(f"✓ Task loaded: {instance_id}")
-            self.logger.info(f"  - project: {self.secb_task.project_name}")
-            self.logger.info(f"  - binary_name: {self.secb_task.binary_name}")
-            self.logger.info(f"  - binary_path: {self.secb_task.binary_path}")
-            self.logger.info(f"  - vuln_location: {self.secb_task.vuln_location}")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load task: {e}")
-            raise ValueError(f"Task loading failed: {e}")
 
     def _clean_repository(self):
         # Clean build artifacts and git repository state
@@ -283,17 +237,19 @@ class DrillAgent:
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
 
         try:
-            # Check if we can reuse existing coverage binary (check commit first to save time)
-            if check_repo_at_commit(Path(self.config.target_repo_path), self.config.base_commit, self.logger):
-                existing_binary = check_coverage_binary_exists(
-                    target_repo_path=Path(self.config.target_repo_path),
-                    secb_task=self.secb_task,
-                    logger=self.logger
-                )
-                if existing_binary:
-                    self.logger.info(f"✓ Reusing existing coverage binary: {existing_binary}")
-                    self.coverage_binary = existing_binary
-                    self.config.enable_coverage = False
+            # Always check if coverage instrumentation already exists
+            existing_binary = check_coverage_binary_exists(
+                target_repo_path=Path(self.config.target_repo_path),
+                cve_id=self.config.cve_id,
+                logger=self.logger
+            )
+            if existing_binary:
+                self.logger.info(f"✓ Using existing coverage-instrumented binary: {existing_binary}")
+                self.coverage_binary = existing_binary
+                # Disable coverage instrumentation since binary already exists
+                self.config.enable_coverage = False
+            else:
+                self.logger.info("No existing coverage-instrumented binary found; proceeding with instrumentation")
             
             # Phase 1: Code Instrumentation
             if not self.skip_instrumentation:
@@ -326,26 +282,59 @@ class DrillAgent:
         self.logger.info("\n[Phase 1] Code Instrumentation")
         self.phase = "instrumentation"
 
-        # Step 1: Run AFLGo instrumentation if enabled
+        # Step 1: Always ensure AFLGo configuration exists (for all CVE instances)
+        self.logger.info("  - Checking AFLGo configuration...")
+        try:
+            # Get project root for paths
+            project_root = Path(__file__).resolve().parent.parent.parent
+            
+            # Check if config already exists in instrumentation_configs
+            instrumentation_configs_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
+            existing_configs = list(instrumentation_configs_dir.glob(f"*.{self.config.cve_id.lower()}.yaml"))
+            
+            if existing_configs:
+                # Use existing config
+                config_path = existing_configs[0]
+                self.aflgo_config_path = str(config_path)
+                self.logger.info(f"    ✓ Using existing config: {config_path.name}")
+            else:
+                # Generate new config from CVE instance using ConfigGeneratorAgent
+                self.logger.info("    - Initializing ConfigGeneratorAgent...")
+                config_generator = ConfigGeneratorAgent(self)
+                
+                # Instance files are named: {project}.{cve-id}.json (e.g., exiv2.cve-2017-14857.json)
+                instance_path = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f"{self.config.project_name}.{self.config.cve_id.lower()}.json"
+                
+                # Generate config for AFLGo instrumentation - save to instrumentation_configs
+                output_path = instrumentation_configs_dir / f"{self.config.project_name}.{self.config.cve_id.lower()}.yaml"
+                
+                self.logger.info(f"    - Generating config from: {instance_path.name}")
+                config_yaml = config_generator.generate_config(instance_path, output_path)
+                
+                # Store config path for later use
+                self.aflgo_config_path = str(output_path)
+                self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
+        except Exception as e:
+            self.logger.error(f"    Failed to ensure AFLGo config: {e}")
+            self.errors.append(f"Config generation failed: {e}")
+            self.aflgo_config_path = None
+
+        # Step 2: Run AFLGo instrumentation if enabled
         if self.config.enable_distance:
             self.logger.info("  - Running AFLGo instrumentation...")
             
-            # Runtime config only - task data comes from secb_task
-            config_dict = {
-                'repos_dir': 'repos',
-                'log_level': 'INFO',
-                'log_file': f'aflgo_{self.secb_task.project_name}.log'
-            }
+            # Load the YAML config file into a dictionary
+            with open(self.aflgo_config_path, 'r') as f:
+                config_dict = yaml.safe_load(f)
             
-            distance_agent = DistanceAgent(
+            instrumentation_agent = DistanceAgent(
                 config=config_dict,
-                secb_task=self.secb_task,
                 llm=self.llm,
                 logger=self.logger
             )
             
             # Execute the full instrumentation workflow
-            result = distance_agent.run()
+            result = instrumentation_agent.run()
             if result['success']:
                 self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
                 self.instrumented_binary = result.get('instrumented_binary')
@@ -355,7 +344,7 @@ class DrillAgent:
         else:
             self.logger.info("  - AFLGo instrumentation disabled (enable_distance=False)")
 
-        # Step 2: Build with coverage instrumentation
+        # Step 3: Build with coverage instrumentation
         if self.config.enable_coverage:
             self.logger.info("  - Building with coverage instrumentation...")
             coverage_agent = CoverageInstrumentAgent(self)
@@ -374,8 +363,6 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-
-        # Step 3: Apply memory sanitizer if enabled
         if self.config.enable_sanitizer:
             self.logger.info("  - Applying memory sanitizer...")
             # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)

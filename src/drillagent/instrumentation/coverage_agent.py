@@ -6,7 +6,7 @@ This module provides the CoverageInstrumentAgent class for building target binar
 with LLVM source-based code coverage instrumentation enabled.
 
 The agent:
-- Uses SecbTask data directly from DrillAgent (no config files needed)
+- Loads existing build configuration from datasets/sec-bench/instrumentation_configs
 - Injects LLVM coverage flags into the build commands
 - Executes the build with coverage instrumentation
 - Uses LLM assistance for error resolution if needed
@@ -14,6 +14,7 @@ The agent:
 
 import os
 import logging
+import yaml
 import re
 import glob
 from pathlib import Path
@@ -30,9 +31,9 @@ from drillagent.prompts.CoverageInstrumentAgent_prompt import (
 
 
 class CoverageInstrumentAgent(BaseAgent):
-    """Coverage instrumentation agent using SecbTask data directly
+    """Coverage instrumentation agent using SEC-bench configs
     
-    This agent uses build configuration from SecbTask (loaded from CVE-instances),
+    This agent loads build configurations from datasets/sec-bench/instrumentation_configs,
     injects LLVM coverage flags, and builds the instrumented binary.
     """
     
@@ -42,7 +43,7 @@ class CoverageInstrumentAgent(BaseAgent):
         """Initialize coverage instrumentation agent
         
         Args:
-            drill_agent: DrillAgent instance containing config, llm, logger, secb_task, etc.
+            drill_agent: DrillAgent instance containing config, llm, logger, etc.
         """
         self.drill_agent = drill_agent
         self.config = drill_agent.config
@@ -54,13 +55,16 @@ class CoverageInstrumentAgent(BaseAgent):
         if not self.cve_id:
             raise ValueError("cve_id is required in config")
         
-        # Get SecbTask directly from drill_agent (loaded in _phase_instrumentation)
-        self.secb_task = drill_agent.secb_task
-        if not self.secb_task:
-            raise ValueError(f"SecbTask not loaded in drill_agent for {self.cve_id}")
+        # Load instrumentation config first to get project_name and repo_url
+        self.instr_config = self._load_instrumentation_config()
         
-        # Get project name from SecbTask
-        self.project_name = self.secb_task.project_name
+        # Extract project name from repo_url
+        repo_url = self.instr_config.get('repo_url', '')
+        if repo_url:
+            # Extract project name from URL like https://github.com/nginx/njs.git -> njs
+            self.project_name = repo_url.rstrip('/').rstrip('.git').split('/')[-1]
+        else:
+            raise ValueError(f"repo_url not found in instrumentation config for {self.cve_id}")
         
         # Use target_repo_path from drill_agent config
         self.target_repo = Path(self.config.target_repo_path)
@@ -79,6 +83,27 @@ class CoverageInstrumentAgent(BaseAgent):
         
         self.logger.info(f"CoverageInstrumentAgent initialized for {self.project_name} {self.cve_id}")
         self.logger.info(f"Target repository: {self.target_repo}")
+
+    def _load_instrumentation_config(self) -> Dict[str, Any]:
+        """Load instrumentation config from SEC-bench datasets
+        
+        Returns:
+            Loaded configuration dictionary
+        """
+        # Find config file by CVE ID
+        # Config files are named: <project>.<cve-id>.yaml (e.g., njs.cve-2022-43284.yaml)
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent.parent.parent
+        config_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
+        
+        # Search for config file matching CVE ID
+        cve_pattern = f"*.{self.cve_id.lower()}.yaml"
+        config_path = list(config_dir.glob(cve_pattern))[0]
+        
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        return config
 
     def run(self) -> Dict[str, Any]:
         """Execute coverage instrumentation workflow
@@ -128,8 +153,7 @@ class CoverageInstrumentAgent(BaseAgent):
                 # Verify the binary has coverage symbols
                 verified_binary = check_existing_coverage_instrumentation(
                     target_repo=self.target_repo,
-                    binary_name=self.secb_task.binary_name,
-                    binary_path=self.secb_task.binary_path,
+                    instr_config=self.instr_config,
                     project_name=self.project_name,
                     logger=self.logger
                 )
@@ -177,16 +201,16 @@ class CoverageInstrumentAgent(BaseAgent):
             }
 
     def _inject_coverage_flags(self) -> str:
-        """Inject coverage flags into build commands from SecbTask
+        """Inject coverage flags into build commands from config
         
         Returns:
             Modified build commands with coverage flags
         """
-        # Get original build commands from SecbTask
-        build_commands = self.secb_task.build_sh
+        # Get original build commands
+        build_commands = self.instr_config.get('build_config', {}).get('build_commands', '')
         
         if not build_commands:
-            raise ValueError("No build commands found in SecbTask.build_sh")
+            raise ValueError("No build commands found in instrumentation config")
         
         # Step 1: Remove Docker-specific commands that will fail locally
         build_commands = re.sub(
@@ -435,8 +459,7 @@ LDFLAGS="${{LDFLAGS:-}}"
         # Locate the instrumented binary using utils function
         binary = locate_instrumented_binary(
             self.target_repo,
-            self.secb_task.binary_name,
-            self.secb_task.binary_path,
+            self.instr_config,
             self.project_name,
             self.logger
         )
