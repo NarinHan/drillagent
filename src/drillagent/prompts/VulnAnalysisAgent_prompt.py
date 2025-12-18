@@ -44,7 +44,8 @@ Your task is to extract the following information from the sanitizer report:
    - Format: src/main.c:45 (NOT /home/user/project/src/main.c:45)
    - If entry location is not clearly in the call trace, leave it empty
 
-6. **Call Trace**: Extract the full stack trace (all lines starting with #)   
+6. **Call Trace**: Extract the full stack trace (all lines starting with #) 
+   - If there are multiple sets of call traces, only keep the first one and ignore the other sets of traces!!
 
 IMPORTANT PATH REQUIREMENTS:
 - ALL paths must be relative to repository root: {actual_repo_path}
@@ -74,7 +75,7 @@ Provide your response in the following JSON format ONLY:
     "refined_vuln_location": "relative/path/file.c:line_number",
     "entry_function": "main or other entry function",
     "entry_location": "relative/path/file.c:line_number",
-    "call_trace": "full stack trace starting with #0..."
+    "call_trace": "full stack trace starting with #0... (If there are multiple sets of call traces, only keep the first one and ignore the rest)"
 }}
 """
 

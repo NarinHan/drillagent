@@ -29,8 +29,84 @@ class VulnAnalysisAgent:
         self.llm: 'LLM' = drill_agent.llm
         self.tools: List['AgentTool'] = drill_agent.agent_tools
 
-        # Vulnerability information container!!!!!
-        self.vuln_info = VulnInfo()
+        # Vulnerability information container!!!!! 
+        self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
+        self.cache_dir = os.path.join(self.config.work_dir, "cache_drillagent")
+
+    def load_from_cache(self) -> bool:
+        # Load vulnerability analysis results from cache if available.
+        # True if cache was successfully loaded, False otherwise
+        try:
+            project_name = self.config.project_name
+            cve_id       = self.config.cve_id
+            base_commit  = self.config.base_commit
+            if cve_id:
+                identifier = f"{project_name}_{cve_id}"
+            else:
+                identifier = f"{project_name}_{base_commit}"
+            # Construct cache file path using identifier
+            cache_filepath = os.path.join(self.cache_dir, f"vuln_info_{identifier}.json")
+
+            # Check if cache file exists
+            if not os.path.exists(cache_filepath):
+                self.logger.info(f"  [VulnAnalysisAgent] No cache file found at: {cache_filepath}")
+                return False
+            # Check if file has content
+            if os.path.getsize(cache_filepath) == 0:
+                self.logger.warning(f"  [VulnAnalysisAgent] Cache file is empty: {cache_filepath}")
+                return False
+
+            # Read and parse cache file
+            with open(cache_filepath, 'r', encoding='utf-8') as f:
+                vuln_data = json.load(f)
+
+            # Validate that we have data
+            if not vuln_data:
+                self.logger.warning(f"  [VulnAnalysisAgent] Cache file contains no data: {cache_filepath}")
+                return False
+
+            # Load data into vuln_info using from_dict
+            self.vuln_info = VulnInfo.from_dict(vuln_data)
+            self.logger.info(f"  [VulnAnalysisAgent] Successfully loaded cache from: {cache_filepath}")
+            return True
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"  [VulnAnalysisAgent] Failed to parse cache file: {e}", exc_info=True)
+            return False
+        except Exception as e:
+            self.logger.error(f"  [VulnAnalysisAgent] Failed to load cache: {e}", exc_info=True)
+            return False
+
+    def store_to_cache(self):
+        # Store vulnerability analysis results to cache directory as JSON file for future use.
+        try:
+            # Ensure cache directory exists
+            os.makedirs(self.cache_dir, exist_ok=True)
+
+            project_name = self.config.project_name
+            cve_id       = self.config.cve_id
+            base_commit  = self.config.base_commit
+            if cve_id:
+                identifier = f"{project_name}_{cve_id}"
+            else:
+                identifier = f"{project_name}_{base_commit}"
+
+            # Write to cache file with pretty formatting
+            cache_filepath = os.path.join(self.cache_dir, f"vuln_info_{identifier}.json")
+            vuln_data = self.vuln_info.to_dict()
+            with open(cache_filepath, 'w', encoding='utf-8') as f:
+                json.dump(vuln_data, f, indent=2, ensure_ascii=False)
+
+            # Also write root cause analysis results to a file separately for easy access.
+            root_cause_filepath = os.path.join(self.cache_dir, f"root_cause_{identifier}.md")
+            with open(root_cause_filepath, 'w', encoding='utf-8') as f:
+                f.write(self.vuln_info.root_cause)
+
+            self.logger.info(f"  [VulnAnalysisAgent] Vulnerability analysis cached to: {cache_filepath}")
+
+        except Exception as e:
+            self.logger.error(f"  [VulnAnalysisAgent] Failed to store cache: {e}", exc_info=True)
+
 
     def run(self) -> 'VulnInfo':
         # Run vulnerability analysis
@@ -47,6 +123,11 @@ class VulnAnalysisAgent:
         # raw_vuln_location    = self.config.vuln_location    # won't use
         raw_harness_command  = self.config.harness_command
         self.logger.info(f"  [VulnAnalysisAgent] Actual repo path: {len(actual_repo_path)}.")
+
+        # Try to load from cache first.
+        if self.load_from_cache():
+            self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
+            return self.vuln_info
         
         # Substep1: Extract basic vulnerability information (if sanitizer report is available)
         # TODO: raw_vuln_location could be used for cross checking.
@@ -75,10 +156,10 @@ class VulnAnalysisAgent:
         # self._root_cause_analysis()
         # LHY: Currently we skip this step to save cost and time.
 
-        return self.vuln_info
+        # Store results to cache for future use
+        self.store_to_cache()
 
-    def store_to_cache(self, cache_dir: str):
-        pass
+        return self.vuln_info
 
     def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report):
         # Extract vulnerability information from sanitizer report using LLM with tools
@@ -140,7 +221,8 @@ class VulnAnalysisAgent:
                     max_tokens=2048
                 )
 
-            self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
+            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
+            self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response}")
 
             # Extract JSON from response (handle multiple formats)
             # Try to extract JSON from markdown code block
@@ -612,12 +694,30 @@ class VulnInfo:
             'entry_location': self.entry_location,
             'entry_function': self.entry_function,
             'raw_call_trace': self.raw_call_trace,
+            'call_trace': self.call_trace,
             'refined_harness_command': self.refined_harness_command,
             'binary_path': self.binary_path,
             'vuln_type': self.vuln_type,
             'root_cause': self.root_cause,
             'critical_branches': self.critical_branches
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'VulnInfo':
+        """Create VulnInfo instance from dictionary"""
+        return cls(
+            refined_vuln_location=data.get('refined_vuln_location', ''),
+            crash_function=data.get('crash_function', ''),
+            entry_location=data.get('entry_location', ''),
+            entry_function=data.get('entry_function', ''),
+            raw_call_trace=data.get('raw_call_trace', ''),
+            call_trace=data.get('call_trace', []),
+            refined_harness_command=data.get('refined_harness_command', ''),
+            binary_path=data.get('binary_path', ''),
+            vuln_type=data.get('vuln_type', ''),
+            root_cause=data.get('root_cause', ''),
+            critical_branches=data.get('critical_branches', [])
+        )
 
     def format_output(self) -> str:
         lines = []
