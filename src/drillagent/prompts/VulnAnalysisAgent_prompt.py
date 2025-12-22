@@ -65,20 +65,6 @@ Respond in the following JSON format ONLY:
 Be precise. Extract information directly from the report.
 """
 
-# Follow-up prompt after tool execution for sanitizer extraction
-VAA_sanitizer_followup_prompt = """Based on the file verification results above, now extract the vulnerability information from the sanitizer report.
-
-Provide your response in the following JSON format ONLY:
-{{
-    "vuln_type": "the vulnerability type",
-    "crash_function": "innermost function IN REPOSITORY CODE (not libc)",
-    "refined_vuln_location": "relative/path/file.c:line_number",
-    "entry_function": "main or other entry function",
-    "entry_location": "relative/path/file.c:line_number",
-    "call_trace": "full stack trace starting with #0... (If there are multiple sets of call traces, only keep the first one and ignore the rest)"
-}}
-"""
-
 
 # Prompt for refining harness command
 VAA_harness_refine_prompt = """You are refining a harness command to accurately run target program and reproduce a vulnerability.
@@ -132,51 +118,6 @@ Then output should be:
 }}
 
 Be thorough. Verify paths exist before responding.
-"""
-
-# Follow-up prompt after tool execution for harness refinement
-# 2025.12.09: Fixed a tricky bug: {{tool_results}} -> {tool_results}
-VAA_harness_followup_prompt = """You are refining a harness command to accurately run target program and reproduce a vulnerability.
-
-Project: {project_name}
-Repository path: {actual_repo_path}
-
-Current harness command: 
-(May contain absolute path prefix not existing in the local machine, need to be refined)
-```
-{harness_command}
-```
-
-Your tasks:
-
-1. **Locate the binary**: Find the actual executable binary in the repository
-   - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/
-   - Use find_file or list_dir tools to locate the binary
-   - Verify it exists and is executable
-
-2. **Extract binary_path**: The path RELATIVE to the repository root
-   - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
-   - Must be relative to: {actual_repo_path}
-
-3. **Refine the command**: Create a command that can be run from any directory
-   - The command should be executable when run from arbitrary directories, so try to use absolute path for the binary program
-   - Remain all the flags and command line arguments as in the original harness command!!!
-   - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
-   - Example: /absolute/path/to/build/njs <path/to/testcase>
-
-IMPORTANT PATH REQUIREMENTS:
-- binary_path must be RELATIVE to repository root: {actual_repo_path}
-- refined_harness_command must be runnable from any directory (i.e., the binary program in the command should use absolute path)
-- Verify the program file exists in the repository using tools if needed!!
-
-Previous tool results:
-{tool_results}
-
-Now provide the final refined harness information in JSON format:
-{{
-    "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "executable command (from any directory) with arguments and testcase placeholder (if any)"
-}}
 """
 
 

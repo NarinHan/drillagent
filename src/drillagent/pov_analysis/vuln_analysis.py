@@ -6,9 +6,7 @@ from dataclasses import dataclass, field
 from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_system_prompt,
     VAA_sanitizer_extraction_prompt,
-    VAA_sanitizer_followup_prompt,
     VAA_harness_refine_prompt,
-    VAA_harness_followup_prompt,
     VAA_root_cause_analysis_prompt,
     VAA_call_trace_transform_prompt
 )
