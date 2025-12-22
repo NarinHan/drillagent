@@ -60,7 +60,7 @@ class DrillAgent:
         # Final analysis results
         self.crash_inputs = []         # Real PoV inputs that trigger the vulnerability
 
-        # # Initialize logger and components (TODO: implement these)
+        # # Initialize logger and components
         self.logger = self._setup_logger()
         self._init_components()
 
@@ -214,7 +214,7 @@ class DrillAgent:
             self.reasoning_llm = None
             self.low_cost_llm = None
 
-        self.logger.info("Components initialized")
+        self.logger.info("All components initialized")
 
     def _clean_repository(self):
         # Clean build artifacts and git repository state
