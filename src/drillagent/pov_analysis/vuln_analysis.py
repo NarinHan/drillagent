@@ -26,7 +26,6 @@ class VulnAnalysisAgent:
         self.drill_agent: 'DrillAgent' = drill_agent
         self.config: 'AgentConfig' = drill_agent.config
         self.logger: logging.Logger = drill_agent.logger
-        self.llm: 'LLM' = drill_agent.llm
         self.tools: List['AgentTool'] = drill_agent.agent_tools
 
         # Vulnerability information container!!!!! 
@@ -112,8 +111,9 @@ class VulnAnalysisAgent:
         # Run vulnerability analysis with a VulnInfo object returned.
         self.logger.info("  [VulnAnalysisAgent] Starting vulnerability analysis...")
 
-        if not self.llm or not self.tools:
-            self.logger.warning("  [VulnAnalysisAgent] LLM or tools not available! Return with nothing.")
+        # Check if basic_llm (LLMInterface) is available
+        if not (hasattr(self.drill_agent, 'basic_llm') and self.drill_agent.basic_llm) or not self.tools:
+            self.logger.warning("  [VulnAnalysisAgent] LLMInterface or tools not available! Return with nothing.")
             return self.vuln_info
         
         # The analysis is based on the following basic information.
@@ -165,7 +165,7 @@ class VulnAnalysisAgent:
 
     def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report):
         # Extract vulnerability information from sanitizer report using LLM with tools
-        # LLM: Non-loop invocations.
+        # LLM: Using new LLMInterface with automatic agent loop
         try:
             # Prepare the prompt
             prompt = VAA_sanitizer_extraction_prompt.format(
@@ -174,59 +174,29 @@ class VulnAnalysisAgent:
                 sanitizer_report=sanitizer_report
             )
 
-            # First try without tools - simple extraction
-            self.logger.info("  [VulnAnalysisAgent] Calling LLM to extract sanitizer report information...")
-            response = self.llm.generate(
-                prompt=prompt,
+            # Use LLMInterface for automatic tool calling and conversation management
+            assert hasattr(self.drill_agent, 'basic_llm') and self.drill_agent.basic_llm is not None, "DrillAgent.basic_llm (LLMInterface) is not available!"
+            self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to extract sanitizer report...")
+
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=prompt,
+                tools=self.tools,
                 system_prompt=VAA_system_prompt,
+                max_iterations=5,  # Allow up to 5 rounds of tool usage
                 temperature=0.1,  # Low temperature for precise extraction
-                max_tokens=4096
+                max_tokens=4096,
+                continuation_prompt="Please continue extracting the vulnerability information and provide the final JSON output."
             )
 
-            # FIX: The 3 LLM invokings in this `_extract_sanitizer_report` function is really weird... (by LHY)
-            # TODO: Use the updated message and tool call history management in LLM class here!!!
-            # Check if we need tools (if response doesn't contain JSON)
-            has_json = '{' in response and '}' in response
-            if not has_json:
-                # Retry with tools if first attempt failed
-                response, tool_calls, _ = self.llm.generate_with_tools(
-                    prompt=prompt,
-                    tools=self.tools,
-                    system_prompt=VAA_system_prompt,
-                    temperature=0.1,
-                    max_tokens=4096
-                )
-            else:
-                tool_calls = None
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.error(f"  [VulnAnalysisAgent] LLM agent loop failed: {error_msg}")
+                raise RuntimeError(f"Failed to extract sanitizer report: {error_msg}")
 
-            # Execute any tool calls if needed
-            if tool_calls and len(tool_calls) > 0:
-                self.logger.info(f"  [VulnAnalysisAgent] Executing {len(tool_calls)} tool calls...")
-                for tool_call in tool_calls:
-                    tool_name = tool_call.get('name')
-                    tool_args = tool_call.get('arguments', {})
-                    self.logger.debug(f"      {tool_name}({json.dumps(tool_args)})")
-
-                    for tool in self.tools:
-                        if tool.name() == tool_name:
-                            try:
-                                result = tool.execute(**tool_args)
-                                self.logger.debug(f"      Result: {str(result)[:200]}")
-                            except Exception as e:
-                                self.logger.error(f"      Tool error: {e}")
-                            break
-
-                # Get final response after tool execution
-                response, _, _ = self.llm.generate_with_tools(
-                    prompt=VAA_sanitizer_followup_prompt,
-                    tools=self.tools,
-                    system_prompt=VAA_system_prompt,
-                    temperature=0.1,
-                    max_tokens=2048
-                )
-
+            response = result['final_response']
+            self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
+            self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
             self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
-            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response}")
 
             # Extract JSON from response (handle multiple formats)
             # Try to extract JSON from markdown code block
@@ -291,7 +261,7 @@ class VulnAnalysisAgent:
 
     def _refine_harness_command(self, project_name, actual_repo_path, raw_harness_command):
         # Refine harness command to use actual paths using LLM with tools
-        # LLM: Little-loop invocations.
+        # LLM: Using new LLMInterface with automatic agent loop
         try:
             # Prepare the prompt
             prompt = VAA_harness_refine_prompt.format(
@@ -300,56 +270,28 @@ class VulnAnalysisAgent:
                 harness_command=raw_harness_command if raw_harness_command else "Not provided"
             )
 
-            # Call LLM with tools - allow multiple rounds for exploration
-            self.logger.info("  [VulnAnalysisAgent] Calling LLM to refine harness command...")
-            max_rounds = 3
-            current_prompt = prompt
+            # Use LLMInterface for automatic tool calling and conversation management
+            self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to refine harness command...")
 
-            for round_num in range(max_rounds):
-                self.logger.info(f"      [Round {round_num + 1}/{max_rounds}]")
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=prompt,
+                tools=self.tools,
+                system_prompt=VAA_system_prompt,
+                max_iterations=3,  # Allow up to 3 rounds of tool usage
+                temperature=0.2,
+                max_tokens=4096,
+                continuation_prompt="Please continue exploring the repository and provide the final JSON output with the refined harness command."
+            )
 
-                response, tool_calls, _ = self.llm.generate_with_tools(
-                    prompt=current_prompt,
-                    tools=self.tools,
-                    system_prompt=VAA_system_prompt,
-                    temperature=0.2,
-                    max_tokens=4096
-                )
-                # print(f"Round {round_num+1} Response: {response[:300]}...") # debug
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.error(f"  [VulnAnalysisAgent] LLM agent loop failed: {error_msg}")
+                raise RuntimeError(f"Failed to refine harness command: {error_msg}")
 
-                # If no tool calls, LLM is done
-                if not tool_calls:
-                    self.logger.info(f"  [VulnAnalysisAgent] Found no more tool calls. LLM finished refining harness command")
-                    break
-
-                # Execute tool calls
-                self.logger.info(f"      Executing {len(tool_calls)} tool calls...")
-                tool_results = []
-                for tool_call in tool_calls:
-                    tool_name = tool_call.get('name')
-                    tool_args = tool_call.get('arguments', {})
-                    self.logger.debug(f"        {tool_name}({json.dumps(tool_args)})")
-
-                    for tool in self.tools:
-                        if tool.name() == tool_name:
-                            try:
-                                result = tool.execute(**tool_args)
-                                tool_results.append(result)
-                                self.logger.debug(f"        Result: {str(result)[:200]}")
-                            except Exception as e:
-                                self.logger.error(f"        Tool error: {e}")
-                            break
-
-                # Prepare next round prompt
-                # print(f"Round {round_num+1} Tool Results: {tool_results}") # debug
-                current_prompt = VAA_harness_followup_prompt.format(
-                    project_name=project_name,
-                    actual_repo_path=actual_repo_path,
-                    harness_command=raw_harness_command,
-                    tool_results=json.dumps(tool_results, indent=2)[:1500] # Add tool results into the prompt manually!
-                )
-
-            self.logger.info(f"  [VulnAnalysisAgent] LLM Final Response (after {round_num + 1} rounds): {response[:300]}...")
+            response = result['final_response']
+            self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
+            self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
+            self.logger.info(f"  [VulnAnalysisAgent] LLM Final Response: {response[:300]}...")
 
             # Extract JSON from response
             # Try to extract JSON from markdown code block
@@ -413,129 +355,46 @@ class VulnAnalysisAgent:
 
     def _root_cause_analysis(self):
         # Perform root cause analysis using LLM with tools.
-        ### Core idea here is to let LLM explore the codebase along call trace with tools.
-        ### Results will be stored in a markdown file in store_to_cache().
-        # LLM: Loop invocations with proper conversation history management.
+        # Core idea: let LLM explore the codebase along call trace with tools.
+        # Results will be stored in a markdown file in store_to_cache().
+        # LLM: Using new LLMInterface with automatic agent loop
         try:
-            # Call LLM with tools - allow multiple rounds for deep analysis
-            self.logger.info("    Calling LLM for root cause analysis...")
-            max_rca_rounds = 20
-            conversation_history = []  # Maintain conversation history for multi-turn LLM interaction
-            all_responses = []
+            # Prepare the initial prompt
+            initial_prompt = VAA_root_cause_analysis_prompt.format(
+                project_name=self.config.project_name,
+                actual_repo_path=self.config.target_repo_path,
+                vuln_type=self.vuln_info.vuln_type,
+                crash_location=self.vuln_info.refined_vuln_location,
+                crash_function=self.vuln_info.crash_function,
+                entry_location=self.vuln_info.entry_location,
+                entry_function=self.vuln_info.entry_function,
+                refined_harness_command=self.vuln_info.refined_harness_command,
+                refined_call_trace=self.vuln_info.get_refined_call_trace_as_string()
+            )
 
-            for round_num in range(max_rca_rounds):
-                self.logger.info(f"      [Round {round_num + 1}/{max_rca_rounds}]")
+            # Use LLMInterface for automatic tool calling and conversation management
+            self.logger.info("    Using LLMInterface for root cause analysis...")
 
-                # Prepare current user prompt
-                if round_num == 0:
-                    # First round: create full initial prompt
-                    current_prompt = VAA_root_cause_analysis_prompt.format(
-                        project_name=self.config.project_name,
-                        actual_repo_path=self.config.target_repo_path,
-                        vuln_type=self.vuln_info.vuln_type,
-                        crash_location=self.vuln_info.refined_vuln_location,
-                        crash_function=self.vuln_info.crash_function,
-                        entry_location=self.vuln_info.entry_location,
-                        entry_function=self.vuln_info.entry_function,
-                        refined_harness_command=self.vuln_info.refined_harness_command,
-                        refined_call_trace=self.vuln_info.get_refined_call_trace_as_string()
-                    )
-                elif round_num == max_rca_rounds - 1:
-                    # Last round: urge LLM to provide final analysis
-                    if conversation_history and conversation_history[-1]["role"] == "user":
-                        current_prompt = conversation_history.pop()["content"]
-                    else:
-                        current_prompt = ""
-                    current_prompt += "\n\nThis is the last round. Please provide your complete root cause analysis now."
-                else:
-                    # Subsequent rounds: pop the last user message from conversation_history
-                    # This message was added at the end of previous round (tool results with continuation prompt)
-                    if conversation_history and conversation_history[-1]["role"] == "user":
-                        current_prompt = conversation_history.pop()["content"]
-                    else:
-                        current_prompt = "Please continue your root cause analysis."
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=initial_prompt,
+                tools=self.tools,
+                system_prompt=VAA_system_prompt,
+                max_iterations=20,  # Allow up to 20 rounds of deep analysis
+                temperature=0.3,
+                max_tokens=16384, # Modern LLMs can handle larger contexts.
+                continuation_prompt="Please continue your root cause analysis based on the code you examined."
+            )
 
-                # Invoke LLM with conversation history
-                response, tool_calls, assistant_message = self.llm.generate_with_tools(
-                    prompt=current_prompt,
-                    tools=self.tools,
-                    system_prompt=VAA_system_prompt,
-                    conversation_history=conversation_history,
-                    temperature=0.3,
-                    max_tokens=4096
-                )
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.error(f"    LLM agent loop failed: {error_msg}")
+                raise RuntimeError(f"Failed to perform root cause analysis: {error_msg}")
 
-                self.logger.info(f"      LLM Response: {response[:200]}...")
-                all_responses.append(response)
-
-                # Add current turn's user prompt to conversation history
-                conversation_history.append({
-                    "role": "user",
-                    "content": current_prompt
-                })
-
-                # Add assistant's complete response (in official API format) to conversation history
-                conversation_history.append(assistant_message)
-
-                # If no tool calls, LLM is done with analysis
-                if not tool_calls:
-                    self.logger.info(f"      LLM finished root cause analysis (no more tool calls).")
-                    self.vuln_info.root_cause = response
-                    break
-
-                # Execute tool calls
-                self.logger.info(f"      Executing {len(tool_calls)} tool calls...")
-                tool_results = []
-                for tool_call in tool_calls:
-                    tool_name = tool_call.get('name')
-                    tool_args = tool_call.get('arguments', {})
-                    self.logger.debug(f"        {tool_name}({json.dumps(tool_args)})")
-
-                    result = None
-                    for tool in self.tools:
-                        if tool.name() == tool_name:
-                            try:
-                                result = tool.execute(**tool_args)
-                                # Show preview of result
-                                if result.get('success') and 'content' in result:
-                                    lines = result['content'].split('\n')[:5]
-                                    self.logger.debug(f"        Result preview: {chr(10).join(lines)}")
-                            except Exception as e:
-                                self.logger.error(f"        Tool error: {e}")
-                                result = f"Error: {str(e)}"
-                            break
-
-                    # Store result (handle case where tool wasn't found)
-                    tool_results.append(result if result is not None else "No result")
-
-                # Create tool result message in official API format
-                tool_result_msg = self.llm.create_tool_result_message(tool_calls, tool_results)
-
-                # Handle different LLM providers
-                if "_openai_tool_messages" in tool_result_msg:
-                    # OpenAI: add each tool result message separately
-                    for msg in tool_result_msg["_openai_tool_messages"]:
-                        conversation_history.append(msg)
-                    # Add continuation prompt as the last user message
-                    conversation_history.append({
-                        "role": "user",
-                        "content": "Please continue your root cause analysis based on the code you examined."
-                    })
-                else:
-                    # Claude: single user message with tool_result blocks
-                    # Append continuation prompt to the tool result message
-                    tool_result_msg["content"].append({
-                        "type": "text",
-                        "text": "Please continue your root cause analysis based on the code you examined."
-                    })
-                    conversation_history.append(tool_result_msg)
-
-            # Use last response as root cause if not set (fallback)
-            if not self.vuln_info.root_cause and all_responses:
-                self.vuln_info.root_cause = all_responses[-1]
-
-            self.logger.info(f"    ✓ Root cause analysis complete")
-            self.logger.info(f"      Analysis: {self.vuln_info.root_cause[:200]}...")
+            # Store the root cause analysis
+            self.vuln_info.root_cause = result['final_response']
+            self.logger.info(f"    ✓ Root cause analysis complete in {result['iterations']} iteration(s)")
+            self.logger.info(f"    Stop reason: {result['stop_reason']}")
+            self.logger.info(f"    Analysis: {self.vuln_info.root_cause[:200]}...")
 
         except Exception as e:
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
@@ -562,8 +421,8 @@ class VulnAnalysisAgent:
             )
 
             # Call LLM to transform the call trace
-            self.logger.info("  [VulnAnalysisAgent] Calling LLM to transform raw call trace...")
-            response = self.llm.generate(
+            self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to transform raw call trace...")
+            response = self.drill_agent.basic_llm.generate(
                 prompt=prompt,
                 system_prompt=VAA_system_prompt,
                 temperature=0.1,  # Low temperature for precise extraction

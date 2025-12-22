@@ -52,7 +52,7 @@ class PathExplorationAgent:
         self.best_pov_candidate = None    # Type:XXX
         self.crash_input_pov = None       # Type:XXX
 
-    def run(self):
+    def run(self) -> None:
         # Run the path exploration process to generate PoV candidates that can reach the vulnerable function.
         self.logger.info("  [PathExplorationAgent] Starting path exploration analysis...")
 
@@ -643,9 +643,10 @@ class PathExplorationAgent:
                     text_content = crash_input_content.decode('utf-8', errors='replace')
                     if text_content.isprintable() or '\n' in text_content:
                         print(f"\n--- Test Case Content (text) ---")
-                        print(text_content[:500])  # Print first 500 chars
-                        if len(text_content) > 500:
-                            print(f"... ({len(text_content) - 500} more chars)")
+                        print(text_content)  # Print all!
+                        # print(text_content[:500])  # Print first 500 chars
+                        # if len(text_content) > 500:
+                        #     print(f"... ({len(text_content) - 500} more chars)")
                 except:
                     pass
 

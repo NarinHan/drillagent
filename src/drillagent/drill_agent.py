@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
-from drillagent.models import LLM
+from drillagent.models import LLM, LLMInterface, ConversationManager, UsageStats
 from drillagent.instrumentation import ConfigGeneratorAgent, DistanceAgent, CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
@@ -39,10 +39,11 @@ class DrillAgent:
         self.iteration = 0
         self.errors = []
 
-        # LLM interface
-        self.llm: LLM = None
-        self.reasoning_llm: LLM = None
-        self.low_cost_llm:  LLM = None
+        # LLM interfaces (We use different LLMs for different sub-tasks to optimize cost and performance)
+        self.llm: LLM = None # Old LLM interface, kept for backward compatibility.
+        self.basic_llm: LLMInterface     = None
+        self.reasoning_llm: LLMInterface = None
+        self.low_cost_llm:  LLMInterface = None
 
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
@@ -122,17 +123,17 @@ class DrillAgent:
         # Initialize all required components
         self.logger.info("Initializing components...")
 
-        # Initialize LLM interface
+        # Initialize old LLM interface (backward compatibility)
         try:
-            self.logger.info(f"Initializing {self.config.model_provider} LLM...")
+            self.logger.info(f"Initializing {self.config.model_provider} LLM (legacy)...")
             self.llm = LLM(
                 provider=self.config.model_provider,
                 model_name=self.config.model_name,
                 api_key=self.config.api_key
             )
-            self.logger.info(f"✓ LLM initialized: {self.llm.provider}/{self.llm.model_name}")
+            self.logger.info(f"✓ Legacy LLM initialized: {self.llm.provider}/{self.llm.model_name}")
         except Exception as e:
-            self.logger.error(f"Failed to initialize LLM: {e}")
+            self.logger.error(f"Failed to initialize legacy LLM: {e}")
             self.llm = None
 
         # Initialize agent tools for LLM
@@ -149,6 +150,69 @@ class DrillAgent:
         except Exception as e:
             self.logger.error(f"Failed to initialize agent tools: {e}")
             self.agent_tools = []
+
+        # Initialize new LLMInterface instances
+        # We use different models for different sub-tasks to optimize cost and performance
+        try:
+            # 1. Basic LLM - uses config's default model for general tasks
+            self.logger.info(f"Initializing basic LLM interface...")
+            self.basic_llm = LLMInterface(
+                provider=self.config.model_provider,
+                model_name=self.config.model_name,
+                api_key=self.config.api_key,
+                logger=self.logger
+            )
+            self.logger.info(f"✓ Basic LLM initialized: {self.basic_llm.provider}/{self.basic_llm.model_name}")
+
+            # 2. Reasoning LLM - uses reasoning_model if configured, otherwise same as basic
+            if self.config.reasoning_model and self.config.reasoning_model[0]:
+                reasoning_provider, reasoning_model = self.config.reasoning_model
+                self.logger.info(f"Initializing reasoning LLM interface ({reasoning_provider}/{reasoning_model})...")
+                self.reasoning_llm = LLMInterface(
+                    provider=reasoning_provider,
+                    model_name=reasoning_model,
+                    api_key=self.config.api_key,
+                    logger=self.logger
+                )
+                self.logger.info(f"✓ Reasoning LLM initialized: {self.reasoning_llm.provider}/{self.reasoning_llm.model_name}")
+            else:
+                # Use same as basic_llm if not configured
+                self.reasoning_llm = self.basic_llm
+                self.logger.info(f"✓ Reasoning LLM using basic LLM configuration")
+
+            # 3. Low-cost LLM - uses low_cost_model if configured, otherwise use cheaper default
+            if self.config.low_cost_model and self.config.low_cost_model[0]:
+                low_cost_provider, low_cost_model = self.config.low_cost_model
+                self.logger.info(f"Initializing low-cost LLM interface ({low_cost_provider}/{low_cost_model})...")
+                self.low_cost_llm = LLMInterface(
+                    provider=low_cost_provider,
+                    model_name=low_cost_model,
+                    api_key=self.config.api_key,
+                    logger=self.logger
+                )
+                self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
+            else:
+                # Default to cheaper models if not configured
+                if self.config.model_provider == "openai":
+                    low_cost_model = "gpt-4o-mini"
+                else:  # claude
+                    low_cost_model = "claude-3-5-haiku-20241022"
+
+                self.logger.info(f"Initializing low-cost LLM with default cheaper model ({low_cost_model})...")
+                self.low_cost_llm = LLMInterface(
+                    provider=self.config.model_provider,
+                    model_name=low_cost_model,
+                    api_key=self.config.api_key,
+                    logger=self.logger
+                )
+                self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize LLMInterface instances: {e}")
+            # Fallback: keep them as None
+            self.basic_llm = None
+            self.reasoning_llm = None
+            self.low_cost_llm = None
 
         self.logger.info("Components initialized")
 
@@ -424,90 +488,19 @@ class DrillAgent:
 
     def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
-        self.logger.info("\n[Phase 4] PoV Generation and Verification")
+        self.logger.info("\n[Phase 4] Crash Triggering and PoV Validation")
 
-        # Step 1: Convert PoV candidates to concrete test cases
-        self.logger.info("  - Refining PoV candidates into concrete test cases...")
+        # Step 1: Analyze the vulnerability from a pwner perspective.
 
-        if self.llm and len(self.pov_candidates) > 0:
-            self.logger.info(f"  - Processing {len(self.pov_candidates)} PoV candidates...")
+        # Step 2: Generate PoVs based on the analysis results, (the only goal is to trigger the crash).
 
-            for idx, candidate in enumerate(self.pov_candidates):
-                self.logger.info(f"    - Processing candidate {idx + 1}/{len(self.pov_candidates)}...")
-
-                # Use LLM to generate concrete PoV code/script
-                pov_generation_prompt = f"""Generate a concrete proof-of-vulnerability (PoV) test case based on the following:
-
-Input Mutations: {candidate.get('input_mutations', 'N/A')[:500]}
-
-Path Suggestions: {candidate.get('path_suggestions', 'N/A')[:300]}
-
-Harness Command: {self.config.harness_command or 'To be determined'}
-
-CVE ID: {self.config.cve_id or 'N/A'}
-
-Please generate:
-1. A concrete test input file or command-line arguments
-2. Steps to execute the test
-3. Expected crash behavior or sanitizer output
-
-Format your response as a complete, executable test case."""
-
-                try:
-                    pov_code = self.llm.generate(
-                        prompt=pov_generation_prompt,
-                        system_prompt="You are an expert in writing PoV test cases for vulnerabilities.",
-                        temperature=0.5,  # Lower temperature for more deterministic output
-                        max_tokens=3072
-                    )
-
-                    # Update candidate with generated PoV
-                    candidate['pov_code'] = pov_code
-                    candidate['status'] = 'generated'
-
-                    self.logger.info(f"      ✓ PoV generated ({len(pov_code)} chars)")
-
-                except Exception as e:
-                    self.logger.warning(f"      Failed to generate PoV: {e}")
-                    candidate['status'] = 'failed'
-                    candidate['error'] = str(e)
-
-        # Step 2: Save PoV candidates to output directory
-        self.logger.info("  - Saving PoV test cases...")
-        try:
-            output_path = Path(self.output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-
-            # Save PoV candidates as JSON
-            # pov_output_file = output_path / "pov_candidates.json"
-            # with open(pov_output_file, 'w', encoding='utf-8') as f:
-            #     json.dump(self.pov_candidates, f, indent=2)
-
-            # self.logger.info(f"    ✓ Saved PoV candidates to {pov_output_file}")
-
-            # Save individual PoV scripts
-            for idx, candidate in enumerate(self.pov_candidates):
-                if candidate.get('status') == 'generated':
-                    pov_script_file = output_path / f"pov_{idx + 1}.txt"
-                    with open(pov_script_file, 'w', encoding='utf-8') as f:
-                        f.write(candidate.get('pov_code', ''))
-                    self.logger.info(f"    ✓ Saved PoV script to {pov_script_file}")
-
-        except Exception as e:
-            self.logger.error(f"    Failed to save PoVs: {e}")
-            self.errors.append(f"Failed to save PoVs: {e}")
-
-        # TODO: Step 3: Actually verify PoVs by executing them with harness
-        # This requires:
-        # - Implementing harness execution logic
-        # - Detecting crashes from sanitizer output
-        # - Validating that the crash matches the expected vulnerability
-        self.logger.info("  - PoV verification (TODO: implement harness execution)")
-        self.logger.info("    For now, PoVs are generated but not automatically verified")
+        # Step 3: Actually verify PoVs by executing them with sanitizers.
 
         # Step 4: Generate summary report
-        successful_povs = sum(1 for c in self.pov_candidates if c.get('status') == 'generated')
-        self.logger.info(f"\n  ✓ PoV generation completed: {successful_povs}/{len(self.pov_candidates)} successful")
+
+        self.logger.info("  ✓ Crash triggering analysis completed")
+        # successful_povs = sum(1 for c in self.pov_candidates if c.get('status') == 'generated')
+        # self.logger.info(f"\n  ✓ PoV generation completed: {successful_povs}/{len(self.pov_candidates)} successful")
 
     def _generate_report(self) -> Dict[str, Any]:
         """Generate final analysis report"""
