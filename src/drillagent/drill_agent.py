@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
-from drillagent.models import LLM
+from drillagent.models import LLM, LLMInterface, ConversationManager, UsageStats
 from drillagent.instrumentation import ConfigGeneratorAgent, DistanceAgent, CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
@@ -39,10 +39,11 @@ class DrillAgent:
         self.iteration = 0
         self.errors = []
 
-        # LLM interface
-        self.llm: LLM = None
-        self.reasoning_llm: LLM = None
-        self.low_cost_llm:  LLM = None
+        # LLM interfaces (We use different LLMs for different sub-tasks to optimize cost and performance)
+        self.llm: LLM = None # Old LLM interface, kept for backward compatibility.
+        self.basic_llm: LLMInterface     = None
+        self.reasoning_llm: LLMInterface = None
+        self.low_cost_llm:  LLMInterface = None
 
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
@@ -122,17 +123,17 @@ class DrillAgent:
         # Initialize all required components
         self.logger.info("Initializing components...")
 
-        # Initialize LLM interface
+        # Initialize old LLM interface (backward compatibility)
         try:
-            self.logger.info(f"Initializing {self.config.model_provider} LLM...")
+            self.logger.info(f"Initializing {self.config.model_provider} LLM (legacy)...")
             self.llm = LLM(
                 provider=self.config.model_provider,
                 model_name=self.config.model_name,
                 api_key=self.config.api_key
             )
-            self.logger.info(f"✓ LLM initialized: {self.llm.provider}/{self.llm.model_name}")
+            self.logger.info(f"✓ Legacy LLM initialized: {self.llm.provider}/{self.llm.model_name}")
         except Exception as e:
-            self.logger.error(f"Failed to initialize LLM: {e}")
+            self.logger.error(f"Failed to initialize legacy LLM: {e}")
             self.llm = None
 
         # Initialize agent tools for LLM
@@ -149,6 +150,69 @@ class DrillAgent:
         except Exception as e:
             self.logger.error(f"Failed to initialize agent tools: {e}")
             self.agent_tools = []
+
+        # Initialize new LLMInterface instances
+        # We use different models for different sub-tasks to optimize cost and performance
+        try:
+            # 1. Basic LLM - uses config's default model for general tasks
+            self.logger.info(f"Initializing basic LLM interface...")
+            self.basic_llm = LLMInterface(
+                provider=self.config.model_provider,
+                model_name=self.config.model_name,
+                api_key=self.config.api_key,
+                logger=self.logger
+            )
+            self.logger.info(f"✓ Basic LLM initialized: {self.basic_llm.provider}/{self.basic_llm.model_name}")
+
+            # 2. Reasoning LLM - uses reasoning_model if configured, otherwise same as basic
+            if self.config.reasoning_model and self.config.reasoning_model[0]:
+                reasoning_provider, reasoning_model = self.config.reasoning_model
+                self.logger.info(f"Initializing reasoning LLM interface ({reasoning_provider}/{reasoning_model})...")
+                self.reasoning_llm = LLMInterface(
+                    provider=reasoning_provider,
+                    model_name=reasoning_model,
+                    api_key=self.config.api_key,
+                    logger=self.logger
+                )
+                self.logger.info(f"✓ Reasoning LLM initialized: {self.reasoning_llm.provider}/{self.reasoning_llm.model_name}")
+            else:
+                # Use same as basic_llm if not configured
+                self.reasoning_llm = self.basic_llm
+                self.logger.info(f"✓ Reasoning LLM using basic LLM configuration")
+
+            # 3. Low-cost LLM - uses low_cost_model if configured, otherwise use cheaper default
+            if self.config.low_cost_model and self.config.low_cost_model[0]:
+                low_cost_provider, low_cost_model = self.config.low_cost_model
+                self.logger.info(f"Initializing low-cost LLM interface ({low_cost_provider}/{low_cost_model})...")
+                self.low_cost_llm = LLMInterface(
+                    provider=low_cost_provider,
+                    model_name=low_cost_model,
+                    api_key=self.config.api_key,
+                    logger=self.logger
+                )
+                self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
+            else:
+                # Default to cheaper models if not configured
+                if self.config.model_provider == "openai":
+                    low_cost_model = "gpt-4o-mini"
+                else:  # claude
+                    low_cost_model = "claude-3-5-haiku-20241022"
+
+                self.logger.info(f"Initializing low-cost LLM with default cheaper model ({low_cost_model})...")
+                self.low_cost_llm = LLMInterface(
+                    provider=self.config.model_provider,
+                    model_name=low_cost_model,
+                    api_key=self.config.api_key,
+                    logger=self.logger
+                )
+                self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize LLMInterface instances: {e}")
+            # Fallback: keep them as None
+            self.basic_llm = None
+            self.reasoning_llm = None
+            self.low_cost_llm = None
 
         self.logger.info("Components initialized")
 
