@@ -163,9 +163,10 @@ class VulnAnalysisAgent:
 
         return self.vuln_info
 
+    # TODO: If this works well, we should remove the legacy method after some time.
     def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report):
         # Extract vulnerability information from sanitizer report using LLM with tools
-        # LLM: Non-loop invocations.
+        # LLM: Using new LLMInterface with automatic agent loop
         try:
             # Prepare the prompt
             prompt = VAA_sanitizer_extraction_prompt.format(
@@ -174,59 +175,40 @@ class VulnAnalysisAgent:
                 sanitizer_report=sanitizer_report
             )
 
-            # First try without tools - simple extraction
-            self.logger.info("  [VulnAnalysisAgent] Calling LLM to extract sanitizer report information...")
-            response = self.llm.generate(
-                prompt=prompt,
-                system_prompt=VAA_system_prompt,
-                temperature=0.1,  # Low temperature for precise extraction
-                max_tokens=4096
-            )
+            # Try using new LLMInterface if available
+            if hasattr(self.drill_agent, 'basic_llm') and self.drill_agent.basic_llm:
+                self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to extract sanitizer report...")
 
-            # FIX: The 3 LLM invokings in this `_extract_sanitizer_report` function is really weird... (by LHY)
-            # TODO: Use the updated message and tool call history management in LLM class here!!!
-            # Check if we need tools (if response doesn't contain JSON)
-            has_json = '{' in response and '}' in response
-            if not has_json:
-                # Retry with tools if first attempt failed
-                response, tool_calls, _ = self.llm.generate_with_tools(
-                    prompt=prompt,
+                # Use run_agent_loop for automatic tool calling and conversation management
+                result = self.drill_agent.basic_llm.run_agent_loop(
+                    task=prompt,
                     tools=self.tools,
                     system_prompt=VAA_system_prompt,
-                    temperature=0.1,
-                    max_tokens=4096
+                    max_iterations=5,  # Allow up to 5 rounds of tool usage
+                    temperature=0.1,  # Low temperature for precise extraction
+                    max_tokens=4096,
+                    continuation_prompt="Please continue extracting the vulnerability information and provide the final JSON output."
                 )
+
+                if result['success']:
+                    response = result['final_response']
+                    self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
+                    self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
+                else:
+                    self.logger.warning(f"  [VulnAnalysisAgent] LLM failed: {result.get('error', 'Unknown error')}")
+                    # Fall back to old method
+                    self.logger.info("  [VulnAnalysisAgent] Falling back to legacy LLM method...")
+                    response = self._extract_sanitizer_report_legacy(project_name, actual_repo_path, sanitizer_report, prompt)
+                    if response is None:
+                        return
             else:
-                tool_calls = None
-
-            # Execute any tool calls if needed
-            if tool_calls and len(tool_calls) > 0:
-                self.logger.info(f"  [VulnAnalysisAgent] Executing {len(tool_calls)} tool calls...")
-                for tool_call in tool_calls:
-                    tool_name = tool_call.get('name')
-                    tool_args = tool_call.get('arguments', {})
-                    self.logger.debug(f"      {tool_name}({json.dumps(tool_args)})")
-
-                    for tool in self.tools:
-                        if tool.name() == tool_name:
-                            try:
-                                result = tool.execute(**tool_args)
-                                self.logger.debug(f"      Result: {str(result)[:200]}")
-                            except Exception as e:
-                                self.logger.error(f"      Tool error: {e}")
-                            break
-
-                # Get final response after tool execution
-                response, _, _ = self.llm.generate_with_tools(
-                    prompt=VAA_sanitizer_followup_prompt,
-                    tools=self.tools,
-                    system_prompt=VAA_system_prompt,
-                    temperature=0.1,
-                    max_tokens=2048
-                )
+                # Use old LLM interface as fallback
+                self.logger.info("  [VulnAnalysisAgent] LLMInterface not available, using legacy LLM...")
+                response = self._extract_sanitizer_report_legacy(project_name, actual_repo_path, sanitizer_report, prompt)
+                if response is None:
+                    return
 
             self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
-            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response}")
 
             # Extract JSON from response (handle multiple formats)
             # Try to extract JSON from markdown code block
@@ -288,6 +270,70 @@ class VulnAnalysisAgent:
         except Exception as e:
             self.logger.error(f"    Failed to extract sanitizer report: {e}", exc_info=True)
             # Return empty values on failure
+
+    def _extract_sanitizer_report_legacy(self, project_name, actual_repo_path, sanitizer_report, prompt):
+        """
+        Legacy method for extracting sanitizer report using old LLM interface.
+        This method is kept for backward compatibility and as fallback.
+
+        Returns:
+            str: LLM response text, or None if failed
+        """
+        try:
+            # First try without tools - simple extraction
+            self.logger.info("  [VulnAnalysisAgent] Calling legacy LLM to extract sanitizer report information...")
+            response = self.llm.generate(
+                prompt=prompt,
+                system_prompt=VAA_system_prompt,
+                temperature=0.1,  # Low temperature for precise extraction
+                max_tokens=4096
+            )
+
+            # Check if we need tools (if response doesn't contain JSON)
+            has_json = '{' in response and '}' in response
+            if not has_json:
+                # Retry with tools if first attempt failed
+                response, tool_calls, _ = self.llm.generate_with_tools(
+                    prompt=prompt,
+                    tools=self.tools,
+                    system_prompt=VAA_system_prompt,
+                    temperature=0.1,
+                    max_tokens=4096
+                )
+            else:
+                tool_calls = None
+
+            # Execute any tool calls if needed
+            if tool_calls and len(tool_calls) > 0:
+                self.logger.info(f"  [VulnAnalysisAgent] Executing {len(tool_calls)} tool calls...")
+                for tool_call in tool_calls:
+                    tool_name = tool_call.get('name')
+                    tool_args = tool_call.get('arguments', {})
+                    self.logger.debug(f"      {tool_name}({json.dumps(tool_args)})")
+
+                    for tool in self.tools:
+                        if tool.name() == tool_name:
+                            try:
+                                result = tool.execute(**tool_args)
+                                self.logger.debug(f"      Result: {str(result)[:200]}")
+                            except Exception as e:
+                                self.logger.error(f"      Tool error: {e}")
+                            break
+
+                # Get final response after tool execution
+                response, _, _ = self.llm.generate_with_tools(
+                    prompt=VAA_sanitizer_followup_prompt,
+                    tools=self.tools,
+                    system_prompt=VAA_system_prompt,
+                    temperature=0.1,
+                    max_tokens=2048
+                )
+
+            return response
+
+        except Exception as e:
+            self.logger.error(f"  [VulnAnalysisAgent] Legacy extraction failed: {e}", exc_info=True)
+            return None
 
     def _refine_harness_command(self, project_name, actual_repo_path, raw_harness_command):
         # Refine harness command to use actual paths using LLM with tools

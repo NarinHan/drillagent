@@ -32,9 +32,37 @@ Usage patterns:
 import os
 import json
 import logging
+import time
 from typing import Optional, List, Dict, Any, Tuple, Callable, Iterator
 from pathlib import Path
 from dataclasses import dataclass, field
+
+
+# ==================== Custom Exceptions ====================
+
+class LLMError(Exception):
+    """Base exception for LLM-related errors"""
+    pass
+
+
+class RateLimitError(LLMError):
+    """Rate limit exceeded - can be retried after waiting"""
+    pass
+
+
+class TimeoutError(LLMError):
+    """Request timed out - can be retried"""
+    pass
+
+
+class ToolExecutionError(LLMError):
+    """Tool execution failed - non-fatal, can continue with error message"""
+    pass
+
+
+class InvalidResponseError(LLMError):
+    """LLM returned invalid response - may be retried"""
+    pass
 
 
 @dataclass
@@ -305,7 +333,7 @@ class LLMInterface:
         conversation_history: Optional[List[Dict]] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096
-    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any], str]:
         """
         Generate response with tool calling support (manual mode).
 
@@ -321,10 +349,11 @@ class LLMInterface:
             max_tokens: Max tokens to generate
 
         Returns:
-            Tuple of (text_response, tool_calls, assistant_message)
+            Tuple of (text_response, tool_calls, assistant_message, stop_reason)
             - text_response: LLM's textual reasoning/response
             - tool_calls: List of tool calls [{"id": "...", "name": "...", "arguments": {...}}, ...]
             - assistant_message: Complete assistant message in official API format
+            - stop_reason: Why the generation stopped (e.g., "end_turn", "max_tokens", "tool_use", "stop")
         """
         if self.provider == "claude":
             return self._generate_with_tools_claude(
@@ -345,7 +374,8 @@ class LLMInterface:
         max_tokens: int = 4096,
         tool_executor: Optional[Callable] = None,
         continuation_prompt: str = "Continue based on the tool results.",
-        on_iteration: Optional[Callable[[int, str, List[Dict]], None]] = None
+        on_iteration: Optional[Callable[[int, str, List[Dict]], None]] = None,
+        max_retries: int = 3
     ) -> Dict[str, Any]:
         """
         Automatic agent loop with tool calling - NO MANUAL CONVERSATION MANAGEMENT NEEDED.
@@ -355,6 +385,7 @@ class LLMInterface:
         - Tool execution
         - Provider-specific message formatting
         - Iteration control
+        - Error handling with automatic retries
 
         Args:
             task: The task description for the agent
@@ -367,6 +398,7 @@ class LLMInterface:
                           If None, uses default executor that calls tool.execute()
             continuation_prompt: Prompt to send after tool results
             on_iteration: Optional callback(iteration, response, tool_calls) called each iteration
+            max_retries: Maximum retries for rate limit/timeout errors (default: 3)
 
         Returns:
             Dict containing:
@@ -374,70 +406,167 @@ class LLMInterface:
             - final_response: str - final text response from LLM
             - iterations: int - number of iterations used
             - conversation: ConversationManager - full conversation history
+            - stop_reason: str - why the agent stopped
             - error: Optional[str] - error message if failed
         """
         # Create conversation manager to handle history automatically
         conversation = ConversationManager(self.provider)
 
         current_prompt = task
+        text_response = ""
+        stop_reason = "unknown"
 
         for iteration in range(1, max_iterations + 1):
-            try:
-                # Call LLM with tools
-                text_response, tool_calls, assistant_message = self.generate_with_tools(
-                    prompt=current_prompt,
-                    tools=tools,
-                    system_prompt=system_prompt,
-                    conversation_history=conversation.get_messages(),
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
+            # Retry logic for rate limits and timeouts
+            retry_count = 0
+            while retry_count <= max_retries:
+                try:
+                    # Call LLM with tools
+                    text_response, tool_calls, assistant_message, stop_reason = self.generate_with_tools(
+                        prompt=current_prompt,
+                        tools=tools,
+                        system_prompt=system_prompt,
+                        conversation_history=conversation.get_messages(),
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
 
-                # Automatically add messages to history
-                conversation.add_user_message(current_prompt)
-                conversation.add_assistant_message(assistant_message)
+                    # Success - break retry loop
+                    break
 
-                # Optional callback
-                if on_iteration:
-                    on_iteration(iteration, text_response, tool_calls)
+                except RateLimitError as e:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        self.logger.error(f"Rate limit exceeded after {max_retries} retries")
+                        return {
+                            'success': False,
+                            'final_response': text_response,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': 'rate_limit_error',
+                            'error': f"Rate limit exceeded: {e}"
+                        }
 
-                # If no tool calls, task is complete
-                if not tool_calls or len(tool_calls) == 0:
+                    # Exponential backoff
+                    wait_time = min(2 ** retry_count, 60)  # Cap at 60 seconds
+                    self.logger.warning(f"Rate limit hit, waiting {wait_time}s before retry {retry_count}/{max_retries}")
+                    time.sleep(wait_time)
+                    continue
+
+                except TimeoutError as e:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        self.logger.error(f"Timeout after {max_retries} retries")
+                        return {
+                            'success': False,
+                            'final_response': text_response,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': 'timeout_error',
+                            'error': f"Request timed out: {e}"
+                        }
+
+                    self.logger.warning(f"Request timed out, retrying {retry_count}/{max_retries}")
+                    time.sleep(2 ** retry_count)  # Exponential backoff
+                    continue
+
+                except LLMError as e:
+                    # Fatal LLM error - don't retry
+                    self.logger.error(f"LLM error at iteration {iteration}: {e}")
+                    return {
+                        'success': False,
+                        'final_response': text_response,
+                        'iterations': iteration,
+                        'conversation': conversation,
+                        'stop_reason': 'llm_error',
+                        'error': str(e)
+                    }
+
+                except Exception as e:
+                    # Unexpected error - don't retry
+                    self.logger.error(f"Unexpected error at iteration {iteration}: {e}", exc_info=True)
+                    return {
+                        'success': False,
+                        'final_response': text_response,
+                        'iterations': iteration,
+                        'conversation': conversation,
+                        'stop_reason': 'unexpected_error',
+                        'error': str(e)
+                    }
+
+            # Automatically add messages to history
+            conversation.add_user_message(current_prompt)
+            conversation.add_assistant_message(assistant_message)
+
+            # Optional callback
+            if on_iteration:
+                on_iteration(iteration, text_response, tool_calls)
+
+            # Check stop_reason for proper completion
+            if stop_reason in ["max_tokens", "length"]:
+                self.logger.warning(f"Response truncated at iteration {iteration} (stop_reason: {stop_reason})")
+                # Continue to next iteration with warning, might still succeed
+
+            # If no tool calls, check if task is genuinely complete
+            if not tool_calls or len(tool_calls) == 0:
+                if stop_reason in ["end_turn", "stop"]:
+                    # Genuine completion
                     return {
                         'success': True,
                         'final_response': text_response,
                         'iterations': iteration,
-                        'conversation': conversation
+                        'conversation': conversation,
+                        'stop_reason': stop_reason
+                    }
+                elif stop_reason in ["max_tokens", "length"]:
+                    # Response was truncated but no tool calls
+                    self.logger.warning(f"Response truncated without tool calls - treating as incomplete")
+                    return {
+                        'success': False,
+                        'final_response': text_response,
+                        'iterations': iteration,
+                        'conversation': conversation,
+                        'stop_reason': stop_reason,
+                        'error': "Response truncated (max_tokens reached)"
+                    }
+                else:
+                    # Unknown stop reason, assume complete
+                    return {
+                        'success': True,
+                        'final_response': text_response,
+                        'iterations': iteration,
+                        'conversation': conversation,
+                        'stop_reason': stop_reason
                     }
 
-                # Execute tools automatically
+            # Execute tools with error handling
+            try:
                 if tool_executor:
                     tool_results = tool_executor(tool_calls, tools)
                 else:
                     tool_results = self._default_tool_executor(tool_calls, tools)
-
-                # Automatically add tool results to history (handles provider differences)
-                conversation.add_tool_results(tool_calls, tool_results)
-
-                # Prepare next iteration prompt
-                current_prompt = continuation_prompt
-
+            except ToolExecutionError as e:
+                # Tool execution failed but not fatal - let LLM see the error
+                self.logger.warning(f"Tool execution failed: {e}")
+                tool_results = [f"Error: {e}"] * len(tool_calls)
             except Exception as e:
-                self.logger.error(f"Agent loop error at iteration {iteration}: {e}")
-                return {
-                    'success': False,
-                    'final_response': "",
-                    'iterations': iteration,
-                    'conversation': conversation,
-                    'error': str(e)
-                }
+                # Unexpected tool error - also not fatal
+                self.logger.error(f"Unexpected tool error: {e}", exc_info=True)
+                tool_results = [f"Unexpected error: {e}"] * len(tool_calls)
+
+            # Automatically add tool results to history (handles provider differences)
+            conversation.add_tool_results(tool_calls, tool_results)
+
+            # Prepare next iteration prompt
+            current_prompt = continuation_prompt
 
         # Max iterations reached
         return {
             'success': False,
-            'final_response': text_response if 'text_response' in locals() else "",
+            'final_response': text_response,
             'iterations': max_iterations,
             'conversation': conversation,
+            'stop_reason': 'max_iterations',
             'error': f"Max iterations ({max_iterations}) reached without completion"
         }
 
@@ -553,7 +682,7 @@ class LLMInterface:
         conversation_history: Optional[List[Dict]],
         temperature: float,
         max_tokens: int
-    ) -> Tuple[str, List[Dict], Dict]:
+    ) -> Tuple[str, List[Dict], Dict, str]:
         """Claude-specific tool calling implementation"""
 
         # Convert tools to Claude's schema
@@ -575,7 +704,17 @@ class LLMInterface:
         if system_prompt:
             kwargs["system"] = system_prompt
 
-        response = self.client.messages.create(**kwargs)
+        try:
+            response = self.client.messages.create(**kwargs)
+        except Exception as e:
+            # Convert API errors to our custom exceptions
+            error_msg = str(e).lower()
+            if 'rate' in error_msg or 'quota' in error_msg or '429' in error_msg:
+                raise RateLimitError(f"Rate limit exceeded: {e}")
+            elif 'timeout' in error_msg:
+                raise TimeoutError(f"Request timed out: {e}")
+            else:
+                raise LLMError(f"Claude API error: {e}")
 
         # Track usage
         if hasattr(response, 'usage'):
@@ -584,6 +723,9 @@ class LLMInterface:
                 'output_tokens': response.usage.output_tokens,
                 'total_tokens': response.usage.input_tokens + response.usage.output_tokens
             })
+
+        # Get stop_reason from response
+        stop_reason = response.stop_reason if hasattr(response, 'stop_reason') else "unknown"
 
         # Parse response
         text_response = ""
@@ -616,7 +758,7 @@ class LLMInterface:
             "content": content_blocks
         }
 
-        return text_response, tool_calls, assistant_message
+        return text_response, tool_calls, assistant_message, stop_reason
 
     def _generate_with_tools_openai(
         self,
@@ -626,7 +768,7 @@ class LLMInterface:
         conversation_history: Optional[List[Dict]],
         temperature: float,
         max_tokens: int
-    ) -> Tuple[str, List[Dict], Dict]:
+    ) -> Tuple[str, List[Dict], Dict, str]:
         """OpenAI-specific tool calling implementation"""
 
         # Convert tools to OpenAI's schema
@@ -643,14 +785,24 @@ class LLMInterface:
         messages.append({"role": "user", "content": prompt})
 
         # Call OpenAI API with tools
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            tools=tool_schemas,
-            tool_choice="auto",
-            temperature=temperature,
-            max_completion_tokens=max_tokens
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                tools=tool_schemas,
+                tool_choice="auto",
+                temperature=temperature,
+                max_completion_tokens=max_tokens
+            )
+        except Exception as e:
+            # Convert API errors to our custom exceptions
+            error_msg = str(e).lower()
+            if 'rate' in error_msg or 'quota' in error_msg or '429' in error_msg:
+                raise RateLimitError(f"Rate limit exceeded: {e}")
+            elif 'timeout' in error_msg:
+                raise TimeoutError(f"Request timed out: {e}")
+            else:
+                raise LLMError(f"OpenAI API error: {e}")
 
         # Track usage
         if hasattr(response, 'usage') and response.usage:
@@ -659,6 +811,9 @@ class LLMInterface:
                 'completion_tokens': response.usage.completion_tokens,
                 'total_tokens': response.usage.total_tokens
             })
+
+        # Get stop_reason from response (OpenAI calls it finish_reason)
+        stop_reason = response.choices[0].finish_reason if response.choices else "unknown"
 
         # Parse response
         message = response.choices[0].message
@@ -690,4 +845,4 @@ class LLMInterface:
         if tool_calls_for_api:
             assistant_message["tool_calls"] = tool_calls_for_api
 
-        return text_response, tool_calls, assistant_message
+        return text_response, tool_calls, assistant_message, stop_reason
