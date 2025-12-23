@@ -10,12 +10,11 @@ from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
     from drillagent.config import AgentConfig
-    from drillagent.models import LLM
     from drillagent.utils.tools import AgentTool
 
 from drillagent.prompts.PathExplorationAgent_prompt import (
-    PEA_generate_testcase_prompt,
     PEA_system_prompt,
+    PEA_generate_testcase_prompt,
     PEA_feedback_section_prompt
 )
 from drillagent.utils.llvm_cov import LLVMCovUtils
@@ -32,7 +31,6 @@ class PathExplorationAgent:
         self.drill_agent = drill_agent
         self.config = drill_agent.config
         self.logger = drill_agent.logger
-        self.llm = drill_agent.llm
         self.tools = drill_agent.agent_tools
 
         # LHY: In each exploration, the agent will generate a PoV test case, execute it, and collect coverage feedback.
@@ -57,15 +55,14 @@ class PathExplorationAgent:
         self.logger.info("  [PathExplorationAgent] Starting path exploration analysis...")
 
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
-        previous_feedback = None
-
+        previous_feedback = None # From coverage feedback analysis
         for iteration in range(1, self.max_exp_iterations + 1):
             print("\n\n"+"=" * 80)
             self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
-            # Create roundN subdirectory and clear its contents
-            round_dir = self.get_round_dir(self.current_exp_iteration)
+            # Prepare: Create roundN subdirectory and clear its contents
+            round_dir = self._get_round_dir(self.current_exp_iteration)
             os.makedirs(round_dir, exist_ok=True)
             for item in os.listdir(round_dir):
                 item_path = os.path.join(round_dir, item)
@@ -104,161 +101,81 @@ class PathExplorationAgent:
             print("")
             previous_feedback = self._analyze_coverage_feedback(exit_code, exec_output, func_level_cov_info) # Also store feedback for next iteration
 
-        self.logger.info(f"  [PathExplorationAgent] Leave the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
+        self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
-    def get_round_dir(self, round_num: int) -> str:
+    def _get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
         return os.path.join(self.drill_agent.work_dir, f"round{round_num}")
 
     def _generate_test_case(self, previous_feedback: str = None) -> str:
-        # 1. 获取drill_agent.vulnerability_info.format_output返回的漏洞信息字符串。
-        # 2. 实例化PEA_generate_testcase_prompt，将驱动LLM (with tools)在roundN子目录下生成能够到达漏洞函数甚至触发漏洞crash的测试用例。（可以带tool calls多轮交互）
-        # 3. 检查test case文件是否是纯粹的输入文件（不包含LLM返回的一些分析文字），返回该文件路径。
+        # Generate test case using LLMInterface with automatic agent loop
+        # 1. Get vulnerability information
+        # 2. Use LLMInterface to generate test case (with tools and multi-turn interaction)
+        # 3. Extract testcase content from LLM response
         # 4. If previous_feedback is provided, include it in the prompt to guide the LLM with coverage information.
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep1: Generating test case...")
-        round_dir = self.get_round_dir(self.current_exp_iteration)
+        round_dir = self._get_round_dir(self.current_exp_iteration)
 
-        # Step 1: Get vulnerability information and roundN subdirectory
+        # Step 1: Get vulnerability information
         vuln_info_str = self.drill_agent.vulnerability_info.format_output()
-        
-        # Step 2: LLM test case generation with multi-turn interaction (up to 5 turns)
-        # Possible TODOs:
-        # 1.Each round should include a prompt (even a short continuation prompt).
-        # 2.Provide different guidance depending on the previous round's behavior (whether tools were invoked or not).
-        max_generation_turns = 10 # LHY: Need to have enough tool call turns...
-        conversation_history = [] # Self maintained conversation history for multi-turn LLM interaction within this function
-        testcase_content = None   # What we want in _generate_test_case.
 
-        for turn in range(1, max_generation_turns + 1):
-            self.logger.info(f"  [PathExplorationAgent] LLM interaction turn {turn}/{max_generation_turns}")
+        # Step 2: Prepare the full prompt
+        prompt = PEA_generate_testcase_prompt.format(
+            vulnerability_info=vuln_info_str,
+            project_name=self.drill_agent.config.project_name,
+            generation_turn=1,
+            max_generation_turns=10
+        )
 
-            # Prepare current user prompt
-            current_prompt = ""
-            if turn == 1:
-                # First turn: create full prompt
-                current_prompt = PEA_generate_testcase_prompt.format(
-                    vulnerability_info=vuln_info_str,
-                    project_name=self.drill_agent.config.project_name,
-                    generation_turn=turn,
-                    max_generation_turns=max_generation_turns
-                )
-                # Add previous iteration feedback if available (from round 2 onwards)
-                # `previous_feedback` is from the outer loop. Here, `turn` is the inner loop.
-                if previous_feedback:
-                    self.logger.info(f"  [PathExplorationAgent] Including feedback from iteration {self.current_exp_iteration - 1}")
-                    feedback_section = PEA_feedback_section_prompt.format(
-                        previous_iteration=self.current_exp_iteration - 1,
-                        current_iteration=self.current_exp_iteration,
-                        previous_feedback=previous_feedback
-                    )
-                    current_prompt = current_prompt + "\n\n" + feedback_section
-            elif turn == max_generation_turns:
-                if conversation_history and conversation_history[-1]["role"] == "user":
-                    current_prompt = conversation_history.pop()["content"]
-                current_prompt += "\nMake sure generate the final test case in a ```testcase code block now, since it is already the last turn!!!"
-            else:
-                # Subsequent turns: pop the last user message from conversation_history as current_prompt
-                # This message was added at the end of previous turn (tool results or continuation prompt)
-                if conversation_history and conversation_history[-1]["role"] == "user":
-                    current_prompt = conversation_history.pop()["content"]
-                else:
-                    current_prompt = ""
-
-            # Invoke LLM to generate test case (with tools)
-            response, tool_calls, assistant_message = self.llm.generate_with_tools(
-                prompt=current_prompt,
-                tools=self.tools,
-                system_prompt=PEA_system_prompt,
-                temperature=0.7,
-                max_tokens=4096,
-                conversation_history=conversation_history
+        # Add previous iteration feedback if available (from round 2 onwards)
+        if previous_feedback:
+            self.logger.info(f"  [PathExplorationAgent] Including feedback from iteration {self.current_exp_iteration - 1}")
+            feedback_section = PEA_feedback_section_prompt.format(
+                previous_iteration=self.current_exp_iteration - 1,
+                current_iteration=self.current_exp_iteration,
+                previous_feedback=previous_feedback
             )
+            prompt = prompt + "\n\n" + feedback_section
 
-            self.logger.debug(f"  [PathExplorationAgent] _generate_test_case turn {turn}, LLM response: {response[:500]}...")
+        # Step 3: Use LLMInterface for automatic tool calling and conversation management
+        self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
+        result = self.drill_agent.basic_llm.run_agent_loop(
+            task=prompt,
+            tools=self.tools,
+            system_prompt=PEA_system_prompt,
+            max_iterations=10,  # Allow up to 10 rounds of tool usage
+            temperature=0.7,  # Higher temperature for creative test case generation
+            max_tokens=8192,
+            continuation_prompt="Please continue exploring the repository and generate the final test case in a ```testcase code block."
+        )
 
-            # Add current turn's user prompt to conversation history
-            conversation_history.append({
-                "role": "user",
-                "content": current_prompt
-            })
+        if not result['success']:
+            error_msg = result.get('error', 'Unknown error')
+            self.logger.error(f"  [PathExplorationAgent] LLM agent loop failed: {error_msg}")
+            raise RuntimeError(f"Failed to generate test case: {error_msg}")
 
-            # Add assistant's complete response (in official API format) to conversation history
-            conversation_history.append(assistant_message)
+        response = result['final_response']
+        self.logger.info(f"  [PathExplorationAgent] LLM completed in {result['iterations']} iteration(s)")
+        self.logger.info(f"  [PathExplorationAgent] Stop reason: {result['stop_reason']}")
+        self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
 
-            # Step 3: Check if response contains testcase code block
-            testcase_pattern = r'```testcase\s*\n(.*?)\n```'
-            match = re.search(testcase_pattern, response, re.DOTALL)
-            # if not match:
-            #     # Fallback: try to find any code block and extract test case content
-            #     fallback_pattern = r'```\s*\n(.*?)\n```'
-            #     match = re.search(fallback_pattern, response, re.DOTALL)
-            if match:
-                testcase_content = match.group(1)
-                self.logger.info(f"  [PathExplorationAgent] Testcase extracted from turn {turn}. Break from the generation loop!")
-                break # exit the `max_generation_turns` loop
+        # Step 4: Extract testcase content from response
+        testcase_pattern = r'```testcase\s*\n(.*?)\n```'
+        match = re.search(testcase_pattern, response, re.DOTALL)
 
-            # Step 4: Execute tool calls if any
-            if tool_calls and len(tool_calls) > 0:
-                self.logger.info(f"  [PathExplorationAgent] Executing {len(tool_calls)} tool calls...")
-                tool_results = []
+        if not match:
+            # Fallback: try to find any code block
+            self.logger.warning("  [PathExplorationAgent] No ```testcase block found, trying generic code block...")
+            fallback_pattern = r'```(?:\w+)?\s*\n(.*?)\n```'
+            match = re.search(fallback_pattern, response, re.DOTALL)
 
-                # Traverse and execute each tool call
-                for tool_call in tool_calls:
-                    tool_name = tool_call.get('name')
-                    tool_args = tool_call.get('arguments', {})
-                    self.logger.debug(f"      {tool_name}({json.dumps(tool_args)})")
+        if not match:
+            raise ValueError(f"No testcase code block found in LLM response after {result['iterations']} iterations")
 
-                    result = None
-                    for tool in self.tools:
-                        if tool.name() == tool_name:
-                            try:
-                                result = tool.execute(**tool_args)
-                                self.logger.debug(f"      Result: {str(result)[:200]}...")
-                            except Exception as e:
-                                self.logger.error(f"      Tool error: {e}")
-                                result = f"Error: {str(e)}"
-                            break
+        testcase_content = match.group(1)
+        self.logger.info(f"  [PathExplorationAgent] Testcase extracted successfully!")
 
-                    # Store raw result (not dict, just the result object)
-                    tool_results.append(result if result is not None else "No result")
-
-                # Create tool result message in official API format
-                tool_result_msg = self.llm.create_tool_result_message(tool_calls, tool_results)
-
-                # FIX: TODO: We should handle different LLM providers in llm.py instead of here.
-                # Handle OpenAI special case (multiple tool messages)
-                if "_openai_tool_messages" in tool_result_msg:
-                    # OpenAI: add each tool result message separately
-                    for msg in tool_result_msg["_openai_tool_messages"]:
-                        conversation_history.append(msg)
-                    # Add continuation prompt as the last user message
-                    conversation_history.append({
-                        "role": "user",
-                        "content": "Please continue. Remember to return the testcase in a ```testcase code block when ready."
-                    })
-                else:
-                    # Claude: single user message with tool_result blocks
-                    # Append continuation prompt to the tool result message
-                    tool_result_msg["content"].append({
-                        "type": "text",
-                        "text": "Please continue. Remember to return the testcase in a ```testcase code block when ready."
-                    })
-                    conversation_history.append(tool_result_msg)
-            else:
-                # No tool calls and no testcase found - ask LLM to provide testcase
-                if turn < max_generation_turns:
-                    conversation_history.append({
-                        "role": "user",
-                        "content": "Please provide the testcase in a ```testcase code block now."
-                    })
-        # End for loop
-
-        # Step 5: Verify testcase was extracted
-        if not testcase_content:
-            # FIX: TODO: Always stuck here!! For robustness, should use a specific prompt to try again!!
-            raise ValueError(f"No testcase code block found after {max_generation_turns} turns of LLM interaction")
-
-        # Step 6: Save test case to fixed filename: testcase-round{N}
+        # Step 5: Save test case to fixed filename: testcase-round{N}
         test_case_filename = f"testcase-round{self.current_exp_iteration}"
         test_case_path = os.path.join(round_dir, test_case_filename)
         with open(test_case_path, 'w') as f:
@@ -268,12 +185,12 @@ class PathExplorationAgent:
         self.logger.info (f"  [PathExplorationAgent] Test case generated at: {test_case_path}")
         return test_case_path
 
-    def _execute_test_case(self, test_case_path: str) -> Tuple[int, str, str]: # No LLM needed
+    def _execute_test_case(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed
         # 1. 从drill_agent.vulnerability_info中获取到binary_path和refined_harness_command，结合test_case_path，整理成一个在roundN目录下可执行的命令。
         # 2. 进入roundN子目录执行该命令，记录stdout和stderr，同时生成profraw文件。
         # 3. 利用LLVMCovUtils把profraw文件转换成profdata文件，连同exit code和exec output(包括stdout和stderr)返回给调用者。
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
-        round_dir = self.get_round_dir(self.current_exp_iteration)
+        round_dir = self._get_round_dir(self.current_exp_iteration)
 
         # Step 1: Prepare the command
         repo_path = self.drill_agent.config.target_repo_path
@@ -596,7 +513,7 @@ class PathExplorationAgent:
 
             # Get current test case path
             current_testcase_path = os.path.join(
-                self.get_round_dir(self.current_exp_iteration),
+                self._get_round_dir(self.current_exp_iteration),
                 f"testcase-round{self.current_exp_iteration}"
             )
 

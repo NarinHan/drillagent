@@ -408,167 +408,189 @@ class LLMInterface:
             - conversation: ConversationManager - full conversation history
             - stop_reason: str - why the agent stopped
             - error: Optional[str] - error message if failed
+            - usage_stats: Dict - token usage statistics for this call only
         """
-        # Create conversation manager to handle history automatically
-        conversation = ConversationManager(self.provider)
+        # Save old stats and create fresh stats for this call to ensure isolation
+        old_stats = self.usage_stats
+        self.usage_stats = UsageStats()
 
-        current_prompt = task
-        text_response = ""
-        stop_reason = "unknown"
+        try:
+            # Create conversation manager to handle history automatically
+            conversation = ConversationManager(self.provider)
 
-        for iteration in range(1, max_iterations + 1):
-            # Retry logic for rate limits and timeouts
-            retry_count = 0
-            while retry_count <= max_retries:
+            current_prompt = task
+            text_response = ""
+            stop_reason = "unknown"
+
+            for iteration in range(1, max_iterations + 1):
+                # Retry logic for rate limits and timeouts
+                retry_count = 0
+                while retry_count <= max_retries:
+                    try:
+                        # Call LLM with tools
+                        text_response, tool_calls, assistant_message, stop_reason = self.generate_with_tools(
+                            prompt=current_prompt,
+                            tools=tools,
+                            system_prompt=system_prompt,
+                            conversation_history=conversation.get_messages(),
+                            temperature=temperature,
+                            max_tokens=max_tokens
+                        )
+
+                        # Success - break retry loop
+                        break
+
+                    except RateLimitError as e:
+                        retry_count += 1
+                        if retry_count > max_retries:
+                            self.logger.error(f"Rate limit exceeded after {max_retries} retries")
+                            return {
+                                'success': False,
+                                'final_response': text_response,
+                                'iterations': iteration,
+                                'conversation': conversation,
+                                'stop_reason': 'rate_limit_error',
+                                'error': f"Rate limit exceeded: {e}",
+                                'usage_stats': self.usage_stats.to_dict()
+                            }
+
+                        # Exponential backoff
+                        wait_time = min(2 ** retry_count, 60)  # Cap at 60 seconds
+                        self.logger.warning(f"Rate limit hit, waiting {wait_time}s before retry {retry_count}/{max_retries}")
+                        time.sleep(wait_time)
+                        continue
+
+                    except TimeoutError as e:
+                        retry_count += 1
+                        if retry_count > max_retries:
+                            self.logger.error(f"Timeout after {max_retries} retries")
+                            return {
+                                'success': False,
+                                'final_response': text_response,
+                                'iterations': iteration,
+                                'conversation': conversation,
+                                'stop_reason': 'timeout_error',
+                                'error': f"Request timed out: {e}",
+                                'usage_stats': self.usage_stats.to_dict()
+                            }
+
+                        self.logger.warning(f"Request timed out, retrying {retry_count}/{max_retries}")
+                        time.sleep(2 ** retry_count)  # Exponential backoff
+                        continue
+
+                    except LLMError as e:
+                        # Fatal LLM error - don't retry
+                        self.logger.error(f"LLM error at iteration {iteration}: {e}")
+                        return {
+                            'success': False,
+                            'final_response': text_response,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': 'llm_error',
+                            'error': str(e),
+                            'usage_stats': self.usage_stats.to_dict()
+                        }
+
+                    except Exception as e:
+                        # Unexpected error - don't retry
+                        self.logger.error(f"Unexpected error at iteration {iteration}: {e}", exc_info=True)
+                        return {
+                            'success': False,
+                            'final_response': text_response,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': 'unexpected_error',
+                            'error': str(e),
+                            'usage_stats': self.usage_stats.to_dict()
+                        }
+
+                # Automatically add messages to history
+                conversation.add_user_message(current_prompt)
+                conversation.add_assistant_message(assistant_message)
+
+                # Optional callback
+                if on_iteration:
+                    on_iteration(iteration, text_response, tool_calls)
+
+                # Check stop_reason for proper completion
+                if stop_reason in ["max_tokens", "length"]:
+                    self.logger.warning(f"Response truncated at iteration {iteration} (stop_reason: {stop_reason})")
+                    # Continue to next iteration with warning, might still succeed
+
+                # If no tool calls, check if task is genuinely complete
+                if not tool_calls or len(tool_calls) == 0:
+                    if stop_reason in ["end_turn", "stop"]:
+                        # Genuine completion
+                        return {
+                            'success': True,
+                            'final_response': text_response,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': stop_reason,
+                            'usage_stats': self.usage_stats.to_dict()
+                        }
+                    elif stop_reason in ["max_tokens", "length"]:
+                        # Response was truncated but no tool calls
+                        self.logger.warning(f"Response truncated without tool calls - treating as incomplete")
+                        return {
+                            'success': False,
+                            'final_response': text_response,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': stop_reason,
+                            'error': "Response truncated (max_tokens reached)",
+                            'usage_stats': self.usage_stats.to_dict()
+                        }
+                    else:
+                        # Unknown stop reason, assume complete
+                        return {
+                            'success': True,
+                            'final_response': text_response,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': stop_reason,
+                            'usage_stats': self.usage_stats.to_dict()
+                        }
+
+                # Execute tools with error handling
                 try:
-                    # Call LLM with tools
-                    text_response, tool_calls, assistant_message, stop_reason = self.generate_with_tools(
-                        prompt=current_prompt,
-                        tools=tools,
-                        system_prompt=system_prompt,
-                        conversation_history=conversation.get_messages(),
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-
-                    # Success - break retry loop
-                    break
-
-                except RateLimitError as e:
-                    retry_count += 1
-                    if retry_count > max_retries:
-                        self.logger.error(f"Rate limit exceeded after {max_retries} retries")
-                        return {
-                            'success': False,
-                            'final_response': text_response,
-                            'iterations': iteration,
-                            'conversation': conversation,
-                            'stop_reason': 'rate_limit_error',
-                            'error': f"Rate limit exceeded: {e}"
-                        }
-
-                    # Exponential backoff
-                    wait_time = min(2 ** retry_count, 60)  # Cap at 60 seconds
-                    self.logger.warning(f"Rate limit hit, waiting {wait_time}s before retry {retry_count}/{max_retries}")
-                    time.sleep(wait_time)
-                    continue
-
-                except TimeoutError as e:
-                    retry_count += 1
-                    if retry_count > max_retries:
-                        self.logger.error(f"Timeout after {max_retries} retries")
-                        return {
-                            'success': False,
-                            'final_response': text_response,
-                            'iterations': iteration,
-                            'conversation': conversation,
-                            'stop_reason': 'timeout_error',
-                            'error': f"Request timed out: {e}"
-                        }
-
-                    self.logger.warning(f"Request timed out, retrying {retry_count}/{max_retries}")
-                    time.sleep(2 ** retry_count)  # Exponential backoff
-                    continue
-
-                except LLMError as e:
-                    # Fatal LLM error - don't retry
-                    self.logger.error(f"LLM error at iteration {iteration}: {e}")
-                    return {
-                        'success': False,
-                        'final_response': text_response,
-                        'iterations': iteration,
-                        'conversation': conversation,
-                        'stop_reason': 'llm_error',
-                        'error': str(e)
-                    }
-
+                    if tool_executor:
+                        tool_results = tool_executor(tool_calls, tools)
+                    else:
+                        tool_results = self._default_tool_executor(tool_calls, tools)
+                except ToolExecutionError as e:
+                    # Tool execution failed but not fatal - let LLM see the error
+                    self.logger.warning(f"Tool execution failed: {e}")
+                    tool_results = [f"Error: {e}"] * len(tool_calls)
                 except Exception as e:
-                    # Unexpected error - don't retry
-                    self.logger.error(f"Unexpected error at iteration {iteration}: {e}", exc_info=True)
-                    return {
-                        'success': False,
-                        'final_response': text_response,
-                        'iterations': iteration,
-                        'conversation': conversation,
-                        'stop_reason': 'unexpected_error',
-                        'error': str(e)
-                    }
+                    # Unexpected tool error - also not fatal
+                    self.logger.error(f"Unexpected tool error: {e}", exc_info=True)
+                    tool_results = [f"Unexpected error: {e}"] * len(tool_calls)
 
-            # Automatically add messages to history
-            conversation.add_user_message(current_prompt)
-            conversation.add_assistant_message(assistant_message)
+                # Automatically add tool results to history (handles provider differences)
+                conversation.add_tool_results(tool_calls, tool_results)
 
-            # Optional callback
-            if on_iteration:
-                on_iteration(iteration, text_response, tool_calls)
+                # Prepare next iteration prompt
+                current_prompt = continuation_prompt
 
-            # Check stop_reason for proper completion
-            if stop_reason in ["max_tokens", "length"]:
-                self.logger.warning(f"Response truncated at iteration {iteration} (stop_reason: {stop_reason})")
-                # Continue to next iteration with warning, might still succeed
+            # Max iterations reached
+            return {
+                'success': False,
+                'final_response': text_response,
+                'iterations': max_iterations,
+                'conversation': conversation,
+                'stop_reason': 'max_iterations',
+                'error': f"Max iterations ({max_iterations}) reached without completion",
+                'usage_stats': self.usage_stats.to_dict()
+            }
 
-            # If no tool calls, check if task is genuinely complete
-            if not tool_calls or len(tool_calls) == 0:
-                if stop_reason in ["end_turn", "stop"]:
-                    # Genuine completion
-                    return {
-                        'success': True,
-                        'final_response': text_response,
-                        'iterations': iteration,
-                        'conversation': conversation,
-                        'stop_reason': stop_reason
-                    }
-                elif stop_reason in ["max_tokens", "length"]:
-                    # Response was truncated but no tool calls
-                    self.logger.warning(f"Response truncated without tool calls - treating as incomplete")
-                    return {
-                        'success': False,
-                        'final_response': text_response,
-                        'iterations': iteration,
-                        'conversation': conversation,
-                        'stop_reason': stop_reason,
-                        'error': "Response truncated (max_tokens reached)"
-                    }
-                else:
-                    # Unknown stop reason, assume complete
-                    return {
-                        'success': True,
-                        'final_response': text_response,
-                        'iterations': iteration,
-                        'conversation': conversation,
-                        'stop_reason': stop_reason
-                    }
-
-            # Execute tools with error handling
-            try:
-                if tool_executor:
-                    tool_results = tool_executor(tool_calls, tools)
-                else:
-                    tool_results = self._default_tool_executor(tool_calls, tools)
-            except ToolExecutionError as e:
-                # Tool execution failed but not fatal - let LLM see the error
-                self.logger.warning(f"Tool execution failed: {e}")
-                tool_results = [f"Error: {e}"] * len(tool_calls)
-            except Exception as e:
-                # Unexpected tool error - also not fatal
-                self.logger.error(f"Unexpected tool error: {e}", exc_info=True)
-                tool_results = [f"Unexpected error: {e}"] * len(tool_calls)
-
-            # Automatically add tool results to history (handles provider differences)
-            conversation.add_tool_results(tool_calls, tool_results)
-
-            # Prepare next iteration prompt
-            current_prompt = continuation_prompt
-
-        # Max iterations reached
-        return {
-            'success': False,
-            'final_response': text_response,
-            'iterations': max_iterations,
-            'conversation': conversation,
-            'stop_reason': 'max_iterations',
-            'error': f"Max iterations ({max_iterations}) reached without completion"
-        }
+        finally:
+            # Restore and merge stats - accumulate usage from this call into the global stats
+            old_stats.total_tokens += self.usage_stats.total_tokens
+            old_stats.prompt_tokens += self.usage_stats.prompt_tokens
+            old_stats.completion_tokens += self.usage_stats.completion_tokens
+            old_stats.api_calls += self.usage_stats.api_calls
+            self.usage_stats = old_stats
 
     def _default_tool_executor(
         self,
