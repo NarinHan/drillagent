@@ -166,19 +166,16 @@ class VulnAnalysisAgent:
         # Extract vulnerability information from sanitizer report using LLM with tools
         # LLM: Using new LLMInterface with automatic agent loop
         try:
-            # Prepare the prompt
-            prompt = VAA_sanitizer_extraction_prompt.format(
-                project_name=project_name,
-                actual_repo_path=actual_repo_path,
-                sanitizer_report=sanitizer_report
-            )
-
             # Use LLMInterface for automatic tool calling and conversation management
             assert hasattr(self.drill_agent, 'basic_llm') and self.drill_agent.basic_llm is not None, "DrillAgent.basic_llm (LLMInterface) is not available!"
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to extract sanitizer report...")
 
             result = self.drill_agent.basic_llm.run_agent_loop(
-                task=prompt,
+                task=VAA_sanitizer_extraction_prompt.format(
+                    project_name=project_name,
+                    actual_repo_path=actual_repo_path,
+                    sanitizer_report=sanitizer_report
+                ),
                 tools=self.tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=5,  # Allow up to 5 rounds of tool usage
@@ -262,205 +259,149 @@ class VulnAnalysisAgent:
         # Transform raw call trace string to structured format using LLM. Also check and adjust the line numbers if needed.
         # Returns: List of structured call trace entries with validated file paths, from entry_function to crash_function.
 
+        def extract_json_from_response(response: str) -> dict:
+            # Try markdown code block first
+            if '```' in response:
+                for i, part in enumerate(response.split('```')):
+                    if i > 0 and i % 2 == 1:
+                        lines = part.strip().split('\n')
+                        json_str = '\n'.join(lines[1:]) if lines and lines[0].strip().lower() in ['json', ''] else part.strip()
+                        try:
+                            data = json.loads(json_str)
+                            if data: return data
+                        except: continue
+            # Try finding JSON object
+            if '{' in response and '}' in response:
+                start, end = response.find('{'), response.rfind('}')
+                if start != -1 and end > start:
+                    try: return json.loads(response[start:end+1])
+                    except: pass
+            # Try parsing entire response
+            try: return json.loads(response.strip())
+            except: return None
+
         try:
-            structured_trace = []
-            # Firstly, do the basic raw_call_trace formatting using LLM. Here we focus on file path validation.
-            prompt = VAA_call_trace_transform_prompt.format(
-                project_name=self.config.project_name,
-                actual_repo_path=self.config.target_repo_path,
-                raw_call_trace=raw_call_trace
-            )
-            # Call LLM to transform the call trace
+            repo_path = self.config.target_repo_path
+            entry_function, crash_function = self.vuln_info.entry_function, self.vuln_info.crash_function
+
+            # Step 1: Transform raw call trace to structured format
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to transform raw call trace...")
             response = self.drill_agent.basic_llm.generate(
-                prompt=prompt,
+                prompt=VAA_call_trace_transform_prompt.format(
+                    project_name=self.config.project_name,
+                    actual_repo_path=repo_path,
+                    raw_call_trace=raw_call_trace
+                ),
                 system_prompt=VAA_system_prompt,
-                temperature=0.1,  # Low temperature for precise extraction
+                temperature=0.1,
                 max_tokens=4096
             )
             self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
 
-            # Extract JSON from response
-            parsed_data = None
-            if '```' in response:
-                parts = response.split('```')
-                for i, part in enumerate(parts):
-                    if i > 0 and i % 2 == 1:
-                        lines = part.strip().split('\n')
-                        if lines and lines[0].strip().lower() in ['json', '']:
-                            json_str = '\n'.join(lines[1:]) if lines[0].strip() else part.strip()
-                        else:
-                            json_str = part.strip()
-
-                        try:
-                            parsed_data = json.loads(json_str)
-                            if parsed_data:
-                                break
-                        except:
-                            continue
-            # Try to find JSON object in response
-            if not parsed_data:
-                start_idx = response.find('{')
-                end_idx = response.rfind('}')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    try:
-                        parsed_data = json.loads(response[start_idx:end_idx+1])
-                    except:
-                        pass
-            # Try parsing entire response as JSON
-            if not parsed_data:
-                try:
-                    parsed_data = json.loads(response.strip())
-                except:
-                    pass
+            parsed_data = extract_json_from_response(response)
             if not parsed_data or 'call_trace' not in parsed_data:
                 raise ValueError("Could not extract call trace from LLM response")
 
-            # Validate and filter call trace entries
+            # Step 2: Validate file paths and filter out invalid/external frames
             validated_trace = []
-            repo_path = self.config.target_repo_path
-            entry_function = self.vuln_info.entry_function
-            crash_function = self.vuln_info.crash_function
-            # Get the structured call trace
-            structured_trace = parsed_data['call_trace']
-            for entry in structured_trace:
-                # Skip external library frames
-                if entry.get('is_external', False):
-                    self.logger.debug(f"      Skipping external frame: {entry.get('file_path', 'unknown')}")
+            for entry in parsed_data['call_trace']:
+                if entry.get('is_external', False) or not entry.get('file_path'):
                     continue
 
-                file_path = entry.get('file_path', '')
-                if not file_path:
-                    self.logger.debug(f"      Skipping frame with empty file path")
-                    continue
+                file_path = entry['file_path']
+                # Convert to relative path if absolute
+                if os.path.isabs(file_path) and repo_path in file_path:
+                    file_path = os.path.relpath(file_path, repo_path)
 
-                # Construct absolute path for validation
-                if os.path.isabs(file_path):
-                    # If it's still an absolute path, try to make it relative
-                    abs_path = file_path
-                    # Try to extract relative path
-                    if repo_path in file_path:
-                        file_path = os.path.relpath(file_path, repo_path)
-                        abs_path = os.path.join(repo_path, file_path)
-                else:
-                    abs_path = os.path.join(repo_path, file_path)
-
-                # Check if file exists
+                abs_path = file_path if os.path.isabs(file_path) else os.path.join(repo_path, file_path)
                 if os.path.exists(abs_path):
-                    # Update entry with validated relative path
                     entry['file_path'] = file_path
                     validated_trace.append(entry)
-                    # self.logger.debug(f"      ✓ Validated frame #{entry.get('sequence_num')}: {entry.get('function_name')} @ {file_path}:{entry.get('line_number')}")
                 else:
                     self.logger.warning(f"      ✗ File not found for frame #{entry.get('sequence_num')}: {abs_path}")
 
-            print(f"Vulnerable call trace before line number adjustment:")
-            validated_tmp_trace = ""
-            for entry in validated_trace:
-                seq_num = entry.get('sequence_num', 'N/A')
-                func_name = entry.get('function_name', 'N/A')
-                file_path = entry.get('file_path', 'N/A')
-                line_number = entry.get('line_number', 'N/A')
-                validated_tmp_trace += f"#{seq_num}: {func_name} @ {file_path}:{line_number}\n"
-                # print(f"#{seq_num}: {func_name} @ {file_path}:{line_number}")
-            print(validated_tmp_trace)
+            # Print trace before line number adjustment (for debug)
+            validated_tmp_trace = '\n'.join(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}" for e in validated_trace)
+            print(f"Vulnerable call trace before line number adjustment:\n{validated_tmp_trace}\n")
 
-            # Secondly, we further refine the call trace focusing on the line number adjustment.
-            self.logger.info("  [VulnAnalysisAgent] Refining call trace line numbers...")
+            # Step 3: Refine line numbers using LLM with tools (frame-by-frame approach)
+            self.logger.info("  [VulnAnalysisAgent] Refining call trace line numbers frame by frame...")
             try:
-                linenum_prompt = VAA_call_trace_linenum_refine_prompt.format(
-                    project_name=self.config.project_name,
-                    actual_repo_path=self.config.target_repo_path,
-                    current_call_trace=validated_tmp_trace
-                )
+                # Process frames from outermost (entry_function) to innermost (crash_function)
+                # Sort by sequence_num in descending order
+                sorted_trace = sorted(validated_trace, key=lambda x: x.get('sequence_num', 0), reverse=True)
+                
+                refined_frames = []
+                total_frames = len(sorted_trace)
+                for idx, current_frame in enumerate(sorted_trace):
+                    seq_num = current_frame.get('sequence_num', 'N/A')
+                    func_name = current_frame.get('function_name', 'N/A')
 
-                # Use LLMInterface with agent loop to refine line numbers
-                self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to refine line numbers...")
-                result = self.drill_agent.basic_llm.run_agent_loop(
-                    task=linenum_prompt,
-                    tools=self.tools,
-                    system_prompt=VAA_system_prompt,
-                    max_iterations=10,  # Allow up to 10 rounds for checking files
-                    temperature=0.1,
-                    max_tokens=8192,
-                    continuation_prompt="Please continue verifying line numbers using read_file and provide the final JSON output."
-                )
+                    # Skip the innermost frame (#0) - it's the crash point, no callee to verify
+                    if idx == total_frames - 1:
+                        self.logger.info(f"      Processing frame #{seq_num} ({func_name}): Innermost frame, keeping original line number")
+                        refined_frames.append(current_frame)
+                        continue
 
-                if not result['success']:
-                    error_msg = result.get('error', 'Unknown error')
-                    self.logger.warning(f"  [VulnAnalysisAgent] Line number refinement failed: {error_msg}, using original trace")
-                else:
-                    response = result['final_response']
-                    self.logger.info(f"  [VulnAnalysisAgent] Line number refinement completed in {result['iterations']} iteration(s)")
-                    # Extract JSON from response
-                    refined_data = None
-                    if '```' in response:
-                        parts = response.split('```')
-                        for i, part in enumerate(parts):
-                            if i > 0 and i % 2 == 1:
-                                lines = part.strip().split('\n')
-                                if lines and lines[0].strip().lower() in ['json', '']:
-                                    json_str = '\n'.join(lines[1:]) if lines[0].strip() else part.strip()
-                                else:
-                                    json_str = part.strip()
-                                try:
-                                    refined_data = json.loads(json_str)
-                                    if refined_data:
-                                        break
-                                except:
-                                    continue
-                    # Try to find JSON object in response
-                    if not refined_data:
-                        start_idx = response.find('{')
-                        end_idx = response.rfind('}')
-                        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                            try:
-                                refined_data = json.loads(response[start_idx:end_idx+1])
-                            except:
-                                pass
-                    # Try parsing entire response as JSON
-                    if not refined_data:
-                        try:
-                            refined_data = json.loads(response.strip())
-                        except:
-                            pass
+                    # Get callee frame (next frame in the sorted list, which has smaller sequence_num)
+                    callee_frame = sorted_trace[idx + 1]
+                    callee_func_name = callee_frame.get('function_name', '')
+                    self.logger.info(f"      Processing frame #{seq_num} ({func_name}) -> callee: {callee_func_name}")
+                    current_frame_json = json.dumps(current_frame, indent=2)
 
-                    if refined_data and 'call_trace' in refined_data:
-                        validated_trace = refined_data['call_trace']
-                        self.logger.info(f"    ✓ Line numbers refined successfully")
+                    # Call LLM to refine this single frame's line number
+                    result = self.drill_agent.basic_llm.run_agent_loop(
+                        task=VAA_call_trace_linenum_refine_prompt.format(
+                            project_name=self.config.project_name,
+                            actual_repo_path=repo_path,
+                            current_frame_json=current_frame_json,
+                            callee_function_name=callee_func_name
+                        ),
+                        tools=self.tools,
+                        system_prompt=VAA_system_prompt,
+                        max_iterations=3,
+                        temperature=0.1,
+                        max_tokens=4096,
+                        continuation_prompt="Please continue verifying the line number using read_file and provide the final JSON output."
+                    )
+
+                    if result['success']:
+                        refined_frame = extract_json_from_response(result['final_response'])
+                        if refined_frame and 'line_number' in refined_frame and refined_frame.get('line_number', 0) > 0:
+                            # Merge refined data back to current frame
+                            current_frame.update(refined_frame)
+                            self.logger.info(f"        ✓ Frame #{seq_num}: Line number refined to {current_frame['line_number']}")
+                        else:
+                            self.logger.warning(f"        ✗ Frame #{seq_num}: Could not extract valid line number, keeping original")
                     else:
-                        self.logger.warning(f"  [VulnAnalysisAgent] Could not extract refined trace from response, using original")
+                        self.logger.warning(f"        ✗ Frame #{seq_num}: Refinement failed, keeping original")
+
+                    refined_frames.append(current_frame)
+
+                # Sort refined frames back to original order (by sequence_num ascending)
+                validated_trace = sorted(refined_frames, key=lambda x: x.get('sequence_num', 0))
+                self.logger.info(f"    ✓ Line numbers refined for {len(refined_frames)} frames")
             except Exception as e:
                 self.logger.error(f"  [VulnAnalysisAgent] Failed to refine line numbers: {e}", exc_info=True)
                 self.logger.warning(f"  [VulnAnalysisAgent] Using original line numbers")
 
+            # Print trace after line number adjustment (for debug)
             print(f"Vulnerable call trace after line number adjustment:")
-            for entry in validated_trace:
-                seq_num = entry.get('sequence_num', 'N/A')
-                func_name = entry.get('function_name', 'N/A')
-                file_path = entry.get('file_path', 'N/A')
-                line_number = entry.get('line_number', 'N/A')
-                print(f"#{seq_num}: {func_name} @ {file_path}:{line_number}")
+            for e in validated_trace:
+                print(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}")
             print("")
 
-            # Trim the call trace: from entry_function to crash_function
-            trimmed_trace = validated_trace
-            if validated_trace and entry_function and crash_function:
-                # Find indices of entry and crash functions
-                entry_idx = None
-                crash_idx = None
-                # Sanitizer traces are ordered from innermost (#0 = crash) to outermost (entry)
-                for i, frame in enumerate(validated_trace):
-                    func_name = frame.get('function_name', '')
-                    if crash_idx is None and func_name == crash_function:
-                        crash_idx = i
-                    if func_name == entry_function:
-                        entry_idx = i
+            # Step 4: Trim trace from crash_function to entry_function
+            if not (validated_trace and entry_function and crash_function):
+                self.logger.debug("      No entry/crash function specified, keeping full trace")
+                trimmed_trace = validated_trace
+            else:
+                crash_idx = next((i for i, f in enumerate(validated_trace) if f.get('function_name') == crash_function), None)
+                entry_idx = next((i for i, f in enumerate(validated_trace) if f.get('function_name') == entry_function), None)
 
-                # Slice the trace if both functions found
                 if crash_idx is not None and entry_idx is not None:
+                    trimmed_trace = validated_trace[crash_idx:entry_idx+1] if crash_idx <= entry_idx else validated_trace
                     if crash_idx <= entry_idx:
-                        trimmed_trace = validated_trace[crash_idx:entry_idx+1]
                         self.logger.debug(f"      Trimmed trace from frame #{crash_idx} ({crash_function}) to frame #{entry_idx} ({entry_function})")
                     else:
                         self.logger.warning(f"      Unexpected: crash_idx ({crash_idx}) > entry_idx ({entry_idx}), keeping full trace")
@@ -471,11 +412,10 @@ class VulnAnalysisAgent:
                     trimmed_trace = validated_trace[:entry_idx+1]
                     self.logger.debug(f"      Crash function '{crash_function}' not found, keeping up to entry function")
                 else:
+                    trimmed_trace = validated_trace
                     self.logger.warning(f"      Neither entry '{entry_function}' nor crash '{crash_function}' found in trace, keeping full trace")
-            elif not entry_function or not crash_function:
-                self.logger.debug("      No entry/crash function specified, keeping full trace")
 
-            self.logger.info(f"    ✓ Transformed call trace: {len(trimmed_trace)} frames (from {len(validated_trace)} valid, {len(structured_trace)} total)")
+            self.logger.info(f"    ✓ Transformed call trace: {len(trimmed_trace)} frames (from {len(validated_trace)} valid, {len(parsed_data['call_trace'])} total)")
             if entry_function and crash_function:
                 self.logger.info(f"      Trimmed from entry '{entry_function}' to crash '{crash_function}'!")
 
@@ -483,7 +423,6 @@ class VulnAnalysisAgent:
 
         except Exception as e:
             self.logger.error(f"  [VulnAnalysisAgent] Failed to transform call trace: {e}", exc_info=True)
-            # Return empty list on failure
             return []
 
     def _refine_harness_command(self, project_name, actual_repo_path, raw_harness_command):

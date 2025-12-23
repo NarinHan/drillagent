@@ -131,69 +131,60 @@ IMPORTANT:
 - Mark system library frames with `"is_external": true`
 """
 
-VAA_call_trace_linenum_refine_prompt = """You are refining line numbers in a structured call trace to ensure accuracy.
+VAA_call_trace_linenum_refine_prompt = """You are refining the line number for a single stack frame to ensure accuracy.
 
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current Call Trace (with potentially inaccurate line numbers):
+Current Stack Frame (with potentially inaccurate line number):
+```json
+{current_frame_json}
 ```
-{current_call_trace}
-```
 
-Your task is to verify and adjust line numbers for accuracy by examining the actual source code.
+Callee Function Name: {callee_function_name}
 
-CRITICAL: You MUST use the `read_file` tool to verify and adjust line numbers for accuracy!
+Your task is to verify and adjust the line number for this frame by examining the actual source code.
 
-Line Number Verification Requirements: In each stack frame, the `file:line` should indicate the call site to the **next** stack frame's **callee function**.
-- Because of compiler preprocessing or macro expansion, some line numbers may be inaccurate (i.e., target code line doesn't contain a callsite to next stack frame). Such inaccurate line numbers usually require subtracting an offset to be precise.
-- Correct example: If frame #17 is `main @ tools/plistutil.c:137` and frame #16 is `njs_function @ src/njs_function.c:574`, then tools/plistutil.c:137 should contain a call site to njs_function.
+CRITICAL: You MUST use the `read_file` tool to verify and adjust the line number for accuracy!
 
-For all stack frames:
-- You MUST use `read_file` to examine the source code around the provided line number.
-- Check the target line for a call site to the next frame's callee function:
-  * If the call site is an indirect function call (e.g., (*callback)(arg); or func_ptr(); or handler->process();), keep the original non-zero line number and mark this frame with `"is_original_linenum": true`.
-  * If the target line does not contain a call to the next frame's callee function, read a few lines above (typically 1-15 lines) to find the correct call-site code snippet. Use the callee function name from the next stack frame to pinpoint the correct call site:
-    - If you find the correct call site, update the line number accordingly.
-    - If you cannot find the correct line number after thorough checking, keep the original non-zero line number and mark this frame with `"is_original_linenum": true`.
-- CRITICAL RULE: The final line_number must NEVER be 0. Always use the original non-zero line number if you cannot determine a better value.
-- After verifying all frames, provide the adjusted line numbers in your final JSON output.
+Line Number Verification Requirements:
+- The `file:line` in this frame should indicate the call site to the **callee function** `{callee_function_name}`.
+- Because of compiler preprocessing or macro expansion, the line number may be inaccurate (i.e., the target code line doesn't contain a call site to the callee function). Such inaccurate line numbers usually require subtracting an offset to be precise.
+- Example: If this frame is `main @ tools/plistutil.c:137` and the callee function is `njs_function`, then tools/plistutil.c:137 should contain a function call site to `njs_function`.
+
+Verification Steps:
+1. You MUST use `read_file` to examine the source code at and around the provided line number.
+2. Check if the target line contains a call site to the callee function `{callee_function_name}`:
+   - If YES and it's a **direct function call** (e.g., `njs_function(...);`), keep the original non-zero line number and set `"is_original_linenum": true`.
+   - If YES and it's an **indirect function call** (e.g., `(*callback)(arg);` or `func_ptr();` or `handler->process();`), keep the original non-zero line number and set `"is_original_linenum": true`.
+   - If NO (the line doesn't contain a call to `{callee_function_name}`), read a few lines above (typically 1-20 lines) to find the correct call-site code snippet:
+     * If you find the correct call site, update the line number accordingly and set `"is_original_linenum": false`.
+     * If you cannot find the correct line number after thorough checking, keep the original non-zero line number and set `"is_original_linenum": true`.
+3. CRITICAL RULE: The final `line_number` must NEVER be 0. Always use the original non-zero line number if you cannot determine a better value.
 
 IMPORTANT:
-- Process frames from innermost (lowest sequence_num) to outermost (highest sequence_num)
-- For each frame (sequence_num=N), look at the NEXT frame (sequence_num = N-1) to find the callee function name
 - All file paths are RELATIVE to repository root: {actual_repo_path}
+- The file_path field in the frame should NOT be changed!
+- Only update the `line_number` and `is_original_linenum` fields
 
-VALIDATION RULE: EVERY frame's line_number MUST be > 0 (NEVER 0) !!!
+VALIDATION RULE: The frame's `line_number` MUST be > 0 (NEVER 0)!!!
 
-Respond in the following JSON format ONLY:
+Respond in the following JSON format ONLY (return the updated frame):
 {{
-    "call_trace": [
-        {{
-            "sequence_num": 16,
-            "function_name": "njs_function",
-            "file_path": "src/njs_function.c",
-            "line_number": 574,
-            "is_external": false,
-            "is_original_linenum": false
-        }},
-        {{
-            "sequence_num": 17,
-            "function_name": "main",
-            "file_path": "tools/plistutil.c",
-            "line_number": 137,
-            "is_external": false,
-            "is_original_linenum": true
-        }}
-    ]
+    "sequence_num": <original_sequence_num>,
+    "function_name": "<original_function_name>",
+    "file_path": "<original_file_path>",
+    "line_number": <refined_line_number>,
+    "is_external": <original_is_external_value>,
+    "is_original_linenum": <true_or_false>
 }}
 
 Note: Set `"is_original_linenum": true` when you keep the original line number because:
 - The call site is an indirect function call, OR
 - You cannot find the correct call site line after thorough checking
 
-Make sure all line numbers have been verified and adjusted as needed using the read_file tool.
-After you generate the first JSON formatted response, re-verify that all line numbers are correct before finalizing your answer. EVERY frame's line_number MUST be > 0 (NEVER 0) !!!
+Make sure the line number has been verified and adjusted as needed using the read_file tool.
+Before finalizing your answer, re-verify that the line_number is > 0 (NEVER 0)!!!
 """
 
 
