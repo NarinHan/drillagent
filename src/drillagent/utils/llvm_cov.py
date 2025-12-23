@@ -52,6 +52,7 @@ class LLVMCovUtils:
         self._coverage_data: Optional[Dict[str, Any]] = None
 
     def _convert_profraw_to_profdata(self, profraw_path: str) -> str:
+        # LHY: This function should be executed implicitly when init and update.
         """
         Convert profraw file to profdata format.
         Args:

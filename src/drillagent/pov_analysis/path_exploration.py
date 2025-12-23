@@ -186,30 +186,23 @@ class PathExplorationAgent:
         return test_case_path
 
     def _execute_test_case(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed
-        # 1. 从drill_agent.vulnerability_info中获取到binary_path和refined_harness_command，结合test_case_path，整理成一个在roundN目录下可执行的命令。
-        # 2. 进入roundN子目录执行该命令，记录stdout和stderr，同时生成profraw文件。
-        # 3. 利用LLVMCovUtils把profraw文件转换成profdata文件，连同exit code和exec output(包括stdout和stderr)返回给调用者。
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
 
         # Step 1: Prepare the command
         repo_path = self.drill_agent.config.target_repo_path
         binary_path = self.drill_agent.vulnerability_info.binary_path
-        binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path))
+        binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path)) # Pass to LLVMCovUtils
         harness_command = self.drill_agent.vulnerability_info.refined_harness_command
         if not binary_path:
             raise ValueError("Binary path not found in vulnerability_info")
         if not harness_command:
             raise ValueError("Refined harness command not found in vulnerability_info")
 
-        # Transform general harness command to executable command
+        # Transform general harness command to executable command in current round directory
+        ## Since we use "absolute path" in _refine_harness_command, here we just need to replace the testcase path.
         abs_test_case_path = os.path.abspath(test_case_path)
         command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
-        # TODO: LHY: Should be more smart, maybe still need to use LLM here...
-        # if f"./{binary_path} " in command:
-        #     command = command.replace(f"./{binary_path} ", f"{binary_abs_path} ")
-        # elif f"{binary_path} " in command:
-        #     command = command.replace(f"{binary_path} ", f"{binary_abs_path} ")
 
         # Step 2: Set environment variable to generate profraw file
         profraw_path = os.path.join(round_dir, f"test_{self.current_exp_iteration}.profraw")
@@ -255,6 +248,7 @@ class PathExplorationAgent:
 
         try:
             if self.llvm_cov_utils is None:
+                # First time init
                 self.llvm_cov_utils = LLVMCovUtils(
                     binary_path=binary_abs_path, # absolute path to the instrumented binary
                     profraw_path=profraw_path    # absolute path?
@@ -472,7 +466,7 @@ class PathExplorationAgent:
         return formatted_output
 
     def _analyze_coverage_feedback(self, exit_code: int, exec_output: str, func_level_cov_info: str) -> str:
-        # TODOO: 这里的分析结果需要整理并返回，作为参数传递给_generate_test_case的下一轮调用。
+        # Organize the coverage results, analyze them, and feed the results back as parameters for the next invocation of _generate_test_case.
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep4: Analyzing coverage feedback...")
 
         feedback_analysis_results  = f"For the finished execution, exit code: {exit_code}\n\nexecution output:\n{exec_output}\n\n"
