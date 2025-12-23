@@ -159,13 +159,13 @@ Verification Steps:
    - If YES and it's an **indirect function call** (e.g., `(*callback)(arg);` or `func_ptr();` or `handler->process();`), keep the original non-zero line number and set `"is_original_linenum": true`.
    - If NO (the line doesn't contain a call to `{callee_function_name}`), read a few lines above (typically 1-20 lines) to find the correct call-site code snippet:
      * If you find the correct call site, update the line number accordingly and set `"is_original_linenum": false`.
-     * If you cannot find the correct line number after thorough checking, keep the original non-zero line number and set `"is_original_linenum": true`.
+     * If you cannot find the correct line number after thorough checking, keep the original non-zero line number and set `"is_original_linenum": true` and `"is_verified": false`.
 3. CRITICAL RULE: The final `line_number` must NEVER be 0. Always use the original non-zero line number if you cannot determine a better value.
 
 IMPORTANT:
 - All file paths are RELATIVE to repository root: {actual_repo_path}
 - The file_path field in the frame should NOT be changed!
-- Only update the `line_number` and `is_original_linenum` fields
+- Only update the `line_number` and `is_original_linenum` and `is_verified` fields
 
 VALIDATION RULE: The frame's `line_number` MUST be > 0 (NEVER 0)!!!
 
@@ -176,12 +176,14 @@ Respond in the following JSON format ONLY (return the updated frame):
     "file_path": "<original_file_path>",
     "line_number": <refined_line_number>,
     "is_external": <original_is_external_value>,
-    "is_original_linenum": <true_or_false>
+    "is_original_linenum": <true_or_false>,
+    "is_verified": <true_or_false>
 }}
 
 Note: Set `"is_original_linenum": true` when you keep the original line number because:
 - The call site is an indirect function call, OR
 - You cannot find the correct call site line after thorough checking
+Also set `"is_verified": false` if you cannot find the correct line number after thorough checking.
 
 Make sure the line number has been verified and adjusted as needed using the read_file tool.
 Before finalizing your answer, re-verify that the line_number is > 0 (NEVER 0)!!!
@@ -284,3 +286,67 @@ Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUS
 
 """
 
+
+VAA_critical_step_identification_prompt = """You are analyzing a vulnerability call trace to identify critical function call steps that are essential for triggering the vulnerability.
+
+Project: {project_name}
+Repository path: {actual_repo_path}
+
+Vulnerability Information:
+- Vuln Type: {vuln_type}
+
+Root Cause Analysis:
+```
+{root_cause}
+```
+
+Refined Call Trace (The highest sequence number is the entry point):
+```
+{refined_call_trace}
+```
+
+Your task is to identify which function calls in the above call trace are CRITICAL for triggering the vulnerability.
+
+IMPORTANT CONCEPTS:
+- **Critical steps**: Function calls that are essential to reach the vulnerability point. If these are not executed, the vulnerability cannot be triggered.
+- **Non-critical steps**: Basic/common function calls that would be executed by almost any test case (e.g., initialization functions, basic parsing functions). These are less important for our further coverage tracking.
+
+Analysis Steps:
+1. Use the `read_file` tool to examine the source code for each function in the call trace.
+2. Identify which function calls implement key logic that leads to the vulnerability (e.g., specific branching conditions, data transformations, state changes).
+3. For each frame in the call trace, determine if it is "critical" based on:
+   - Does it perform security-relevant operations (bounds checks, type checks, etc.)?
+   - Does it contain conditional branches that filter inputs?
+   - Does it transform data in a way specific to triggering the vulnerability?
+   - Would most test cases skip this function or take a different path?
+   - Is it a function call within a specific case of a switch statement (critical to choose this `case` branch)?
+
+IMPORTANT:
+- All file paths are RELATIVE to repository root: {actual_repo_path}
+- You MUST use the read_file tool to examine the actual source code before making judgments
+- Be selective: typically only 20-40 percent of frames should be marked as critical
+
+Respond in the following JSON format ONLY:
+{{
+    "critical_frames": [
+        {{
+            "sequence_num": <frame_sequence_number>,
+            "function_name": "<function_name>",
+            "file_path": "<relative_file_path>",
+            "line_number": <line_number>,
+            "reasoning": "<brief explanation of why this step is critical>"
+        }},
+        ...
+    ],
+    "non_critical_frames": [
+        {{
+            "sequence_num": <frame_sequence_number>,
+            "function_name": "<function_name>",
+            "reasoning": "<brief explanation of why this step is not critical>"
+        }},
+        ...
+    ]
+}}
+
+Be thorough. Use read_file to examine the code before making your assessment.
+"""

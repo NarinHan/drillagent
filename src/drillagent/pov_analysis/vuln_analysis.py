@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_system_prompt,
     VAA_sanitizer_extraction_prompt,
+    VAA_call_trace_transform_prompt,
+    VAA_call_trace_linenum_refine_prompt,
     VAA_harness_refine_prompt,
     VAA_root_cause_analysis_prompt,
-    VAA_call_trace_transform_prompt,
-    VAA_call_trace_linenum_refine_prompt
+    VAA_critical_step_identification_prompt
 )
 
 if TYPE_CHECKING:
@@ -100,6 +101,13 @@ class VulnAnalysisAgent:
             with open(root_cause_filepath, 'w', encoding='utf-8') as f:
                 f.write(self.vuln_info.root_cause)
 
+            # Also write critical steps to a separate JSON file for easy access.
+            if self.vuln_info.critical_steps:
+                critical_steps_filepath = os.path.join(self.cache_dir, f"critical_steps_{identifier}.json")
+                with open(critical_steps_filepath, 'w', encoding='utf-8') as f:
+                    json.dump(self.vuln_info.critical_steps, f, indent=2, ensure_ascii=False)
+                self.logger.info(f"  [VulnAnalysisAgent] Critical steps cached to: {critical_steps_filepath}")
+
             self.logger.info(f"  [VulnAnalysisAgent] Vulnerability analysis cached to: {cache_filepath}")
 
         except Exception as e:
@@ -156,6 +164,13 @@ class VulnAnalysisAgent:
             self._root_cause_analysis()
         else:
             self.logger.info("  [VulnAnalysisAgent] Root cause analysis is disabled by configuration. Skipping!")
+
+        # Substep4: Identify critical function call steps for vulnerability triggering.
+        if not self.config.disable_root_cause_analysis:  # Only run if root cause analysis is enabled
+            self.logger.info("  [VulnAnalysisAgent] Identifying critical function call steps...")
+            self._identify_critical_steps()
+        else:
+            self.logger.info("  [VulnAnalysisAgent] Critical step identification is skipped (requires root cause analysis).")
 
         # Store results to cache for future use
         self.store_to_cache()
@@ -368,9 +383,10 @@ class VulnAnalysisAgent:
                     if result['success']:
                         refined_frame = extract_json_from_response(result['final_response'])
                         if refined_frame and 'line_number' in refined_frame and refined_frame.get('line_number', 0) > 0:
+                            old_linenum = current_frame['line_number']
                             # Merge refined data back to current frame
                             current_frame.update(refined_frame)
-                            self.logger.info(f"        ✓ Frame #{seq_num}: Line number refined to {current_frame['line_number']}")
+                            self.logger.info(f"        ✓ Frame #{seq_num}: Line number refined from {old_linenum} to {current_frame['line_number']}")
                         else:
                             self.logger.warning(f"        ✗ Frame #{seq_num}: Could not extract valid line number, keeping original")
                     else:
@@ -566,6 +582,96 @@ class VulnAnalysisAgent:
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
             self.vuln_info.root_cause = f"Root cause analysis failed: {e}"
 
+    def _identify_critical_steps(self):
+        # Identify critical function call steps for vulnerability triggering.
+        # LLM uses tools to read code and identify which frames are critical vs non-critical.
+        # Results are stored in a JSON file for later use.
+        try:
+            # Skip if no call trace is available
+            if not self.vuln_info.call_trace or len(self.vuln_info.call_trace) == 0:
+                self.logger.warning("  [VulnAnalysisAgent] No refined call trace available. Skipping critical step identification.")
+                return
+
+            # Prepare the prompt
+            initial_prompt = VAA_critical_step_identification_prompt.format(
+                project_name=self.config.project_name,
+                actual_repo_path=self.config.target_repo_path,
+                vuln_type=self.vuln_info.vuln_type,
+                root_cause=self.vuln_info.root_cause if self.vuln_info.root_cause else "Not available",
+                refined_call_trace=self.vuln_info.get_refined_call_trace_as_string()
+            )
+
+            # Use LLMInterface for automatic tool calling and conversation management
+            self.logger.info("    Using LLMInterface to identify critical steps...")
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=initial_prompt,
+                tools=self.tools,
+                system_prompt=VAA_system_prompt,
+                max_iterations=10,  # To be adjusted...
+                temperature=0.2,
+                max_tokens=8192,
+                continuation_prompt="Please continue examining the remaining frames and provide the final JSON output with critical and non-critical frames."
+            )
+
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.error(f"    LLM agent loop failed: {error_msg}")
+                raise RuntimeError(f"Failed to identify critical steps: {error_msg}")
+
+            response = result['final_response']
+            self.logger.info(f"    ✓ Critical step identification complete in {result['iterations']} iteration(s)")
+            self.logger.info(f"    Stop reason: {result['stop_reason']}")
+            self.logger.info(f"    LLM Response: {response[:300]}...")
+            # Extract JSON from response
+            critical_steps_data = None
+            if '```' in response:
+                parts = response.split('```')
+                for i, part in enumerate(parts):
+                    if i > 0 and i % 2 == 1:
+                        lines = part.strip().split('\n')
+                        if lines and lines[0].strip().lower() in ['json', '']:
+                            json_str = '\n'.join(lines[1:]) if lines[0].strip() else part.strip()
+                        else:
+                            json_str = part.strip()
+                        try:
+                            critical_steps_data = json.loads(json_str)
+                            if critical_steps_data:
+                                break
+                        except:
+                            continue
+            # Try to find JSON object in response
+            if not critical_steps_data:
+                start_idx = response.find('{')
+                end_idx = response.rfind('}')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    try:
+                        critical_steps_data = json.loads(response[start_idx:end_idx+1])
+                    except:
+                        pass
+            # Try parsing entire response as JSON
+            if not critical_steps_data:
+                try:
+                    critical_steps_data = json.loads(response.strip())
+                except:
+                    pass
+            # If still no JSON, raise error
+            if not critical_steps_data:
+                raise ValueError("Could not extract JSON from LLM response")
+
+            # Store critical steps data in vuln_info
+            self.vuln_info.critical_steps = critical_steps_data
+
+            # Log summary
+            num_critical = len(critical_steps_data.get('critical_frames', []))
+            num_non_critical = len(critical_steps_data.get('non_critical_frames', []))
+            total_frames = len(self.vuln_info.call_trace)
+            self.logger.info(f"    ✓ Critical step identification complete:")
+            self.logger.info(f"      Critical frames: {num_critical}/{total_frames}")
+            self.logger.info(f"      Non-critical frames: {num_non_critical}/{total_frames}")
+
+        except Exception as e:
+            self.logger.error(f"    Failed to identify critical steps: {e}", exc_info=True)
+
 @dataclass
 class VulnInfo:
     """Container for vulnerability analysis information"""
@@ -584,6 +690,7 @@ class VulnInfo:
     # vuln semantics
     vuln_type: str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
     root_cause: str = ""  # Root cause analysis result
+    critical_steps: Dict[str, Any] = field(default_factory=dict)
     # advanced analysis results (optional now)
     critical_branches: List[str] = field(default_factory=list)  # This can be used for the exploration phase later #TBD
 
@@ -600,6 +707,7 @@ class VulnInfo:
             'binary_path': self.binary_path,
             'vuln_type': self.vuln_type,
             'root_cause': self.root_cause,
+            'critical_steps': self.critical_steps,
             'critical_branches': self.critical_branches
         }
 
@@ -617,6 +725,7 @@ class VulnInfo:
             binary_path=data.get('binary_path', ''),
             vuln_type=data.get('vuln_type', ''),
             root_cause=data.get('root_cause', ''),
+            critical_steps=data.get('critical_steps', {}),
             critical_branches=data.get('critical_branches', [])
         )
 
