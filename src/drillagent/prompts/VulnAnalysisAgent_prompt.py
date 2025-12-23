@@ -66,6 +66,137 @@ Be precise. Extract information directly from the report.
 """
 
 
+# Prompt for transforming raw call trace to structured format
+VAA_call_trace_transform_prompt = """You are transforming a raw call trace from a sanitizer report into a structured format.
+
+Project: {project_name}
+Repository path: {actual_repo_path}
+
+Raw Call Trace:
+```
+{raw_call_trace}
+```
+
+Your task is to parse this call trace and extract structured information for each frame.
+
+For each line starting with '#' in the call trace:
+1. Extract the sequence number (the number after #).
+2. Extract the function name (the text after "in" if present, otherwise use empty string).
+3. Extract the file path and convert it to a RELATIVE path based on the repository root: {actual_repo_path}.
+4. Extract the line number (the number after the colon in file:line format). 
+
+IMPORTANT PATH CONVERSION RULES:
+- If the path contains the project name (e.g., "/home/b/asan/libplist/tools/plistutil.c"), extract the relative part (e.g., "tools/plistutil.c").
+- If the path is a system library (e.g., "/lib/i386-linux-gnu/libc.so.6" or contains libasan, libstdc++, libc), keep it as-is but mark it as external.
+- The relative path should start from the repository root.
+- Remove any absolute path prefix that includes the repository path.
+
+SKIP THE FOLLOWING:
+- Lines that are NOT actual stack frames (like allocation information, summary lines, etc.)
+- System library frames (libc, libasan, etc.) - these should still be included but marked appropriately
+
+Respond in the following JSON format ONLY:
+{{
+    "call_trace": [
+         {{
+         ...
+         }},
+         {{
+            "sequence_num": 16,
+            "function_name": "njs_function",
+            "file_path": "src/njs_function.c",
+            "line_number": 574,
+            "is_external": false
+        }},
+        {{
+            "sequence_num": 17,
+            "function_name": "main",
+            "file_path": "tools/plistutil.c",
+            "line_number": 137,
+            "is_external": false
+        }},
+        {{
+            "sequence_num": 18,
+            "function_name": "",
+            "file_path": "/lib/i386-linux-gnu/libc.so.6",
+            "line_number": 0,
+            "is_external": true
+        }}
+    ]
+}}
+
+IMPORTANT:
+- For frames without line numbers, use 0
+- For frames without function names, use empty string ""
+- Mark system library frames with `"is_external": true`
+"""
+
+VAA_call_trace_linenum_refine_prompt = """You are refining line numbers in a structured call trace to ensure accuracy.
+
+Project: {project_name}
+Repository path: {actual_repo_path}
+
+Current Call Trace (with potentially inaccurate line numbers):
+```
+{current_call_trace}
+```
+
+Your task is to verify and adjust line numbers for accuracy by examining the actual source code.
+
+CRITICAL: You MUST use the `read_file` tool to verify and adjust line numbers for accuracy!
+
+Line Number Verification Requirements: In each stack frame, the `file:line` should indicate the call site to the **next** stack frame's **callee function**.
+- Because of compiler preprocessing or macro expansion, some line numbers may be inaccurate (i.e., target code line doesn't contain a callsite to next stack frame). Such inaccurate line numbers usually require subtracting an offset to be precise.
+- Correct example: If frame #17 is `main @ tools/plistutil.c:137` and frame #16 is `njs_function @ src/njs_function.c:574`, then tools/plistutil.c:137 should contain a call site to njs_function.
+
+For all stack frames:
+- You MUST use `read_file` to examine the source code around the provided line number.
+- Check the target line for a call site to the next frame's callee function:
+  * If the call site is an indirect function call (e.g., (*callback)(arg); or func_ptr(); or handler->process();), keep the original non-zero line number and mark this frame with `"is_original_linenum": true`.
+  * If the target line does not contain a call to the next frame's callee function, read a few lines above (typically 1-15 lines) to find the correct call-site code snippet. Use the callee function name from the next stack frame to pinpoint the correct call site:
+    - If you find the correct call site, update the line number accordingly.
+    - If you cannot find the correct line number after thorough checking, keep the original non-zero line number and mark this frame with `"is_original_linenum": true`.
+- CRITICAL RULE: The final line_number must NEVER be 0. Always use the original non-zero line number if you cannot determine a better value.
+- After verifying all frames, provide the adjusted line numbers in your final JSON output.
+
+IMPORTANT:
+- Process frames from innermost (lowest sequence_num) to outermost (highest sequence_num)
+- For each frame (sequence_num=N), look at the NEXT frame (sequence_num = N-1) to find the callee function name
+- All file paths are RELATIVE to repository root: {actual_repo_path}
+
+VALIDATION RULE: EVERY frame's line_number MUST be > 0 (NEVER 0) !!!
+
+Respond in the following JSON format ONLY:
+{{
+    "call_trace": [
+        {{
+            "sequence_num": 16,
+            "function_name": "njs_function",
+            "file_path": "src/njs_function.c",
+            "line_number": 574,
+            "is_external": false,
+            "is_original_linenum": false
+        }},
+        {{
+            "sequence_num": 17,
+            "function_name": "main",
+            "file_path": "tools/plistutil.c",
+            "line_number": 137,
+            "is_external": false,
+            "is_original_linenum": true
+        }}
+    ]
+}}
+
+Note: Set `"is_original_linenum": true` when you keep the original line number because:
+- The call site is an indirect function call, OR
+- You cannot find the correct call site line after thorough checking
+
+Make sure all line numbers have been verified and adjusted as needed using the read_file tool.
+After you generate the first JSON formatted response, re-verify that all line numbers are correct before finalizing your answer. EVERY frame's line_number MUST be > 0 (NEVER 0) !!!
+"""
+
+
 # Prompt for refining harness command
 VAA_harness_refine_prompt = """You are refining a harness command to accurately run target program and reproduce a vulnerability.
 
@@ -152,7 +283,7 @@ Your task is to explain the ROOT CAUSE of this vulnerability:
 
 Use the provided tools (mainly read_file) to examine relevant source files.
 - All the relative file paths are based on the repository root: {actual_repo_path}
-- Some source file line numbers may be inaccurate (i.e., target source line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion. You may need to read a few more lines further down, and use the callee functionn name in the next stack frame to pinpoint the correct call-site code snippet!!
+- Some source file line numbers may be inaccurate (i.e., target code line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion. You may need to read a few lines above the provided line number, and use the callee function name in the next stack frame to pinpoint the correct call-site code snippet!!
 
 Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE ANALYSIS" and covering:
 - What the vulnerability is
@@ -160,61 +291,5 @@ Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUS
 - What code pattern or logic flaw enables it
 - Explain what conditions trigger it!
 
-"""
-
-
-# Prompt for transforming raw call trace to structured format
-VAA_call_trace_transform_prompt = """You are transforming a raw call trace from a sanitizer report into a structured format.
-
-Project: {project_name}
-Repository path: {actual_repo_path}
-
-Raw Call Trace:
-```
-{raw_call_trace}
-```
-
-Your task is to parse this call trace and extract structured information for each frame.
-
-For each line starting with '#' in the call trace:
-1. Extract the sequence number (the number after #)
-2. Extract the function name (the text after "in" if present, otherwise use empty string)
-3. Extract the file path and convert it to a RELATIVE path based on the repository root: {actual_repo_path}
-4. Extract the line number (the number after the colon in file:line format)
-
-IMPORTANT PATH CONVERSION RULES:
-- If the path contains the project name (e.g., "/home/b/asan/libplist/tools/plistutil.c"), extract the relative part (e.g., "tools/plistutil.c")
-- If the path is a system library (e.g., "/lib/i386-linux-gnu/libc.so.6" or contains libasan, libstdc++, libc), keep it as-is but mark it as external
-- The relative path should start from the repository root
-- Remove any absolute path prefix that includes the repository path
-
-SKIP THE FOLLOWING:
-- Lines that are NOT actual stack frames (like allocation information, summary lines, etc.)
-- System library frames (libc, libasan, etc.) - these should still be included but marked appropriately
-
-Respond in the following JSON format ONLY:
-{{
-    "call_trace": [
-        {{
-            "sequence_num": 0,
-            "function_name": "main",
-            "file_path": "tools/plistutil.c",
-            "line_number": 137,
-            "is_external": false
-        }},
-        {{
-            "sequence_num": 1,
-            "function_name": "",
-            "file_path": "/lib/i386-linux-gnu/libc.so.6",
-            "line_number": 0,
-            "is_external": true
-        }}
-    ]
-}}
-
-IMPORTANT:
-- For frames without line numbers, use 0
-- For frames without function names, use empty string ""
-- Mark system library frames with `"is_external": true`
 """
 

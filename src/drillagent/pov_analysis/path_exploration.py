@@ -55,15 +55,14 @@ class PathExplorationAgent:
         self.logger.info("  [PathExplorationAgent] Starting path exploration analysis...")
 
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
-        previous_feedback = None
-
+        previous_feedback = None # From coverage feedback analysis
         for iteration in range(1, self.max_exp_iterations + 1):
             print("\n\n"+"=" * 80)
             self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
-            # Create roundN subdirectory and clear its contents
-            round_dir = self.get_round_dir(self.current_exp_iteration)
+            # Prepare: Create roundN subdirectory and clear its contents
+            round_dir = self._get_round_dir(self.current_exp_iteration)
             os.makedirs(round_dir, exist_ok=True)
             for item in os.listdir(round_dir):
                 item_path = os.path.join(round_dir, item)
@@ -102,9 +101,9 @@ class PathExplorationAgent:
             print("")
             previous_feedback = self._analyze_coverage_feedback(exit_code, exec_output, func_level_cov_info) # Also store feedback for next iteration
 
-        self.logger.info(f"  [PathExplorationAgent] Leave the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
+        self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
-    def get_round_dir(self, round_num: int) -> str:
+    def _get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
         return os.path.join(self.drill_agent.work_dir, f"round{round_num}")
 
@@ -115,7 +114,7 @@ class PathExplorationAgent:
         # 3. Extract testcase content from LLM response
         # 4. If previous_feedback is provided, include it in the prompt to guide the LLM with coverage information.
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep1: Generating test case...")
-        round_dir = self.get_round_dir(self.current_exp_iteration)
+        round_dir = self._get_round_dir(self.current_exp_iteration)
 
         # Step 1: Get vulnerability information
         vuln_info_str = self.drill_agent.vulnerability_info.format_output()
@@ -186,12 +185,12 @@ class PathExplorationAgent:
         self.logger.info (f"  [PathExplorationAgent] Test case generated at: {test_case_path}")
         return test_case_path
 
-    def _execute_test_case(self, test_case_path: str) -> Tuple[int, str, str]: # No LLM needed
+    def _execute_test_case(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed
         # 1. 从drill_agent.vulnerability_info中获取到binary_path和refined_harness_command，结合test_case_path，整理成一个在roundN目录下可执行的命令。
         # 2. 进入roundN子目录执行该命令，记录stdout和stderr，同时生成profraw文件。
         # 3. 利用LLVMCovUtils把profraw文件转换成profdata文件，连同exit code和exec output(包括stdout和stderr)返回给调用者。
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
-        round_dir = self.get_round_dir(self.current_exp_iteration)
+        round_dir = self._get_round_dir(self.current_exp_iteration)
 
         # Step 1: Prepare the command
         repo_path = self.drill_agent.config.target_repo_path
@@ -514,7 +513,7 @@ class PathExplorationAgent:
 
             # Get current test case path
             current_testcase_path = os.path.join(
-                self.get_round_dir(self.current_exp_iteration),
+                self._get_round_dir(self.current_exp_iteration),
                 f"testcase-round{self.current_exp_iteration}"
             )
 
