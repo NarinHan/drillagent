@@ -691,8 +691,6 @@ class VulnInfo:
     vuln_type: str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
     root_cause: str = ""  # Root cause analysis result
     critical_steps: Dict[str, Any] = field(default_factory=dict)
-    # advanced analysis results (optional now)
-    critical_branches: List[str] = field(default_factory=list)  # This can be used for the exploration phase later #TBD
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert VulnInfo to dictionary"""
@@ -707,8 +705,7 @@ class VulnInfo:
             'binary_path': self.binary_path,
             'vuln_type': self.vuln_type,
             'root_cause': self.root_cause,
-            'critical_steps': self.critical_steps,
-            'critical_branches': self.critical_branches
+            'critical_steps': self.critical_steps
         }
 
     @classmethod
@@ -726,7 +723,6 @@ class VulnInfo:
             vuln_type=data.get('vuln_type', ''),
             root_cause=data.get('root_cause', ''),
             critical_steps=data.get('critical_steps', {}),
-            critical_branches=data.get('critical_branches', [])
         )
 
     def format_output(self) -> str:
@@ -780,12 +776,11 @@ class VulnInfo:
             for rc_line in root_cause_lines:
                 if rc_line.strip():
                     lines.append(f"  {rc_line}")
-        # Section 5: Critical Branches (if available)
-        # if self.critical_branches and len(self.critical_branches) > 0:
-        #     lines.append("\n[CRITICAL BRANCHES]")
-        #     for idx, branch in enumerate(self.critical_branches, 1):
-        #         lines.append(f"  {idx}. {branch}")
-
+        # Section 5: Critical Steps (if available)
+        # if self.critical_steps and len(self.critical_steps) > 0:
+        #     lines.append("\n[CRITICAL STEPS]")
+        #     for idx, step in enumerate(self.critical_steps, 1):
+        #         lines.append(f"  {idx}. {step}")
         lines.append("=" * 80)
         # print('\n'.join(lines))
         return '\n'.join(lines)

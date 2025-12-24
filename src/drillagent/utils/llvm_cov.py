@@ -189,7 +189,7 @@ class LLVMCovUtils:
         Args:
             function_with_filepath_list: List of (function_name, file_path) tuples
         Returns:
-            Dictionary mapping (function_name, file_path) to coverage info dict containing:
+            Dictionary  mapping (function_name, file_path) to coverage info dict containing:
             - is_executed: Whether function was executed
             - execution_count: Execution count
             - regions_covered: Number of covered regions

@@ -14,13 +14,15 @@ When generating test cases:
 PEA_generate_testcase_prompt = """You are generating a test case to trigger a vulnerability. Your goal is to create an input that can reach the vulnerable function and potentially trigger a crash.
 
 Vulnerable Project Name: {project_name}
-GENERATION TURN: {generation_turn} / {max_generation_turns}
+Actual repository path: {actual_repo_path}
 
 VULNERABILITY INFORMATION:
 
 {vulnerability_info}
 
-Your task:
+{feedback_section}
+
+YOUR TASK:
 
 1. **Analyze the vulnerability**:
    - Understand the vulnerability type and what conditions can trigger it
@@ -29,10 +31,13 @@ Your task:
 
 2. **Generate a test case**:
    - Create an input that aims to reach the vulnerable function
-   - For buffer overflows: generate inputs that exceed buffer boundaries
-   - For use-after-free: generate inputs that trigger object deallocation and reuse
-   - For NULL pointer dereferences: generate inputs that cause NULL pointer access
    - Consider the program's input format (text file, binary data, specific protocol, etc.)
+   - For buffer overflows: generate inputs that exceed buffer boundaries
+	- For Use-After-Free (UAF): generate inputs that trigger object deallocation followed by subsequent access or reuse of the freed memory
+	- For NULL Pointer Dereference (NPD): generate inputs that cause pointers to remain NULL and be dereferenced during execution
+   - For Integer Overflow (IO): generate inputs that cause arithmetic operations to exceed the maximum or minimum representable integer bounds
+	- For Out-of-Bounds (OOB): generate inputs that lead to memory accesses beyond the valid bounds of arrays or buffers
+	- For Use-Before-Initialization (UBI): generate inputs that cause variables or data structures to be accessed before they are properly initialized
 
 3. **Return the test case in your response**:
    - Include the test case content in a code block marked with ```testcase
@@ -49,7 +54,7 @@ Your task:
    - How does it aim to reach/trigger the vulnerability?
 
 IMPORTANT:
-- You have {max_generation_turns} turns to use tools and generate the test case. 
+- You should use provided tools and generate the test case.
   - When using read_file tools, you are encouraged to read more than one line.
 - If it is already the final turn, ensure you respond with a test case in this turn!!!
 - The test case should be pure input data (not a script or code)
@@ -61,55 +66,12 @@ IMPORTANT:
 Generate the test case now and return it in a ```testcase code block.
 """
 
+PEA_feedback_results_template = """
+FEEDBACK FROM PREVIOUS ITERATION:
 
-PEA_feedback_section_prompt = """
-
-================================================================================
-FEEDBACK FROM PREVIOUS ITERATION
-================================================================================
-
-The previous test case (from iteration {previous_iteration}) was executed. Here are the results:
+The previous test case (from iteration {loop_progress}) was executed. Here are the results:
 
 {previous_feedback}
 
-================================================================================
-INSTRUCTIONS FOR THIS ITERATION (Iteration {current_iteration})
-================================================================================
-
 Based on the feedback above, your goal is to improve the test case to reach deeper into the call trace toward the vulnerable function.
-
-**Analysis Guidelines:**
-
-1. **Examine the coverage summary:**
-   - Which functions in the call trace were executed?
-   - Which functions were NOT executed?
-   - What percentage of the call trace was covered?
-
-2. **Identify the FIRST UNCOVERED CALLSITE:**
-   - This is your primary target for this iteration
-   - This function is the next step toward reaching the vulnerability
-   - Understanding why it wasn't reached is critical
-
-3. **Understand the execution results:**
-   - Did the previous test case cause a crash? (check exit code)
-   - Were there any error messages in the execution output?
-   - Did the program accept the input format?
-
-**Test Case Generation Strategy:**
-
-Based on your analysis, generate a NEW test case that:
-
-- **Fixes any errors** from the previous iteration (if any)
-- **Reaches the first uncovered callsite** by adjusting the input to satisfy the conditions needed to enter that function
-- **Goes deeper** into the call trace if some functions were already reached
-- **Considers the program logic** - what input would cause the program to call the uncovered function?
-
-**Key Principles:**
-
-- Each iteration should make progress toward the vulnerable function
-- Don't repeat the exact same test case - analyze what didn't work and adjust
-- If you're stuck, try different input patterns or edge cases
-- Use the coverage feedback to guide your input generation strategy
-
-Now, generate an improved test case and return it in a ```testcase code block.
 """
