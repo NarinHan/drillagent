@@ -90,12 +90,14 @@ class PathExplorationAgent:
             # a. function-level coverage ✅
             # b. source-line-level coverage
             # c. find the first uncovered callsite A
-            func_level_cov_info = self._collect_coverage_feedback()
+            sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data = self._collect_coverage_feedback()
 
             # Substep4: Analyze coverage feedback around the first uncovered point A in the call trace
             # Output: reachability failure analysis, test case adjustment suggestion.
-            previous_feedback = self._analyze_coverage_feedback(exit_code, exec_output, func_level_cov_info) # Also store feedback for next iteration
-
+            previous_feedback = self._analyze_coverage_feedback(
+                exit_code, exec_output, 
+                sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data
+            ) # Also store feedback for next iteration
         self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
     def _get_round_dir(self, round_num: int) -> str:
@@ -134,6 +136,7 @@ class PathExplorationAgent:
         )
 
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
+        # When generating test case, LLM is encouraged to use tools. 
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=prompt,
@@ -256,7 +259,7 @@ class PathExplorationAgent:
             self.logger.error(f"  [PathExplorationAgent] Failed to convert profraw to profdata: {e}")
             return exit_code, exec_output
 
-    def _collect_coverage_feedback(self) -> str: # No LLM needed
+    def _collect_coverage_feedback(self) -> tuple[List[Dict], Dict, str]: # No LLM needed
         # Collect function-level coverage feedback along the vulnerable call trace.
         # 1. Extract function information from self.vuln_call_trace
         # 2. Query coverage using self.llvm_cov_utils.get_multi_functions_coverage()
@@ -272,9 +275,8 @@ class PathExplorationAgent:
 
         # Step 1: Extract function information from vulnerable call trace
         # Build a list of (function_name, file_path) tuples for batch query
+        valid_frames: List[Tuple[Dict, Any]] = []  # Store (frame, abs_file_path) tuples for frames we'll query
         repo_path = self.drill_agent.config.target_repo_path
-        functions_to_query = []
-        valid_frames = []  # Store (frame, abs_file_path) tuples for frames we'll query
         for frame in self.vuln_call_trace:
             # Skip external functions and frames without complete info
             if frame.get('is_external', False) or not frame.get('function_name') or not frame.get('file_path'):
@@ -282,91 +284,194 @@ class PathExplorationAgent:
                 continue
             # Convert file_path to absolute path
             abs_file_path = os.path.abspath(os.path.join(repo_path, frame['file_path']))
-            functions_to_query.append((frame['function_name'], abs_file_path))
             valid_frames.append((frame, abs_file_path))
 
-        if not functions_to_query:
-            self.logger.warning(f"  [PathExplorationAgent] No valid functions to query in call trace")
-            return "WARNING: No valid functions found in call trace (all external or incomplete)"
+        # Batch query function coverage using LLVMCovUtils
+        # self.logger.info(f"  [PathExplorationAgent] Querying coverage for {len(functions_to_query)} functions in call trace")
+        # functions_to_query = []
+        # for frame, abs_file_path in valid_frames:
+        #     functions_to_query.append((frame['function_name'], abs_file_path))
+        # if not functions_to_query:
+        #     self.logger.warning(f"  [PathExplorationAgent] No valid functions to query in call trace")
+        #     return "WARNING: No valid functions found in call trace (all external or incomplete)"
+        # try:
+        #     # `coverage_results` is a dict mapping (function_name, file_path) to coverage info dict
+        #     coverage_results = self.llvm_cov_utils.get_multi_functions_coverage(functions_to_query)
+        # except Exception as e:
+        #     self.logger.error(f"  [PathExplorationAgent] Failed to query function coverage: {e}")
+        #     return f"ERROR: Coverage query failed - {str(e)}"
 
-        # Step 2: Batch query function coverage using LLVMCovUtils
-        self.logger.info(f"  [PathExplorationAgent] Querying coverage for {len(functions_to_query)} functions in call trace")
-        try:
-            # `coverage_results` is a dict mapping (function_name, file_path) to coverage info dict
-            coverage_results = self.llvm_cov_utils.get_multi_functions_coverage(functions_to_query)
-        except Exception as e:
-            self.logger.error(f"  [PathExplorationAgent] Failed to query function coverage: {e}")
-            return f"ERROR: Coverage query failed - {str(e)}"
+        # Step2: Collecting coverage results of current execution using LLVMCovUtils.
+        # Use get_function_coverage, get_line_coverage, get_detailed_function_coverage.
+        cov_frames: List[Dict] = []
+        for frame, abs_file_path in valid_frames:
+            updated_frame = frame.copy()
+            try:
+                func_cov = self.llvm_cov_utils.get_function_coverage(
+                    file_path=abs_file_path,
+                    function_name=frame['function_name']
+                )
+                updated_frame.update({
+                    'func_executed'        : func_cov['is_executed'],
+                    'func_execution_count' : func_cov['execution_count']
+                })
+            except Exception as e:
+                self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage: {e}")
+                self.logger.warning(f"  [PathExplorationAgent] This may be caused by compiler optimizations (omitted)...")
+                updated_frame.update({
+                    'failed_getting_cov'   : True,
+                    'func_executed'        : False, # Placeholder values
+                    'func_execution_count' : 0      # Placeholder values
+                })
 
-        # Step 3: Build formatted output while tracking statistics
+            # Only if the stack frame's line number is verified, it is meaningful to get line coverage, or it would be inaccurate.
+            if not updated_frame.get('failed_getting_cov', False) and frame.get("is_verified", False):
+                line_cov = self.llvm_cov_utils.get_line_coverage(
+                    file_path=abs_file_path,
+                    line_number=frame['line_number']
+                )
+                updated_frame.update({
+                    'callsite_line_executed'        : line_cov['is_executed'],
+                    'callsite_line_execution_count' : line_cov['execution_count'],
+                    'callsite_line_in_function'     : line_cov['function_name'],
+                })
+            
+            cov_frames.append(updated_frame)
+
+        # Step3: Find the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
+        first_uncovered_frame  = None
+        # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
+        sorted_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
+        for frame in sorted_frames:
+            # Check if we can get function coverage for this frame
+            if frame.get('failed_getting_cov', False):
+                # TODO: Cannot get function coverage - skip this frame
+                continue
+
+            # Check if function was executed
+            if not frame['func_executed']:
+                # Function not executed - this is the first uncovered critical callsite
+                first_uncovered_frame = frame
+                self.logger.info(f"  [PathExplorationAgent] Found first uncovered callsite (function-level): {frame['function_name']} at {frame['file_path']}:{frame.get('line_number', 'N/A')}")
+                break
+
+            # Function was executed, check if the callsite line accuracy was verified
+            if not frame.get('is_verified', False):
+                # TODO: Cannot verify callsite line, treat as covered and continue
+                continue
+
+            # Check if callsite line was executed
+            if frame.get('is_verified', False) and not frame.get('callsite_line_executed', False):
+                # Callsite line not executed - this is the first uncovered critical callsite
+                first_uncovered_frame = frame
+                self.logger.info(f"  [PathExplorationAgent] Found first uncovered callsite (line-level): {frame['function_name']} at {frame['file_path']}:{frame['line_number']}")
+                break
+
+            # Both function and callsite line executed, continue to next frame
+            continue
+
+        # If we found an uncovered callsite, get detailed function coverage for branch-level analysis
+        # If there is no uncovered callsite, maybe we have already reached the vulnerable function!!!
+        detailed_func_cov_data = None
+        if first_uncovered_frame:
+            try:
+                abs_file_path = os.path.abspath(os.path.join(repo_path, first_uncovered_frame['file_path']))
+
+                # Get detailed line-by-line coverage for the uncovered function
+                detailed_func_cov_data = self.llvm_cov_utils.get_detailed_function_coverage(
+                    file_path=abs_file_path,
+                    function_name=first_uncovered_frame['function_name']
+                )
+
+                self.logger.info(f"  [PathExplorationAgent] Retrieved detailed coverage for '{first_uncovered_frame['function_name']}'")
+            except Exception as e:
+                self.logger.warning(f"  [PathExplorationAgent] Failed to get detailed function coverage for '{first_uncovered_frame['function_name']}': {e}")
+                detailed_func_cov_data = None
+        else:
+            self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered!!!!!")
+
+        # Step4: Build formatted output while tracking statistics
+        formatted_output = self._format_coverage_feedback(sorted_frames, first_uncovered_frame, detailed_func_cov_data)
+        print(formatted_output) # For debug
+
+        return sorted_frames, first_uncovered_frame, detailed_func_cov_data
+
+    def _format_coverage_feedback(self, sorted_cov_frames: List[Dict], first_uncovered_frame: Dict, detailed_func_cov_data: str) -> str:
         output_lines = [
             "=" * 80,
-            "FUNCTION-LEVEL COVERAGE FEEDBACK",
-            "=" * 80
+            f"COVERAGE FEEDBACK - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
+            "=" * 80,
+            ""
         ]
 
+        # Calculate coverage statistics
+        total_count = len(sorted_cov_frames)
         covered_count = 0
-        first_uncovered = None
-        detail_lines = []  # Collect detailed callsite info separately
-        # Traverse all frames
-        for frame, abs_file_path in valid_frames:
+        line_level_covered_count = 0
+
+        for frame in sorted_cov_frames:
+            if frame['func_executed']:
+                covered_count += 1
+                # Also count line-level coverage for verified frames
+                if frame.get('is_verified', False) and frame.get('callsite_line_executed', False):
+                    line_level_covered_count += 1
+
+        coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0.0
+
+        # Add summary statistics
+        output_lines.append(f"Call Trace Coverage Summary:")
+        output_lines.append(f"  Total frames in call trace: {total_count}")
+        output_lines.append(f"  Functions executed: {covered_count}/{total_count} ({coverage_percentage:.1f}%)")
+        output_lines.append(f"  Callsite lines executed (verified frames): {line_level_covered_count}/{sum(1 for f in sorted_cov_frames if f.get('is_verified', False))}")
+        output_lines.append("")
+
+        # Add detailed frame-by-frame coverage information
+        output_lines.append("Frame-by-Frame Coverage (from caller to callee):")
+        output_lines.append("-" * 80)
+
+        for i, frame in enumerate(sorted_cov_frames, 1):
             seq_num = frame['sequence_num']
             func_name = frame['function_name']
-            line_num = frame['line_number']
-            
-            cov = coverage_results.get((func_name, abs_file_path), {})   # Get coverage info for this function
-            is_covered = cov.get('found', False) and cov.get('is_executed', False) # Determine coverage status
-            if is_covered:
-                # Function was executed
-                covered_count += 1
-                exec_count = cov['execution_count']
-                regions_cov = cov['regions_covered']
-                regions_tot = cov['regions_total']
-                detail_lines.append(f"  ✓ #{seq_num}: {func_name} @ {abs_file_path}:{line_num}")
-                detail_lines.append(f"      Executed: {exec_count} times, Regions: {regions_cov}/{regions_tot} covered")
-                self.logger.debug(f"  [PathExplorationAgent] ✓ Frame #{seq_num} {func_name} - executed {exec_count} times, regions {regions_cov}/{regions_tot}")
-            else:
-                # Function was not executed or not found
-                if first_uncovered is None:
-                    reason = 'function_not_found_in_coverage_data' if not cov.get('found') else 'function_not_executed'
-                    first_uncovered = (seq_num, func_name, abs_file_path, line_num, reason)
+            file_path = frame.get('file_path', 'N/A')
+            line_num = frame.get('line_number', 'N/A')
 
-                detail_lines.append(f"  ✗ #{seq_num}: {func_name} @ {abs_file_path}:{line_num}")
-                if not cov.get('found'):
-                    detail_lines.append(f"      Status: NOT FOUND in coverage data")
-                    self.logger.debug(f"  [PathExplorationAgent] Frame #{seq_num} {func_name} not found in coverage data")
-                else:
-                    regions_cov = cov.get('regions_covered', 0)
-                    regions_tot = cov.get('regions_total', 0)
-                    detail_lines.append(f"      Status: NOT EXECUTED, Regions: {regions_cov}/{regions_tot} covered")
-                    self.logger.debug(f"  [PathExplorationAgent] ✗ Frame #{seq_num} {func_name} - NOT executed")
+            # Function execution status
+            func_exec_status = "✓ EXECUTED" if frame['func_executed'] else "✗ NOT EXECUTED"
+            func_exec_count = frame.get('func_execution_count', 0)
 
-        # Add summary section
-        total_count = len(valid_frames)
-        uncovered_count = total_count - covered_count
-        coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0
-        output_lines.extend([
-            "[COVERAGE SUMMARY]",
-            f"  Total callsites in trace: {total_count}",
-            f"  Functions executed:       {covered_count} ({coverage_percentage:.1f}%)",
-            f"  Functions not executed:   {uncovered_count}",
-            "\n[CALL TRACE COVERAGE] (in order)"
-        ])
-        output_lines.extend(detail_lines)
+            output_lines.append(f"#{seq_num:2d} | {func_name} ({func_exec_status})")
+            output_lines.append(f"     Location: {file_path}:{line_num}")
+            # output_lines.append(f"     Function: {func_exec_status} (count: {func_exec_count})")
 
-        # Add first uncovered callsite section
-        output_lines.append("\n[FIRST UNCOVERED CALLSITE]")
-        if first_uncovered:
-            seq_num, func_name, file_path, line_num, reason = first_uncovered
-            output_lines.extend([
-                f"  Sequence: #{seq_num}",
-                f"  Function: {func_name}",
-                f"  Location: {file_path}:{line_num}",
-                f"  Reason:   {reason}"
-            ])
-            self.logger.info(f"  [PathExplorationAgent] First uncovered: #{seq_num} {func_name} @ {file_path}:{line_num}")
+            # Mark if this is the first uncovered callsite
+            if first_uncovered_frame and frame['sequence_num'] == first_uncovered_frame['sequence_num']:
+                output_lines.append(f"     >>> FIRST UNCOVERED CALLSITE <<<")
+
+            # output_lines.append("")
+
+        # Add detailed line-by-line coverage for the first uncovered callsite
+        if detailed_func_cov_data:
+            output_lines.append("-" * 80)
+            output_lines.append(f"The First Un-executed Callsite:")
+            output_lines.append(f"  Function: {first_uncovered_frame['function_name']}")
+            output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (seems un-executed)")
+            output_lines.append("")
+            output_lines.append("Function Body Code with Coverage:")
+            output_lines.append("(The leftmost column shows the source code line numbers, the middle column shows the execution counts, and the rightmost column contains the source code.)")
+            # Add the detailed coverage output directly
+            output_lines.append(detailed_func_cov_data)
+            output_lines.append("")
+        elif first_uncovered_frame:
+            output_lines.append("-" * 80)
+            output_lines.append(f"First Uncovered Callsite:")
+            output_lines.append(f"  Function: {first_uncovered_frame['function_name']}")
+            output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')}")
+            output_lines.append(f"  (Detailed coverage not available)")
+            output_lines.append("")
         else:
-            output_lines.append("  All callsites in the trace were executed!")
+            output_lines.append("-" * 80)
+            output_lines.append("All callsites in the call trace have been covered!")
+            output_lines.append("")
 
         output_lines.append("=" * 80)
         formatted_output = '\n'.join(output_lines)
@@ -377,13 +482,16 @@ class PathExplorationAgent:
 
         return formatted_output
 
-    def _analyze_coverage_feedback(self, exit_code: int, exec_output: str, func_level_cov_info: str) -> str:
+    def _analyze_coverage_feedback(
+        self, exit_code: int, exec_output: str, 
+        sorted_cov_frames: List[Dict], first_uncovered_frame: Dict, detailed_func_cov_data: str
+    ) -> str:
         # Organize the coverage results, analyze them, and feed the results back as parameters for the next invocation of _generate_test_case.
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep4: Analyzing coverage feedback...")
 
         feedback_analysis_results  = f"For the finished execution, exit code: {exit_code}\n\nexecution output:\n{exec_output}\n\n"
-        feedback_analysis_results += f"Function-level coverage feedback along the vulnerable call trace:\n{func_level_cov_info}\n\n"
+        # TODO: Now no feedback is provided. To be finished.
         
         # Currently we just return the raw information (tmp).
         return feedback_analysis_results

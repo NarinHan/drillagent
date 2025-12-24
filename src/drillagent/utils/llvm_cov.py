@@ -18,7 +18,7 @@ class LLVMCovUtils:
     6. Clear cached data to free memory (coverage data can be 50+ MB).
     7. Get cache information and statistics.
     """
-
+    # TODO: All paths used here is absolute or relative? This should be further refactored. (LHY)
     def __init__(self, binary_path: str, 
                  profraw_path: str = "", profdata_path: str = "", 
                  llvm_cov_path: str = "llvm-cov", llvm_profdata_path: str = "llvm-profdata"):
@@ -92,7 +92,6 @@ class LLVMCovUtils:
 
         return result.stdout
 
-    # TODO: Running this function every time is kind of time and space wasteful.
     # Currently using self._coverage_data as cache.
     def _get_coverage_data(self) -> Dict[str, Any]:
         """
@@ -177,9 +176,9 @@ class LLVMCovUtils:
                     # 'uncovered_lines': sorted(list(uncovered_lines)),
                     'regions_covered': regions_covered,
                     'regions_total': len(regions_in_file),
-                    'filenames': filenames
+                    'filenames': filenames # useless for us
                 }
-
+        # Anyone whp calls this function should handle the exception with try-except.
         raise ValueError(f"Function '{function_name}' not found in file '{file_path}'")
 
     def get_multi_functions_coverage(self, function_with_filepath_list: List[tuple]) -> Dict[tuple, Dict[str, Any]]:
@@ -248,6 +247,45 @@ class LLVMCovUtils:
 
         return target_functions
 
+    def get_detailed_function_coverage(self, file_path: str, function_name: str) -> str:
+        """
+        Get detailed line-by-line coverage for a specific function in a human-readable format.
+        Uses llvm-cov show command to get the coverage output directly.
+
+        Args:
+            file_path: Source file path (will be converted to absolute path)
+            function_name: Function name to show coverage for
+
+        Returns:
+            Formatted string showing line-by-line coverage with execution counts and source code.
+            Output from llvm-cov show command.
+
+        Example:
+            >>> cov_utils = LLVMCovUtils(binary='/path/to/binary', profdata_path='/path/to/coverage.profdata')
+            >>> result = cov_utils.get_detailed_function_coverage('/path/to/source.c', 'main')
+            >>> print(result)
+        """
+        file_path = os.path.abspath(file_path)
+
+        # Construct llvm-cov show command
+        # Format: llvm-cov show <binary> <source_file> -instr-profile=<profdata> --name=<function_name>
+        cmd = [
+            self.llvm_cov_path,
+            'show',
+            self.binary_path,
+            file_path,
+            f'-instr-profile={self.profdata_path}',
+            f'--name={function_name}'
+        ]
+
+        # Execute the command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"llvm-cov show command failed: {result.stderr}")
+
+        # Return the output directly
+        return result.stdout
+        
 
     def get_function_regions(self, file_path: str, function_name: str) -> List[Dict[str, Any]]:
         """
@@ -297,6 +335,7 @@ class LLVMCovUtils:
 
         raise ValueError(f"Function '{function_name}' not found in file '{file_path}'")
 
+    # TODO: Seems the result of this function could be inaccurate ?? (LHY)
     def get_line_coverage(self, file_path: str, line_number: int) -> Dict[str, Any]:
         """
         Get line coverage details.
@@ -349,10 +388,9 @@ class LLVMCovUtils:
         return {
             'is_executed': execution_count > 0,
             'execution_count': execution_count,
-            'function_name': function_name
+            'function_name': function_name # This function is the caller of the specified line.
         }
 
-    # TODO: Added some functions that can obtain human readable reports.
 
     def generate_full_report(self) -> str:
         """

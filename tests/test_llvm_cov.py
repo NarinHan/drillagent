@@ -90,10 +90,6 @@ def test_basic_functionality():
             print(f"  - Executed: {result['is_executed']}")
             print(f"  - Execution count: {result['execution_count']}")
             print(f"  - Regions: {result['regions_covered']}/{result['regions_total']} covered")
-            print(f"  - Covered lines: {len(result['covered_lines'])} lines")
-            print(f"  - Uncovered lines: {len(result['uncovered_lines'])} lines")
-            if result['covered_lines']:
-                print(f"  - Sample covered lines: {result['covered_lines'][:5]}")
             print()
         except Exception as e:
             print(f"✗ Failed: {e}\n")
@@ -132,17 +128,45 @@ def test_basic_functionality():
     print("=" * 80)
     if executed_funcs:
         test_func = executed_funcs[0]
-        # Try to get a covered line
+        # Get regions to find a valid line
         try:
-            func_cov = cov_utils.get_function_coverage(test_func['file'], test_func['name'])
-            if func_cov['covered_lines']:
-                test_line = func_cov['covered_lines'][0]
+            regions = cov_utils.get_function_regions(test_func['file'], test_func['name'])
+            if regions:
+                # Get the first region's start line
+                test_line = regions[0]['start_line']
                 result = cov_utils.get_line_coverage(test_func['file'], test_line)
                 print(f"✓ Line coverage for {os.path.basename(test_func['file'])}:{test_line}:")
                 print(f"  - Executed: {result['is_executed']}")
                 print(f"  - Execution count: {result['execution_count']}")
                 print(f"  - Function: {result['function_name']}")
                 print()
+        except Exception as e:
+            print(f"✗ Failed: {e}\n")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    # Test 6: Get detailed function coverage (new test)
+    print("=" * 80)
+    print("Test 6: Get Detailed Function Coverage")
+    print("=" * 80)
+    if executed_funcs:
+        test_func = executed_funcs[0]
+        try:
+            detailed_cov = cov_utils.get_detailed_function_coverage(test_func['file'], test_func['name'])
+            print(f"✓ Detailed coverage for '{test_func['name']}':")
+            print()
+            # Print the detailed coverage output
+            lines = detailed_cov.split('\n')
+            # Print all lines for detailed coverage
+            for line in lines:
+                print(line)
+            # Print first 20 lines to avoid too much output
+            # for line in lines[:20]:
+            #     print(line)
+            # if len(lines) > 20:
+            #     print(f"... ({len(lines) - 20} more lines)")
+            print()
         except Exception as e:
             print(f"✗ Failed: {e}\n")
             import traceback
