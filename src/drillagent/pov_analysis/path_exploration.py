@@ -316,8 +316,7 @@ class PathExplorationAgent:
                     'func_execution_count' : func_cov['execution_count']
                 })
             except Exception as e:
-                self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage: {e}")
-                self.logger.warning(f"  [PathExplorationAgent] This may be caused by compiler optimizations (omitted)...")
+                self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage: {e}.  Maybe caused by compiler optimizations (omitted)...")
                 updated_frame.update({
                     'failed_getting_cov'   : True,
                     'func_executed'        : False, # Placeholder values
@@ -333,12 +332,13 @@ class PathExplorationAgent:
                 updated_frame.update({
                     'callsite_line_executed'        : line_cov['is_executed'],
                     'callsite_line_execution_count' : line_cov['execution_count'],
-                    'callsite_line_in_function'     : line_cov['function_name'],
                 })
+            else:
+                pass
             
             cov_frames.append(updated_frame)
 
-        # Step3: Find the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
+        # Step3: Identify the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
         first_uncovered_frame  = None
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
         sorted_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
@@ -349,7 +349,7 @@ class PathExplorationAgent:
                 continue
 
             # Check if function was executed
-            if not frame['func_executed']:
+            if not frame.get('func_executed', False):
                 # Function not executed - this is the first uncovered critical callsite
                 first_uncovered_frame = frame
                 self.logger.info(f"  [PathExplorationAgent] Found first uncovered callsite (function-level): {frame['function_name']} at {frame['file_path']}:{frame.get('line_number', 'N/A')}")
@@ -404,30 +404,29 @@ class PathExplorationAgent:
             ""
         ]
 
-        # Calculate coverage statistics
-        total_count = len(sorted_cov_frames)
-        covered_count = 0
-        line_level_covered_count = 0
+        # # Calculate coverage statistics
+        # total_count = len(sorted_cov_frames)
+        # covered_count = 0
+        # line_level_covered_count = 0
+        # # When calculating cov statistics, we are strict (LHY).
+        # for frame in sorted_cov_frames:
+        #     if frame['func_executed']:
+        #         covered_count += 1
+        #         # Also count line-level coverage for verified frames
+        #         if frame.get('is_verified', False) and frame.get('callsite_line_executed', False):
+        #             line_level_covered_count += 1
 
-        for frame in sorted_cov_frames:
-            if frame['func_executed']:
-                covered_count += 1
-                # Also count line-level coverage for verified frames
-                if frame.get('is_verified', False) and frame.get('callsite_line_executed', False):
-                    line_level_covered_count += 1
-
-        coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0.0
-
-        # Add summary statistics
-        output_lines.append(f"Call Trace Coverage Summary:")
-        output_lines.append(f"  Total frames in call trace: {total_count}")
-        output_lines.append(f"  Functions executed: {covered_count}/{total_count} ({coverage_percentage:.1f}%)")
-        output_lines.append(f"  Callsite lines executed (verified frames): {line_level_covered_count}/{sum(1 for f in sorted_cov_frames if f.get('is_verified', False))}")
-        output_lines.append("")
+        # coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0.0
+        # # Add summary statistics
+        # output_lines.append(f"Call Trace Coverage Summary:")
+        # output_lines.append(f"  Total frames in call trace: {total_count}")
+        # output_lines.append(f"  Functions executed: {covered_count}/{total_count} ({coverage_percentage:.1f}%)")
+        # output_lines.append(f"  Callsite lines executed (verified frames): {line_level_covered_count}/{sum(1 for f in sorted_cov_frames if f.get('is_verified', False))}")
+        # output_lines.append("")
 
         # Add detailed frame-by-frame coverage information
-        output_lines.append("Frame-by-Frame Coverage (from caller to callee):")
-        output_lines.append("-" * 80)
+        output_lines.append("Function-Level Frame-by-Frame Coverage (from caller to callee):")
+        output_lines.append("")
 
         for i, frame in enumerate(sorted_cov_frames, 1):
             seq_num = frame['sequence_num']
@@ -436,8 +435,16 @@ class PathExplorationAgent:
             line_num = frame.get('line_number', 'N/A')
 
             # Function execution status
-            func_exec_status = "✓ EXECUTED" if frame['func_executed'] else "✗ NOT EXECUTED"
-            func_exec_count = frame.get('func_execution_count', 0)
+            # When displaying feedback cov status, we consider unsupported frames as EXECUTED for simplicity (LHY). 
+            # This also aligns first un-executed frame identification logic.
+            if frame.get('func_executed', False):
+                func_exec_status = "✓ FUNC EXECUTED"
+            elif frame.get('failed_getting_cov', False):
+                func_exec_status = "✓ FUNC EXECUTED ***"
+            else:
+                func_exec_status = "✗ FUNC NOT EXECUTED"
+            # func_exec_status = "✓ EXECUTED" if frame['func_executed'] else "✗ NOT EXECUTED"
+            # func_exec_count = frame.get('func_execution_count', 0)
 
             output_lines.append(f"#{seq_num:2d} | {func_name} ({func_exec_status})")
             output_lines.append(f"     Location: {file_path}:{line_num}")
@@ -452,15 +459,15 @@ class PathExplorationAgent:
         # Add detailed line-by-line coverage for the first uncovered callsite
         if detailed_func_cov_data:
             output_lines.append("-" * 80)
-            output_lines.append(f"The First Un-executed Callsite:")
-            output_lines.append(f"  Function: {first_uncovered_frame['function_name']}")
-            output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (seems un-executed)")
+            output_lines.append(f"Line-Level First Un-executed Callsite:")
+            output_lines.append(f"  Function: #{first_uncovered_frame['sequence_num']} {first_uncovered_frame['function_name']}")
+            output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (the un-executed line in the func body)")
             output_lines.append("")
             output_lines.append("Function Body Code with Coverage:")
             output_lines.append("(The leftmost column shows the source code line numbers, the middle column shows the execution counts, and the rightmost column contains the source code.)")
             # Add the detailed coverage output directly
             output_lines.append(detailed_func_cov_data)
-            output_lines.append("")
+            # output_lines.append("")
         elif first_uncovered_frame:
             output_lines.append("-" * 80)
             output_lines.append(f"First Uncovered Callsite:")
@@ -477,8 +484,7 @@ class PathExplorationAgent:
         formatted_output = '\n'.join(output_lines)
 
         # Log summary
-        print(formatted_output) # For debug
-        self.logger.info(f"  [PathExplorationAgent] Coverage along call trace: {covered_count}/{total_count} functions executed ({coverage_percentage:.1f}%)")
+        # self.logger.info(f"  [PathExplorationAgent] Formatted coverage feedback!")
 
         return formatted_output
 

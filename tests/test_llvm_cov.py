@@ -138,7 +138,6 @@ def test_basic_functionality():
                 print(f"✓ Line coverage for {os.path.basename(test_func['file'])}:{test_line}:")
                 print(f"  - Executed: {result['is_executed']}")
                 print(f"  - Execution count: {result['execution_count']}")
-                print(f"  - Function: {result['function_name']}")
                 print()
         except Exception as e:
             print(f"✗ Failed: {e}\n")
@@ -172,6 +171,66 @@ def test_basic_functionality():
             import traceback
             traceback.print_exc()
             return False
+
+    # Test 7: Query specific lines coverage
+    print("=" * 80)
+    print("Test 7: Query Specific Lines Coverage")
+    print("=" * 80)
+
+    # Define the specific lines to test
+    test_lines = [
+        {
+            "sequence_num": 17,
+            "function_name": "njs_process_script",
+            "file_path": "src/njs_shell.c",
+            "line_number": 924,
+        },
+        {
+            "sequence_num": 18,
+            "function_name": "njs_process_file",
+            "file_path": "src/njs_shell.c",
+            "line_number": 619,
+        },
+        {
+            "sequence_num": 19,
+            "function_name": "main",
+            "file_path": "src/njs_shell.c",
+            "line_number": 303,
+        }
+    ]
+
+    try:
+        # Get the base directory for source files
+        # Assuming the binary path contains the repo root
+        repo_root = '/home/ubuntu/PoV/Repos/njs-cov'
+
+        for idx, line_info in enumerate(test_lines, 1):
+            full_file_path = os.path.join(repo_root, line_info['file_path'])
+            line_number = line_info['line_number']
+            expected_function = line_info['function_name']
+            sequence_num = line_info['sequence_num']
+
+            print(f"\n[{idx}/3] Testing line #{sequence_num}:")
+            print(f"  File: {line_info['file_path']}")
+            print(f"  Line: {line_number}")
+            print(f"  Expected function: {expected_function}")
+            print(f"  " + "-" * 60)
+
+            # Query line coverage
+            result = cov_utils.get_line_coverage(full_file_path, line_number)
+
+            print(f"  ✓ Line coverage result:")
+            print(f"    - Is executed: {result['is_executed']}")
+            print(f"    - Execution count: {result['execution_count']}")
+
+        print("\n✓ All specific lines queried successfully")
+        print()
+
+    except Exception as e:
+        print(f"✗ Failed: {e}\n")
+        import traceback
+        traceback.print_exc()
+        return False
 
     print("=" * 80)
     print("All tests passed! ✓")
