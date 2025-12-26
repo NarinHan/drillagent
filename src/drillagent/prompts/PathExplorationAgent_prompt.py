@@ -1,7 +1,7 @@
 PEA_system_prompt = """You are a security researcher specializing in generating Proof-of-Concept (PoV) test cases to trigger given vulnerabilities. Your task is to analyze vulnerability information and generate test inputs that can reach the vulnerable function and potentially trigger the crash.
 
 When generating test cases:
-- Generate inputs that follow the expected format of the target program 
+- Generate inputs that follow the expected format of the target program
   - (e.g., if the program is a xml parser, generate pure xml content as input)
   - (e.g., if the program is a ruby interpreter, generate pure ruby code as input)
 - Analyze the vulnerability type and understand what input patterns can trigger it
@@ -10,8 +10,18 @@ When generating test cases:
 - Return the test case content directly in your response using a code block
 """
 
+PEA_coverage_analysis_system_prompt = """You are a security researcher specializing in analyzing code coverage feedback for vulnerability exploitation. Your task is to understand why test case execution gets stuck at certain points and provide actionable suggestions to reach deeper into the call trace.
 
-PEA_generate_testcase_prompt = """You are generating a test case to trigger a vulnerability. Your goal is to create an input that can reach the vulnerable function and potentially trigger a crash.
+When analyzing coverage feedback:
+- Use provided tools to read source code at uncovered callsites to understand blocking conditions
+- Examine function implementations, conditional checks, input validation logic
+- Identify specific requirements (magic values, format constraints, state dependencies) that prevent deeper execution
+- Provide concrete, actionable suggestions for test case modifications
+- Consider the vulnerability type and exploitation context in your analysis
+"""
+
+
+PEA_testcase_generation_prompt = """You are generating a test case to trigger a vulnerability. Your goal is to create an input that can reach the vulnerable function and potentially trigger a crash.
 
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
@@ -54,7 +64,7 @@ YOUR TASK:
    - How does it aim to reach/trigger the vulnerability?
 
 IMPORTANT:
-- You should use provided tools and generate the test case.
+- You should use provided tools to read related source code if needed, and then generate the test case.
   - When using read_file tools, you are encouraged to read more than one line.
 - If it is already the final turn, ensure you respond with a test case in this turn!!!
 - The test case should be pure input data (not a script or code)
@@ -75,3 +85,62 @@ The previous test case (from iteration {loop_progress}) was executed. Here are t
 
 Based on the feedback above, your goal is to improve the test case to reach deeper into the call trace toward the vulnerable function.
 """
+
+
+PEA_coverage_analysis_prompt = """Analyze the following code coverage feedback of certain program execution and provide suggestions for improving test case to reach deeper into the vulnerable call trace.
+
+File path of the executed test case: {test_case_path}
+- You can read this file using the read_file tool if needed.
+
+The organized information of current execution:
+
+{formatted_cov_info}
+
+YOUR TASK:
+
+1. **Analyze Coverage Stagnation**:
+   - Review the function-level frame-by-frame coverage information
+   - Identify if there is a "FIRST UNCOVERED CALLSITE" where execution stopped
+   - **IMPORTANT: Use the read_file tool to examine the source code at the uncovered callsite**
+     - Read the function implementation to understand why it wasn't executed
+     - Identify the calling context and conditional checks that prevented the call
+     - Look for input validation logic, magic value checks, state requirements, etc.
+   - If the line-level coverage shows specific unexecuted lines, read that code to understand the blocking condition
+   - Determine the root cause: input validation, conditional checks, format requirements, missing state, etc.
+   - If no uncovered callsite exists, note that there is no coverage stagnation
+   - Ignore all the fuzz entry point like `LLVMFuzzerTestXXX`. The provided call trace is verified previously.
+
+2. **Provide Input Adjustment Suggestions**:
+   - **IMPORTANT: You must provide at most three suggestions that are most important.**
+   - Based on your analysis of the source code and stagnation point (if any), suggest concrete modifications to the test case
+   - Focus on reaching deeper stack frames and bypassing the current coverage bottleneck
+   - Consider the vulnerability type and execution context when suggesting adjustments
+   - Reference the specific code conditions you found when making suggestions. Be specific: what values, formats, or patterns should be changed in the input
+
+Output requirements (must follow this exact format):
+- IMPORTANT: Your response content should be concise and to the point!!!
+
+```
+## COVERAGE STAGNATION REASONS
+
+[If there is a FIRST UNCOVERED CALLSITE, analyze why execution stopped there. Consider:
+ - What condition or check prevented the function from being called?
+ - What input properties need to be satisfied to pass this point?
+ - Are there any format requirements, magic values, or validation checks?
+
+ If all callsites are covered, state: "There seems to be no coverage stagnation."]
+
+## INPUT ADJUSTMENT SUGGESTION
+
+[Provide concrete suggestions to modify the test case to overcome the stagnation:
+ - What specific changes should be made to the input?
+ - What values or patterns should be added/modified?
+ - How will these changes help reach deeper into the call trace?
+
+ Even if all callsites are covered, provide suggestions to trigger the vulnerability.]
+
+```
+
+"""
+
+

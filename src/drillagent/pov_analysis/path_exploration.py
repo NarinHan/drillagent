@@ -14,14 +14,15 @@ if TYPE_CHECKING:
 
 from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_system_prompt,
-    PEA_generate_testcase_prompt,
+    PEA_testcase_generation_prompt,
     PEA_feedback_results_template,
+    PEA_coverage_analysis_system_prompt,
+    PEA_coverage_analysis_prompt,
 )
 from drillagent.utils.llvm_cov import LLVMCovUtils
 
 # 
 # Currently we assume that the PathExplorationAgent **has** usable call trace. (LHY)
-# TODO: Need to support the case without call trace in the future.
 # 
 class PathExplorationAgent:
     # Responsible for exploring paths leading to vulnerabilities, fully utilizing the coverage feedback.
@@ -73,7 +74,7 @@ class PathExplorationAgent:
 
             # Substep1: Generate test case (with feedback from previous iteration if available)
             # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
-            test_case_path = self._generate_test_case(previous_feedback=previous_feedback)
+            test_case_path = self._generate_test_case(previous_feedback)
 
             # Substep2: Execute test case dynamically (using actual repo path)
             # This will also generate a profraw/profdata file.
@@ -86,25 +87,24 @@ class PathExplorationAgent:
                 self.logger.info(f"  [PathExplorationAgent] Crash-inducing PoV found! Triggered early stop.")
                 break
 
-            # Substep3: Collect coverage feedback along the vulnerable call trace
-            # a. function-level coverage ✅
-            # b. source-line-level coverage
-            # c. find the first uncovered callsite A
+            # Substep3: Collect useful coverage feedback along the vulnerable call trace
             sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data = self._collect_coverage_feedback()
 
             # Substep4: Analyze coverage feedback around the first uncovered point A in the call trace
             # Output: reachability failure analysis, test case adjustment suggestion.
             previous_feedback = self._analyze_coverage_feedback(
-                exit_code, exec_output, 
+                test_case_path, exit_code, exec_output, 
                 sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data
             ) # Also store feedback for next iteration
+        
         self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
     def _get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
         return os.path.join(self.drill_agent.work_dir, f"round{round_num}")
 
-    def _generate_test_case(self, previous_feedback: str = None) -> str:
+    # TODO: Support generating separate binary-encoded test case files in the future.
+    def _generate_test_case(self, previous_feedback: Tuple = None) -> str:
         # Generate test case using LLMInterface with automatic agent loop
         # 1. Get vulnerability information. If previous_feedback is provided, include it in the prompt to guide the LLM with coverage information.
         # 2. Use LLMInterface to generate test case (with tools and multi-turn interaction).
@@ -118,17 +118,27 @@ class PathExplorationAgent:
         vuln_info_str = self.drill_agent.vulnerability_info.format_output()
 
         # Build feedback section if we have previous iteration results
+        feedback_section = ""
         if previous_feedback:
-            self.logger.info(f"  [PathExplorationAgent] Including feedback from iteration {self.current_exp_iteration - 1}")
+            if len(previous_feedback) == 3:  # Parse the feedback information tuple
+                refined_feedback = f"{previous_feedback[0]}\n\n" \
+                    + f"## Coverage Stagnation Reasons\n{previous_feedback[1]}\n\n" \
+                    + f"## Input Adjustment Suggestion\n{previous_feedback[2]}"
+            elif len(previous_feedback) == 1:  # Partial feedback
+                refined_feedback = previous_feedback[0]
+            else: # Fallback: just convert to string
+                refined_feedback = str(previous_feedback)
+
+            self.logger.info(f"  [PathExplorationAgent] Adding feedback to current prompt from iteration {self.current_exp_iteration - 1}")
             feedback_section = PEA_feedback_results_template.format(
                 loop_progress=f"{self.current_exp_iteration - 1}/{self.max_exp_iterations}",
-                previous_feedback=previous_feedback
+                previous_feedback=refined_feedback
             )
-        else:
+        else: # e.g., previous_feedback is None
             feedback_section = ""
 
         # Format the unified prompt
-        prompt = PEA_generate_testcase_prompt.format(
+        prompt = PEA_testcase_generation_prompt.format(
             vulnerability_info=vuln_info_str,
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
@@ -136,11 +146,10 @@ class PathExplorationAgent:
         )
 
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
-        # When generating test case, LLM is encouraged to use tools. 
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=prompt,
-            tools=self.tools,
+            tools=self.tools, # When generating test case, LLM is encouraged to use tools. 
             system_prompt=PEA_system_prompt,
             max_iterations=max_generation_turns,  # Allow up to 10 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
@@ -224,7 +233,7 @@ class PathExplorationAgent:
             stdout = result.stdout
             stderr = result.stderr
             # Merge stdout and stderr as exec_output
-            exec_output = f"[STDOUT]\n{stdout}\n\n[STDERR]\n{stderr}"
+            exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
         except subprocess.TimeoutExpired as e:
             self.logger.warning(f"  [PathExplorationAgent] Command execution timeout after 30s")
             exit_code = -1
@@ -338,14 +347,15 @@ class PathExplorationAgent:
             
             cov_frames.append(updated_frame)
 
-        # Step3: Identify the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
-        first_uncovered_frame  = None
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
         sorted_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
+
+        # Step3: Identify the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
+        first_uncovered_frame  = None
         for frame in sorted_frames:
             # Check if we can get function coverage for this frame
             if frame.get('failed_getting_cov', False):
-                # TODO: Cannot get function coverage - skip this frame
+                # Compromise: Cannot obtain function coverage - skip this frame
                 continue
 
             # Check if function was executed
@@ -357,7 +367,7 @@ class PathExplorationAgent:
 
             # Function was executed, check if the callsite line accuracy was verified
             if not frame.get('is_verified', False):
-                # TODO: Cannot verify callsite line, treat as covered and continue
+                # Compromise: Couldn't verify callsite line, treat as covered and continue
                 continue
 
             # Check if callsite line was executed
@@ -390,13 +400,9 @@ class PathExplorationAgent:
         else:
             self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered!!!!!")
 
-        # Step4: Build formatted output while tracking statistics
-        formatted_output = self._format_coverage_feedback(sorted_frames, first_uncovered_frame, detailed_func_cov_data)
-        print(formatted_output) # For debug
-
         return sorted_frames, first_uncovered_frame, detailed_func_cov_data
 
-    def _format_coverage_feedback(self, sorted_cov_frames: List[Dict], first_uncovered_frame: Dict, detailed_func_cov_data: str) -> str:
+    def _format_coverage_feedback(self, sorted_cov_frames: List[Dict], first_uncovered_frame: Dict|None, detailed_func_cov_data: str|None) -> str:
         output_lines = [
             "=" * 80,
             f"COVERAGE FEEDBACK - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
@@ -415,7 +421,6 @@ class PathExplorationAgent:
         #         # Also count line-level coverage for verified frames
         #         if frame.get('is_verified', False) and frame.get('callsite_line_executed', False):
         #             line_level_covered_count += 1
-
         # coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0.0
         # # Add summary statistics
         # output_lines.append(f"Call Trace Coverage Summary:")
@@ -425,7 +430,7 @@ class PathExplorationAgent:
         # output_lines.append("")
 
         # Add detailed frame-by-frame coverage information
-        output_lines.append("Function-Level Frame-by-Frame Coverage (from caller to callee):")
+        output_lines.append("Function-Level Frame-by-Frame Coverage (from caller to callee):") #####
         output_lines.append("")
 
         for i, frame in enumerate(sorted_cov_frames, 1):
@@ -459,7 +464,7 @@ class PathExplorationAgent:
         # Add detailed line-by-line coverage for the first uncovered callsite
         if detailed_func_cov_data:
             output_lines.append("-" * 80)
-            output_lines.append(f"Line-Level First Un-executed Callsite:")
+            output_lines.append(f"Line-Level First Un-executed Callsite:") #####
             output_lines.append(f"  Function: #{first_uncovered_frame['sequence_num']} {first_uncovered_frame['function_name']}")
             output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (the un-executed line in the func body)")
             output_lines.append("")
@@ -482,25 +487,106 @@ class PathExplorationAgent:
 
         output_lines.append("=" * 80)
         formatted_output = '\n'.join(output_lines)
-
         # Log summary
-        # self.logger.info(f"  [PathExplorationAgent] Formatted coverage feedback!")
+        self.logger.info(f"  [PathExplorationAgent] Formatted coverage feedback!")
 
         return formatted_output
 
     def _analyze_coverage_feedback(
-        self, exit_code: int, exec_output: str, 
-        sorted_cov_frames: List[Dict], first_uncovered_frame: Dict, detailed_func_cov_data: str
-    ) -> str:
-        # Organize the coverage results, analyze them, and feed the results back as parameters for the next invocation of _generate_test_case.
+        self, test_case_path: str, exit_code: int, exec_output: str, 
+        sorted_cov_frames: List[Dict], first_uncovered_frame: Dict|None, detailed_func_cov_data: str|None
+    ) -> Tuple:
+        # Organize the collected coverage results, after LLM analysis, feed the results back for the next invocation of _generate_test_case.
+        # For input parameters, `sorted_cov_frames` contains most of the information we need.
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep4: Analyzing coverage feedback...")
 
-        feedback_analysis_results  = f"For the finished execution, exit code: {exit_code}\n\nexecution output:\n{exec_output}\n\n"
-        # TODO: Now no feedback is provided. To be finished.
+        formatted_cov_info = ""
+        coverage_stagnation_reasons = ""
+        input_adjustment_suggestion = ""
         
-        # Currently we just return the raw information (tmp).
-        return feedback_analysis_results
+        # Step 1: Aggregate basic execution and coverage info
+        basic_info = [
+            "=" * 80,
+            f"BASIC EXECUTION INFO - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
+            "=" * 80,
+            f"exit code: {exit_code}\n"
+            f"execution output:\n{exec_output}\n"
+        ]
+        basic_info = '\n'.join(basic_info)
+        cov_feedback = self._format_coverage_feedback(sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data)
+        formatted_cov_info = basic_info + cov_feedback
+        
+        print(formatted_cov_info) # For debug
+        return (formatted_cov_info)
+
+        # 2025.12.25: It seems that this part is not very stable or effective yet, we can temporarily disable it.
+        # Step 2: Utilize LLM to analyze coverage feedback and provide suggestions
+        self.logger.info("  [PathExplorationAgent] Using LLM to analyze coverage feedback...")
+        try:
+            # Use LLM to analyze coverage and generate suggestions
+            analysis_prompt = PEA_coverage_analysis_prompt.format(
+                formatted_cov_info=formatted_cov_info,
+                test_case_path=test_case_path
+            )
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=analysis_prompt,
+                tools=self.tools,   # Allow tool usage if needed
+                system_prompt=PEA_coverage_analysis_system_prompt,
+                max_iterations=5,
+                temperature=0.5,
+                max_tokens=8192
+            )
+
+            if not result['success']: # Failure in LLM analysis
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.error(f"  [PathExplorationAgent] Coverage analysis failed: {error_msg}")
+                # Fallback: return error messages
+                coverage_stagnation_reasons = "ERROR: Failed to analyze coverage feedback"
+                input_adjustment_suggestion = "ERROR: Failed to generate suggestions"
+            else:
+                response = result['final_response']
+                self.logger.info (f"  [PathExplorationAgent] Coverage analysis completed")
+                self.logger.debug(f"  [PathExplorationAgent] Analysis response: {response[:300]}...")
+                
+                # Extract the analysis content from code block
+                code_block_pattern = r'```\s*\n(.*?)\n```'
+                code_block_match = re.search(code_block_pattern, response, re.DOTALL)
+                if code_block_match:
+                    analysis_content = code_block_match.group(1)
+                    # Extract the two sections from the analysis
+                    reasons_pattern = r'## COVERAGE STAGNATION REASONS\s*\n(.*?)(?=## INPUT ADJUSTMENT SUGGESTION|$)'
+                    suggestion_pattern = r'## INPUT ADJUSTMENT SUGGESTION\s*\n(.*?)(?=$)'
+                    reasons_match = re.search(reasons_pattern, analysis_content, re.DOTALL)
+                    suggestion_match = re.search(suggestion_pattern, analysis_content, re.DOTALL)
+                    coverage_stagnation_reasons = reasons_match.group(1).strip() if reasons_match else "Could not extract stagnation reasons"
+                    input_adjustment_suggestion = suggestion_match.group(1).strip() if suggestion_match else "Could not extract input suggestions"
+                    self.logger.info("  [PathExplorationAgent] Successfully extracted all coverage analysis sections")
+                else:
+                    # Fallback: try to extract directly without code block wrapper
+                    self.logger.warning("  [PathExplorationAgent] No code block found, trying direct extraction...")
+                    reasons_pattern = r'## COVERAGE STAGNATION REASONS\s*\n(.*?)(?=## INPUT ADJUSTMENT SUGGESTION|$)'
+                    suggestion_pattern = r'## INPUT ADJUSTMENT SUGGESTION\s*\n(.*?)(?=$)'
+                    reasons_match = re.search(reasons_pattern, response, re.DOTALL)
+                    suggestion_match = re.search(suggestion_pattern, response, re.DOTALL)
+                    if reasons_match and suggestion_match:
+                        coverage_stagnation_reasons = reasons_match.group(1).strip()
+                        input_adjustment_suggestion = suggestion_match.group(1).strip()
+                        self.logger.info("  [PathExplorationAgent] Successfully extracted all sections from direct response")
+                    else:
+                        # Last resort: use the full response
+                        self.logger.warning("  [PathExplorationAgent] Could not parse structured response, using full response")
+                        coverage_stagnation_reasons = response
+                        input_adjustment_suggestion = "See stagnation reasons for full analysis"
+
+        except Exception as e:
+            self.logger.error(f"  [PathExplorationAgent] Exception during coverage analysis: {e}")
+            coverage_stagnation_reasons = f"ERROR: Exception during analysis - {str(e)}"
+            input_adjustment_suggestion = "ERROR: Could not generate suggestions due to exception"
+
+        print("***\nCOVERAGE STAGNATION REASONS(debug)\n***\n" + coverage_stagnation_reasons)
+        print("\n***\nINPUT ADJUSTMENT SUGGESTION(debug)\n***\n" + input_adjustment_suggestion)
+        return (formatted_cov_info, coverage_stagnation_reasons, input_adjustment_suggestion)
 
     def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
         """
