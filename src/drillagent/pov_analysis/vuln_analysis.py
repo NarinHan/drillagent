@@ -129,7 +129,7 @@ class VulnAnalysisAgent:
         sanitizer_report = self.config.sanitizer_report
         # raw_vuln_location    = self.config.vuln_location    # won't use
         raw_harness_command  = self.config.harness_command
-        self.logger.info(f"  [VulnAnalysisAgent] Actual repo path: {len(actual_repo_path)}.")
+        self.logger.info(f"  [VulnAnalysisAgent] Actual repo path: {actual_repo_path}")
 
         # Before all, Try to load from cache first.
         if self.load_from_cache():
@@ -166,11 +166,11 @@ class VulnAnalysisAgent:
             self.logger.info("  [VulnAnalysisAgent] Root cause analysis is disabled by configuration. Skipping!")
 
         # Substep4: Identify critical function call steps for vulnerability triggering.
-        if not self.config.disable_root_cause_analysis:  # Only run if root cause analysis is enabled
-            self.logger.info("  [VulnAnalysisAgent] Identifying critical function call steps...")
-            self._identify_critical_steps()
-        else:
-            self.logger.info("  [VulnAnalysisAgent] Critical step identification is skipped (requires root cause analysis).")
+        # if not self.config.disable_root_cause_analysis:  # Only run if root cause analysis is enabled
+        #     self.logger.info("  [VulnAnalysisAgent] Identifying critical function call steps...")
+        #     self._identify_critical_steps()
+        # else:
+        #     self.logger.info("  [VulnAnalysisAgent] Critical step identification is skipped (requires root cause analysis).")
 
         # Store results to cache for future use
         self.store_to_cache()
@@ -418,7 +418,7 @@ class VulnAnalysisAgent:
                 if crash_idx is not None and entry_idx is not None:
                     trimmed_trace = validated_trace[crash_idx:entry_idx+1] if crash_idx <= entry_idx else validated_trace
                     if crash_idx <= entry_idx:
-                        self.logger.debug(f"      Trimmed trace from frame #{crash_idx} ({crash_function}) to frame #{entry_idx} ({entry_function})")
+                        self.logger.debug(f"     Trimmed trace from frame #{entry_idx} ({entry_function}) to frame #{crash_idx} ({crash_function})")
                     else:
                         self.logger.warning(f"      Unexpected: crash_idx ({crash_idx}) > entry_idx ({entry_idx}), keeping full trace")
                 elif crash_idx is not None:
@@ -431,9 +431,9 @@ class VulnAnalysisAgent:
                     trimmed_trace = validated_trace
                     self.logger.warning(f"      Neither entry '{entry_function}' nor crash '{crash_function}' found in trace, keeping full trace")
 
-            self.logger.info(f"    ✓ Transformed call trace: {len(trimmed_trace)} frames (from {len(validated_trace)} valid, {len(parsed_data['call_trace'])} total)")
             if entry_function and crash_function:
                 self.logger.info(f"      Trimmed from entry '{entry_function}' to crash '{crash_function}'!")
+            self.logger.info(f"    ✓ Transformed call trace: {len(trimmed_trace)} frames (from {len(validated_trace)} valid, {len(parsed_data['call_trace'])} total)")
 
             return trimmed_trace
 
