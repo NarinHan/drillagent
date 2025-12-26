@@ -15,7 +15,7 @@
 
 ### 2. Vulnerability Analysis
 - Extract and summarize the basic and structured vulnerability information from the sanitizer report.
-- Reasoning about the vulnerability root cause and critical triggering conditions.
+- Reasoning about the vulnerability root cause and critical triggering conditions / steps.
 - The analysis results can be used as part of the context for the subsequent stages.
 
 ### 3. Cov-feedback Path Exploration

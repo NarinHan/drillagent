@@ -155,10 +155,10 @@ Line Number Verification Requirements:
 Verification Steps:
 1. You MUST use `read_file` to examine the source code at and around the provided line number.
 2. Check if the target line contains a call site to the callee function `{callee_function_name}`:
-   - If YES and it's a **direct function call** (e.g., `njs_function(...);`), keep the original non-zero line number and set `"is_original_linenum": true`.
-   - If YES and it's an **indirect function call** (e.g., `(*callback)(arg);` or `func_ptr();` or `handler->process();`), keep the original non-zero line number and set `"is_original_linenum": true`.
+   - If YES and it's a **direct function call** (e.g., `njs_function(...);`), keep the original non-zero line number and set `"is_original_linenum": true` and `"is_verified": true`.
+   - If YES and it's an **indirect function call** (e.g., `(*callback)(arg);` or `func_ptr();` or `handler->process();`), keep the original non-zero line number and set `"is_original_linenum": true` and `"is_verified": true`.
    - If NO (the line doesn't contain a call to `{callee_function_name}`), read a few lines above (typically 1-20 lines) to find the correct call-site code snippet:
-     * If you find the correct call site, update the line number accordingly and set `"is_original_linenum": false`.
+     * If you find the correct call site, update the line number accordingly and set `"is_original_linenum": false` and `"is_verified": true`.
      * If you cannot find the correct line number after thorough checking, keep the original non-zero line number and set `"is_original_linenum": true` and `"is_verified": false`.
 3. CRITICAL RULE: The final `line_number` must NEVER be 0. Always use the original non-zero line number if you cannot determine a better value.
 

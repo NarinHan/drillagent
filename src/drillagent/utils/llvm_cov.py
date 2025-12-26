@@ -18,7 +18,7 @@ class LLVMCovUtils:
     6. Clear cached data to free memory (coverage data can be 50+ MB).
     7. Get cache information and statistics.
     """
-
+    # TODO: All paths used here is absolute or relative? This should be further refactored. (LHY)
     def __init__(self, binary_path: str, 
                  profraw_path: str = "", profdata_path: str = "", 
                  llvm_cov_path: str = "llvm-cov", llvm_profdata_path: str = "llvm-profdata"):
@@ -52,6 +52,7 @@ class LLVMCovUtils:
         self._coverage_data: Optional[Dict[str, Any]] = None
 
     def _convert_profraw_to_profdata(self, profraw_path: str) -> str:
+        # LHY: This function should be executed implicitly when init and update.
         """
         Convert profraw file to profdata format.
         Args:
@@ -91,7 +92,6 @@ class LLVMCovUtils:
 
         return result.stdout
 
-    # TODO: Running this function every time is kind of time and space wasteful.
     # Currently using self._coverage_data as cache.
     def _get_coverage_data(self) -> Dict[str, Any]:
         """
@@ -176,9 +176,9 @@ class LLVMCovUtils:
                     # 'uncovered_lines': sorted(list(uncovered_lines)),
                     'regions_covered': regions_covered,
                     'regions_total': len(regions_in_file),
-                    'filenames': filenames
+                    'filenames': filenames # useless for us
                 }
-
+        # Anyone whp calls this function should handle the exception with try-except.
         raise ValueError(f"Function '{function_name}' not found in file '{file_path}'")
 
     def get_multi_functions_coverage(self, function_with_filepath_list: List[tuple]) -> Dict[tuple, Dict[str, Any]]:
@@ -188,7 +188,7 @@ class LLVMCovUtils:
         Args:
             function_with_filepath_list: List of (function_name, file_path) tuples
         Returns:
-            Dictionary mapping (function_name, file_path) to coverage info dict containing:
+            Dictionary  mapping (function_name, file_path) to coverage info dict containing:
             - is_executed: Whether function was executed
             - execution_count: Execution count
             - regions_covered: Number of covered regions
@@ -247,6 +247,157 @@ class LLVMCovUtils:
 
         return target_functions
 
+    def get_detailed_function_coverage(self, file_path: str, function_name: str) -> str:
+        """
+        Get detailed line-by-line coverage for a specific function in a human-readable format.
+        Uses llvm-cov show command to get the coverage output directly.
+
+        Args:
+            file_path: Source file path (will be converted to absolute path)
+            function_name: Function name to show coverage for
+
+        Returns:
+            Formatted string showing line-by-line coverage with execution counts and source code.
+            Output from llvm-cov show command.
+
+        Example:
+            >>> cov_utils = LLVMCovUtils(binary='/path/to/binary', profdata_path='/path/to/coverage.profdata')
+            >>> result = cov_utils.get_detailed_function_coverage('/path/to/source.c', 'main')
+            >>> print(result)
+        """
+        file_path = os.path.abspath(file_path)
+
+        # Construct llvm-cov show command
+        # Format: llvm-cov show <binary> <source_file> -instr-profile=<profdata> --name=<function_name>
+        cmd = [
+            self.llvm_cov_path,
+            'show',
+            self.binary_path,
+            file_path,
+            f'-instr-profile={self.profdata_path}',
+            f'--name={function_name}'
+        ]
+
+        # Execute the command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"llvm-cov show command failed: {result.stderr}")
+
+        # Return the output directly
+        return result.stdout
+
+
+    @staticmethod
+    def _parse_execution_count(count_str: str) -> int:
+        """
+        Parse execution count string which may contain suffixes like k, M, G, T.
+
+        Args:
+            count_str: Count string (e.g., "42", "2.14M", "410k")
+
+        Returns:
+            Integer execution count
+
+        Examples:
+            "42" -> 42
+            "2.14M" -> 2140000
+            "410k" -> 410000
+            "1.5G" -> 1500000000
+        """
+        count_str = count_str.strip()
+
+        # Suffix multipliers
+        multipliers = {
+            'k': 1000,
+            'K': 1000,
+            'M': 1000000,
+            'G': 1000000000,
+            'T': 1000000000000
+        }
+
+        # Check if the last character is a suffix
+        if count_str and count_str[-1] in multipliers:
+            # Extract numeric part and multiply
+            numeric_part = float(count_str[:-1])
+            return int(numeric_part * multipliers[count_str[-1]])
+        else:
+            # No suffix, just convert to int
+            return int(float(count_str))
+
+    def get_line_coverage(self, file_path: str, line_number: int) -> Dict[str, Any]:
+        """
+        Get line coverage details using llvm-cov show command.
+
+        This method uses llvm-cov show to get accurate line-level coverage information
+        by parsing the formatted output directly, avoiding the complexity of manually
+        handling segment ranges from JSON data.
+
+        Args:
+            file_path: Source file path
+            line_number: Line number (1-indexed)
+        Returns:
+            Dictionary containing:
+            - is_executed: Whether line was executed
+            - execution_count: Execution count
+        """
+        import re
+
+        file_path = os.path.abspath(file_path)
+
+        # Construct llvm-cov show command to get line counts for the entire file
+        # Format: llvm-cov show <binary> -instr-profile=<profdata> --show-line-counts <file>
+        cmd = [
+            self.llvm_cov_path,
+            'show',
+            self.binary_path,
+            f'-instr-profile={self.profdata_path}',
+            '--show-line-counts',
+            file_path
+        ]
+
+        # Execute the command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"llvm-cov show command failed: {result.stderr}")
+
+        # Parse the output to find the target line
+        # Expected formats:
+        #   "  42|      5|   if (x > 0) {"       - regular count
+        #   "  42|  2.14M|   if (x > 0) {"       - millions
+        #   "  42|   410k|   if (x > 0) {"       - thousands
+        #
+        # Pattern explanation:
+        #   ^\s*           - optional leading whitespace
+        #   (\d+)          - line number (group 1)
+        #   \|             - separator
+        #   \s*            - optional whitespace
+        #   ([0-9.]+[kKMGT]?)  - execution count with optional suffix (group 2)
+        #   \|             - separator
+        pattern = re.compile(r'^\s*(\d+)\|\s*([0-9.]+[kKMGT]?)\|')
+
+        for line in result.stdout.split('\n'):
+            match = pattern.match(line)
+            if match:
+                current_line_num = int(match.group(1))
+                count_str = match.group(2)
+
+                # Found the target line
+                if current_line_num == line_number:
+                    execution_count = self._parse_execution_count(count_str)
+                    return {
+                        'is_executed': execution_count > 0,
+                        'execution_count': execution_count
+                    }
+
+        # If we reach here, the line was not found in the output
+        # This could mean:
+        # 1. The line is not executable (e.g., blank line, comment, declaration)
+        # 2. The line number is out of range
+        # Return a default "not executed" result
+        return {
+            'is_executed': False,
+            'execution_count': 0
+        }
 
     def get_function_regions(self, file_path: str, function_name: str) -> List[Dict[str, Any]]:
         """
@@ -296,62 +447,7 @@ class LLVMCovUtils:
 
         raise ValueError(f"Function '{function_name}' not found in file '{file_path}'")
 
-    def get_line_coverage(self, file_path: str, line_number: int) -> Dict[str, Any]:
-        """
-        Get line coverage details.
-        Args:
-            file_path: Source file path
-            line_number: Line number
-        Returns:
-            Dictionary containing:
-            - is_executed: Whether line was executed
-            - execution_count: Execution count
-            - function_name: Owning function name (if any)
-        """
-        coverage_data = self._get_coverage_data()
-        file_path = os.path.abspath(file_path)
 
-        # Find line coverage info from segments
-        execution_count = 0
-        for data_file in coverage_data.get('data', [{}])[0].get('files', []):
-            if os.path.abspath(data_file['filename']) == file_path:
-                # Traverse segments to find line info
-                # Segment format: [line, col, count, has_count, is_region_entry, ...]
-                for segment in data_file.get('segments', []):
-                    if len(segment) >= 4:
-                        line, col, count, has_count = segment[0], segment[1], segment[2], segment[3]
-                        if line == line_number and has_count:
-                            execution_count = max(execution_count, count)
-                break
-
-        # Find function containing this line
-        function_name = None
-        for function in coverage_data.get('data', [{}])[0].get('functions', []):
-            filenames = function.get('filenames', [])
-            abs_filenames = [os.path.abspath(f) for f in filenames]
-            if file_path not in abs_filenames:
-                continue
-
-            # Get the file_id for the target file
-            file_id = abs_filenames.index(file_path)
-
-            # Check if line is in any region of this function
-            # Region format: [start_line, start_col, end_line, end_col, execution_count, file_id, expanded_file_id, kind]
-            for region in function.get('regions', []):
-                if len(region) >= 6 and region[5] == file_id:
-                    if region[0] <= line_number <= region[2]:
-                        function_name = function['name']
-                        break
-            if function_name:
-                break
-
-        return {
-            'is_executed': execution_count > 0,
-            'execution_count': execution_count,
-            'function_name': function_name
-        }
-
-    # TODO: Added some functions that can obtain human readable reports.
 
     def generate_full_report(self) -> str:
         """
@@ -502,7 +598,6 @@ Usage examples:
             result = cov_utils.get_line_coverage(file_path, line_number)
             print(f"Executed: {result['is_executed']}")
             print(f"Execution Count: {result['execution_count']}")
-            print(f"Function: {result['function_name'] or 'N/A'}")
 
         elif args.html_report:
             print(f"=== Generating HTML Report to {args.html_report} ===")
