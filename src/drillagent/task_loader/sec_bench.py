@@ -233,6 +233,46 @@ class RawSecbTaskLoader:
         assert os.path.exists(dataset_path), f"SEC-bench Data path {dataset_path} does not exist."
         self.cve_tasks: Dict[str, SecbTask] = {}  # instance_id -> SecbTask
 
+    def get_task(self, instance_id: str) -> Optional[SecbTask]:
+        """
+        Get a specific task by instance_id.
+        Args:
+            instance_id: The instance ID to retrieve
+        Returns:
+            SecbTask object or None if not found
+        """
+        return self.cve_tasks.get(instance_id)
+
+    def get_all_instance_ids(self) -> List[str]:
+        """
+        Get all loaded instance IDs.
+        Returns:
+            List of instance IDs
+        """
+        return list(self.cve_tasks.keys())
+
+    def is_labelled_blacklist(self, instance_id: str) -> bool:
+        # Returns True if the instance_id is among the blacklist!
+        blacklist = [
+            "gpac.cve-2023-3012",
+            "imagemagick.cve-2018-6405",
+            "matio.cve-2019-9032",
+            "matio.cve-2019-9035",
+            "matio.cve-2019-9036",
+            "matio.cve-2019-9037",
+            "readstat.cve-2018-5698",
+            "yaml-cpp.cve-2018-20574",
+            "libarchive.cve-2019-11463"
+        ] # These 9 tasks are very weird in SEC-bench!
+        blacklist += [
+            "mruby.cve-2022-1201",  # The stack frames are all in one line.
+            "mruby.cve-2018-14337", # The call trace is in other fields...
+            "liblouis.cve-2023-26768", # Cannot find the harness binary.
+            "gpac.cve-2022-2454",
+            "gpac.cve-2023-42298",
+        ] # These tasks just have no call trace. But still possible to handle.
+        return instance_id in blacklist
+
     def load_cve_tasks(self) -> Dict[str, SecbTask]:
         """
         Load CVE tasks from JSON files in the dataset directory.
@@ -285,29 +325,26 @@ class RawSecbTaskLoader:
 
         return self.cve_tasks
 
-    def get_task(self, instance_id: str) -> Optional[SecbTask]:
-        """
-        Get a specific task by instance_id.
-        Args:
-            instance_id: The instance ID to retrieve
-        Returns:
-            SecbTask object or None if not found
-        """
-        return self.cve_tasks.get(instance_id)
-
-    def get_all_instance_ids(self) -> List[str]:
-        """
-        Get all loaded instance IDs.
-        Returns:
-            List of instance IDs
-        """
-        return list(self.cve_tasks.keys())
+    # 
+    # Various loaders to get different subsets of tasks
+    # 
+    def get_nonbinary_tasks(self) -> Dict[str, SecbTask]:
+        returned_tasks = dict()
+        target_projects = ["mruby", "njs", "php", "yaml", "md4c", "jq"]
+        for instance_id, task in self.cve_tasks.items():
+            proj_name = instance_id.split('.')[0]
+            if proj_name not in target_projects:
+                continue
+            if self.is_labelled_blacklist(instance_id):
+                continue
+            returned_tasks[instance_id] = task
+        return returned_tasks
 
     def get_solved_nonbinary_tasks(self) -> Dict[str, SecbTask]:
         instances_ids = [
             "njs.cve-2022-27007",
             "mruby.cve-2022-0631",
-            "mruby.cve-2018-14337",
+            # "mruby.cve-2018-14337", # Call trace is in bug_report!
         ]
         return {instance_id:task for instance_id, task in self.cve_tasks.items()
                 if instance_id in instances_ids}
@@ -415,7 +452,9 @@ class RawSecbTaskLoader:
         return {instance_id: task for instance_id, task in self.cve_tasks.items()
                 if instance_id in overlapping_instances}
 
+    # 
     # Below are 4 useful getters.
+    # 
     def get_base_commit(self, instance_id: str) -> Optional[str]:
         """
         Get the base commit hash for a specific task.
