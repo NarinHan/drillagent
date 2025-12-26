@@ -9,14 +9,14 @@ test_output/
 openai.key
 claude.key
 gemini.key
-src/drillagent/scripts/lhy_test.py
+src/drillagent/scripts/lhy_*
+scripts/lhy_*
 
 # Phase 1: instrumentation agents
 instrumented/
 src/instrumentation/
 fuzzing/
 repos/
-output/
 ray_test/
 
 # 
