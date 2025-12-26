@@ -34,6 +34,8 @@ class DrillAgent:
         self.skip_path_exploration = config.disable_path_exploration
         self.skip_pov_generation = config.disable_pov_generation
 
+        self.project_name = config.project_name
+        self.cve_id       = config.cve_id
         self.work_dir   = self.config.work_dir
         self.output_dir = self.config.output_dir
         self.iteration = 0
@@ -51,7 +53,6 @@ class DrillAgent:
         # Path exploration results
         self.pov_candidates     = []
         self.coverage_data      = None
-        self.closest_pov_candidate = None
         
         # Instrumentation results
         self.aflgo_config_path  = None # Path to AFLGo configuration file
@@ -367,10 +368,10 @@ class DrillAgent:
                 config_generator = ConfigGeneratorAgent(self)
                 
                 # Instance files are named: {project}.{cve-id}.json (e.g., exiv2.cve-2017-14857.json)
-                instance_path = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f"{self.config.project_name}.{self.config.cve_id.lower()}.json"
+                instance_path = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f"{self.project_name}.{self.config.cve_id.lower()}.json"
                 
                 # Generate config for AFLGo instrumentation - save to instrumentation_configs
-                output_path = instrumentation_configs_dir / f"{self.config.project_name}.{self.config.cve_id.lower()}.yaml"
+                output_path = instrumentation_configs_dir / f"{self.project_name}.{self.config.cve_id.lower()}.yaml"
                 
                 self.logger.info(f"    - Generating config from: {instance_path.name}")
                 config_yaml = config_generator.generate_config(instance_path, output_path)
@@ -475,7 +476,6 @@ class DrillAgent:
 
             # Extract exploration results
             self.pov_candidates = path_agent.history_pov_candidates
-            self.closest_pov_candidate = path_agent.best_pov_candidate
 
             # TODO: Print the formatted exploration results
 

@@ -10,16 +10,6 @@ When generating test cases:
 - Return the test case content directly in your response using a code block
 """
 
-PEA_coverage_analysis_system_prompt = """You are a security researcher specializing in analyzing code coverage feedback for vulnerability exploitation. Your task is to understand why test case execution gets stuck at certain points and provide actionable suggestions to reach deeper into the call trace.
-
-When analyzing coverage feedback:
-- Use provided tools to read source code at uncovered callsites to understand blocking conditions
-- Examine function implementations, conditional checks, input validation logic
-- Identify specific requirements (magic values, format constraints, state dependencies) that prevent deeper execution
-- Provide concrete, actionable suggestions for test case modifications
-- Consider the vulnerability type and exploitation context in your analysis
-"""
-
 
 PEA_testcase_generation_prompt = """You are generating a test case to trigger a vulnerability. Your goal is to create an input that can reach the vulnerable function and potentially trigger a crash.
 
@@ -77,15 +67,27 @@ Generate the test case now and return it in a ```testcase code block.
 """
 
 PEA_feedback_results_template = """
-FEEDBACK FROM PREVIOUS ITERATION:
+EXECUTION FEEDBACK FROM PREVIOUS ITERATION:
 
-The previous test case (from iteration {loop_progress}) was executed. Here are the results:
+After executing the test case (from iteration {loop_progress}), the program output and coverage information are as follows.
 
 {previous_feedback}
 
-Based on the feedback above, your goal is to improve the test case to reach deeper into the call trace toward the vulnerable function.
+Based on the feedback above, your should analyze the actual execution behavior inside the program when running the previous test case. 
+Then, you should focus on the following tasks with the above observations and analysis results in mind.
 """
 
+
+
+PEA_coverage_analysis_system_prompt = """You are a security researcher specializing in analyzing code coverage feedback for vulnerability exploitation. Your task is to understand why test case execution gets stuck at certain points and provide actionable suggestions to reach deeper into the call trace.
+
+When analyzing coverage feedback:
+- Use provided tools to read source code at uncovered callsites to understand blocking conditions
+- Examine function implementations, conditional checks, input validation logic
+- Identify specific requirements (magic values, format constraints, state dependencies) that prevent deeper execution
+- Provide concrete, actionable suggestions for test case modifications
+- Consider the vulnerability type and exploitation context in your analysis
+"""
 
 PEA_coverage_analysis_prompt = """Analyze the following code coverage feedback of certain program execution and provide suggestions for improving test case to reach deeper into the vulnerable call trace.
 

@@ -1,16 +1,14 @@
 import os
 import json
-import logging
 import subprocess
 import shutil
 import re
 from pathlib import Path
+from datetime import datetime
 from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
-    from drillagent.config import AgentConfig
-    from drillagent.utils.tools import AgentTool
 
 from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_system_prompt,
@@ -34,21 +32,20 @@ class PathExplorationAgent:
         self.logger = drill_agent.logger
         self.tools = drill_agent.agent_tools
 
-        # LHY: In each exploration, the agent will generate a PoV test case, execute it, and collect coverage feedback.
+        # In each exploration, the agent will generate a PoV test case, execute it, and collect coverage feedback.
         # After LLM reasoning about the current status, the agent will repeat the above process until stopped.
         self.max_exp_iterations = 8
         self.current_exp_iteration = 0
 
-        # LHY: Based on the call trace we extratced from the sanitizer report, we can record which nodes have been covered.
-        # self.call_trace = None
+        # For coverage collection
         self.llvm_cov_utils : LLVMCovUtils = None
         self.vuln_call_trace = self.drill_agent.vulnerability_info.call_trace # Obtained from VulnAnalysisAgent directly
         # self.coverage_state = dict()  # e.g., covered functions/branches
 
         # LHY: All of the intermediate PoV results should be stored, and we should maintain a best PoV candidate.
-        self.history_pov_candidates = []  # List of XXX
-        self.best_pov_candidate = None    # Type:XXX
-        self.crash_input_pov = None       # Type:XXX
+        self.history_pov_candidates = []  # List of file paths to all generated test cases.
+        self.crash_input_pov = None       # A dict initilized in _detect_stop_status function when causing segmentation fault.
+        # crash_input_pov['saved_pov_path']: The path where the crash PoV is saved in output_dir.
 
     def run(self) -> None:
         # Run the path exploration process to generate PoV candidates that can reach the vulnerable function.
@@ -75,13 +72,13 @@ class PathExplorationAgent:
             # Substep1: Generate test case (with feedback from previous iteration if available)
             # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
             test_case_path = self._generate_test_case(previous_feedback)
+            self.history_pov_candidates.append(test_case_path)
 
             # Substep2: Execute test case dynamically (using actual repo path)
             # This will also generate a profraw/profdata file.
             exit_code, exec_output = self._execute_test_case(test_case_path)
 
             # Special: Check early-stop after each execution
-            # TODO: If all callsites are covered, we can also stop early(?).
             found_pov = self._detect_stop_status(exit_code, exec_output)
             if found_pov:
                 self.logger.info(f"  [PathExplorationAgent] Crash-inducing PoV found! Triggered early stop.")
@@ -98,6 +95,13 @@ class PathExplorationAgent:
             ) # Also store feedback for next iteration
         
         self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
+
+        if not self.crash_input_pov:
+            self.logger.info(f"  [PathExplorationAgent] No crash-inducing PoV generated during path exploration. But we get closer ^^")
+            # TODO: Select 1~2 best candidates and copy them to output_dir for fhurther usage.
+            pass
+        else:
+            self.logger.info(f"  [PathExplorationAgent] Crash-inducing PoV successfully generated during path exploration!")
 
     def _get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
@@ -385,14 +389,12 @@ class PathExplorationAgent:
         detailed_func_cov_data = None
         if first_uncovered_frame:
             try:
-                abs_file_path = os.path.abspath(os.path.join(repo_path, first_uncovered_frame['file_path']))
-
                 # Get detailed line-by-line coverage for the uncovered function
+                abs_file_path = os.path.abspath(os.path.join(repo_path, first_uncovered_frame['file_path']))
                 detailed_func_cov_data = self.llvm_cov_utils.get_detailed_function_coverage(
                     file_path=abs_file_path,
                     function_name=first_uncovered_frame['function_name']
                 )
-
                 self.logger.info(f"  [PathExplorationAgent] Retrieved detailed coverage for '{first_uncovered_frame['function_name']}'")
             except Exception as e:
                 self.logger.warning(f"  [PathExplorationAgent] Failed to get detailed function coverage for '{first_uncovered_frame['function_name']}': {e}")
@@ -462,27 +464,22 @@ class PathExplorationAgent:
             # output_lines.append("")
 
         # Add detailed line-by-line coverage for the first uncovered callsite
-        if detailed_func_cov_data:
+        if first_uncovered_frame:
             output_lines.append("-" * 80)
             output_lines.append(f"Line-Level First Un-executed Callsite:") #####
             output_lines.append(f"  Function: #{first_uncovered_frame['sequence_num']} {first_uncovered_frame['function_name']}")
             output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (the un-executed line in the func body)")
             output_lines.append("")
-            output_lines.append("Function Body Code with Coverage:")
-            output_lines.append("(The leftmost column shows the source code line numbers, the middle column shows the execution counts, and the rightmost column contains the source code.)")
-            # Add the detailed coverage output directly
-            output_lines.append(detailed_func_cov_data)
-            # output_lines.append("")
-        elif first_uncovered_frame:
-            output_lines.append("-" * 80)
-            output_lines.append(f"First Uncovered Callsite:")
-            output_lines.append(f"  Function: {first_uncovered_frame['function_name']}")
-            output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')}")
-            output_lines.append(f"  (Detailed coverage not available)")
-            output_lines.append("")
+            if detailed_func_cov_data:
+                output_lines.append("Function Body Code with Coverage:")
+                output_lines.append("  - The leftmost column shows the source code line numbers.)")
+                output_lines.append("  - The middle column shows the execution counts.")
+                output_lines.append("  - The rightmost column contains the source code.")
+                output_lines.append(detailed_func_cov_data) # Add the detailed coverage output directly
         else:
             output_lines.append("-" * 80)
-            output_lines.append("All callsites in the call trace have been covered!")
+            output_lines.append(f"Line-Level First Un-executed Callsite: (if any)") #####
+            output_lines.append("  All callsites in the call trace have been covered!")
             output_lines.append("")
 
         output_lines.append("=" * 80)
@@ -588,16 +585,13 @@ class PathExplorationAgent:
         print("\n***\nINPUT ADJUSTMENT SUGGESTION(debug)\n***\n" + input_adjustment_suggestion)
         return (formatted_cov_info, coverage_stagnation_reasons, input_adjustment_suggestion)
 
+    ## TODO: If all callsites are executed and it already reached the crash location, we can also stop early(?).
     def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
         """
         Check if we should stop path exploration based on execution results.
-        Handles:
         - Exit code 127: Command not found (raises error)
         - Exit code 139/-11: Segmentation fault/crash (updates crash_input_pov)
         - Other potential stop conditions
-        Args:
-            exit_code: The exit code from test case execution
-            exec_output: The output from test case execution (stdout + stderr)
         Returns:
             bool: True if a crash input pov is found, False otherwise
         Raises:
@@ -613,8 +607,7 @@ class PathExplorationAgent:
             )
 
         # Check for segmentation fault (crash) - this is our target!
-        # Exit code 139 = 128 + 11 (SIGSEGV signal)
-        # Exit code -11 = SIGSEGV on some systems
+        # Exit code 139 = 128 + 11 (SIGSEGV signal) (-11 = SIGSEGV on some systems)
         if exit_code == 139 or exit_code == -11:
             self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
 
@@ -624,7 +617,7 @@ class PathExplorationAgent:
                 f"testcase-round{self.current_exp_iteration}"
             )
 
-            # Read and store the crashing input
+            # Store the crashing input
             try:
                 with open(current_testcase_path, 'rb') as f:
                     crash_input_content = f.read()
@@ -632,11 +625,21 @@ class PathExplorationAgent:
                 # Update crash_input_pov with detailed information
                 self.crash_input_pov = {
                     'testcase_path': current_testcase_path,
-                    'content': crash_input_content,
-                    'iteration': self.current_exp_iteration,
                     'exit_code': exit_code,
-                    'exec_output': exec_output
+                    'exec_output': exec_output,
+                    'iteration': self.current_exp_iteration,
+                    'max_iterations': self.max_exp_iterations
                 }
+
+                # Copy the crash PoV to output directory with timestamped name
+                timestamp = datetime.now().strftime("%y%m%d-%H%M")
+                pov_filename = f"pov-{self.drill_agent.project_name}-{timestamp}"
+                pov_output_path = os.path.join(self.drill_agent.output_dir, pov_filename)
+                os.makedirs(self.drill_agent.output_dir, exist_ok=True)
+                shutil.copy(current_testcase_path, pov_output_path)
+                self.logger.info(f"  [PathExplorationAgent] Crash PoV saved to output directory: {pov_output_path}")
+                # Update crash_input_pov with the saved path
+                self.crash_input_pov['saved_pov_path'] = pov_output_path
 
                 # Log the crash discovery
                 self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND ***")
