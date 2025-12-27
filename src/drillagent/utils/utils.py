@@ -30,14 +30,14 @@ def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str
     except Exception:
         return False
 
-def compare_gitrepo_commit(repo_path: str, base_commit: str) -> bool:
+def compare_gitrepo_commit(actual_repo_path: str, base_commit: str) -> bool:
     # Check if the current commit in the repo matches the base_commit
     # Returns True if current commit matches base_commit, False otherwise
     try:
         # Get the current HEAD commit hash (full SHA)
         current_result = subprocess.run(
             ['git', 'rev-parse', 'HEAD'],
-            cwd=repo_path,
+            cwd=actual_repo_path,
             capture_output=True,
             text=True,
             check=True,
@@ -48,7 +48,7 @@ def compare_gitrepo_commit(repo_path: str, base_commit: str) -> bool:
         # Resolve base_commit to full SHA (handles short hash, branch name, tag, etc.)
         base_result = subprocess.run(
             ['git', 'rev-parse', base_commit],
-            cwd=repo_path,
+            cwd=actual_repo_path,
             capture_output=True,
             text=True,
             check=True,

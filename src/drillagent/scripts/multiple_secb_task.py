@@ -235,14 +235,14 @@ Examples:
 
     # Ablation options
     parser.add_argument(
-        '--disable-instrumentation',
-        action='store_true',
-        help='Skip Phase 1 (program instrumentation)'
-    )
-    parser.add_argument(
         '--disable-vuln-analysis',
         action='store_true',
-        help='Skip Phase 2 (vulnerability analysis)'
+        help='Skip Phase 1 (vulnerability analysis)'
+    )
+    parser.add_argument(
+        '--disable-instrumentation',
+        action='store_true',
+        help='Skip Phase 2 (program instrumentation)'
     )
     parser.add_argument(
         '--disable-crash-analysis',

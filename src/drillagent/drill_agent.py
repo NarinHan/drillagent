@@ -27,7 +27,7 @@ class DrillAgent:
     def __init__(self, config: AgentConfig):
         # The only init parameter is the AgentConfig dataclass instance.
         self.config = config       # Include all the PoV task information and configuration options.
-        self.phase = "initialized" # TODO: initialized, instrumented, analyzing, exploring, completed
+        self.phase = "initialized" # TODO: initialized, analyzing, instrumented, exploring, completed
         self.skip_instrumentation     = config.disable_program_instrumentation
         self.skip_vulnerability_analysis = config.disable_vulnerability_analysis 
         self.skip_crash_trigger_analysis = config.disable_crash_trigger_analysis
@@ -223,13 +223,13 @@ class DrillAgent:
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
 
         try:
-            # Phase 1: Code Instrumentation
-            if not self.skip_instrumentation:
-                self._phase_instrumentation()
-
-            # Phase 2: Vulnerability Analysis
+            # Phase 1: Vulnerability Analysis
             if not self.skip_vulnerability_analysis:
                 self._phase_vulnerability_analysis()
+
+            # Phase 2: Code Instrumentation
+            if not self.skip_instrumentation:
+                self._phase_instrumentation()
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:
@@ -248,23 +248,57 @@ class DrillAgent:
             self.errors.append(str(e))
             return self._generate_report()
 
+    def _phase_vulnerability_analysis(self):
+        """Phase 1: Analyze vulnerability using LLM"""
+        self.logger.info("\n[Phase 1] Vulnerability Analysis")
+        self.phase = "analyzing"
+
+        # Use VulnAnalysisAgent for structured vulnerability analysis
+        try:
+            vuln_agent = VulnAnalysisAgent(self)
+            self.logger.info("  - Initialized VulnAnalysisAgent!")
+
+            # Run the analysis 
+            # Store the returned VulnInfo object into DrillAgent's field directly!
+            self.vulnerability_info = vuln_agent.run()
+
+            # Print the formatted vulnerability analysis results
+            vuln_info_str = self.vulnerability_info.format_output()
+            print(vuln_info_str)
+            self.logger.info("  ✓ Vulnerability analysis completed")
+
+        except Exception as e:
+            self.logger.error(f"  Failed to analyze vulnerability: {e}", exc_info=True)
+            self.errors.append(f"Vulnerability analysis failed: {e}")
+            # Keep the VulnInfo instance but mark it with error in root_cause field
+            self.vulnerability_info.root_cause = f"Analysis failed: {e}"
+
     def _phase_instrumentation(self):
-        """Phase 1: Instrument the target binary with coverage and sanitizers"""
-        self.logger.info("\n[Phase 1] Code Instrumentation")
+        """Phase 2: Instrument the target binary with coverage and sanitizers"""
+        self.logger.info("\n[Phase 2] Code Instrumentation")
         self.phase = "instrumentation"
 
-        # Substep 1: check if coverage instrumentation already exists
-        existing_binary = check_coverage_binary_exists(
-            target_repo_path=Path(self.config.target_repo_path),
-            cve_id=self.config.cve_id,
-            logger=self.logger
+        # Substep 1: check if llvm-cov instrumented binary already exists
+        existing_binary = check_llvmcov_binary_exists(
+            actual_repo_path=self.config.target_repo_path,
+            binary_relative_path=self.vulnerability_info.binary_path
         )
         if existing_binary:
-            self.logger.info(f"✓ Using existing coverage-instrumented binary: {existing_binary}")
+            matched_commit = compare_gitrepo_commit(
+                actual_repo_path=self.config.target_repo_path,
+                base_commit=self.config.base_commit
+            )
+            if matched_commit:
+                tmp_path_str = f"{self.config.target_repo_path}/{self.vulnerability_info.binary_path}"
+                self.logger.info(f"✓ Found existing coverage-instrumented binary at {tmp_path_str}, built from commit {self.config.base_commit}")
+                self.logger.info(f"✓ Skipping instrumentation phase...")
+                return
+            else:
+                self.logger.info("Existing coverage-instrumented binary found, but built from a different commit. Proceeding with instrumentation")
         else:
-            self.logger.info("No existing coverage-instrumented binary found; proceeding with instrumentation")
+            self.logger.info("No existing coverage-instrumented binary found. Proceeding with instrumentation")
         
-        # Clean and checkout before instrumentation
+        # Before compiling, clean repository and checkout target commit.
         self.logger.info("Cleaning repository...")
         clean_gitrepo(self.config.target_repo_path)
         self.logger.info("✓ Untracked files cleaned")
@@ -273,7 +307,7 @@ class DrillAgent:
         checkout_gitrepo_commit(self.config.target_repo_path, self.config.base_commit)
         self.logger.info("✓ Base commit checked out")
 
-        # Substep 2: Build with coverage instrumentation
+        # Substep 2: Build source code with coverage instrumentation
         self.logger.info("  - Building with coverage instrumentation...")
         coverage_agent = CoverageInstrumentAgent(self)
         result = coverage_agent.run()
@@ -307,30 +341,6 @@ class DrillAgent:
         #     self.errors.append(f"Distance calculation failed: {result.get('error')}")
 
         self.logger.info("  ✓ Instrumentation phase completed")
-
-    def _phase_vulnerability_analysis(self):
-        """Phase 2: Analyze vulnerability using LLM"""
-        self.logger.info("\n[Phase 2] Vulnerability Analysis")
-        self.phase = "analyzing"
-
-        # Use VulnAnalysisAgent for structured vulnerability analysis
-        try:
-            vuln_agent = VulnAnalysisAgent(self)
-            self.logger.info("  - Initialized VulnAnalysisAgent!")
-
-            # Run the analysis - returns VulnInfo instance directly
-            self.vulnerability_info = vuln_agent.run()
-
-            # Print the formatted vulnerability analysis results
-            vuln_info_str = self.vulnerability_info.format_output()
-            print(vuln_info_str)
-            self.logger.info("  ✓ Vulnerability analysis completed")
-
-        except Exception as e:
-            self.logger.error(f"  Failed to analyze vulnerability: {e}", exc_info=True)
-            self.errors.append(f"Vulnerability analysis failed: {e}")
-            # Keep the VulnInfo instance but mark it with error in root_cause field
-            self.vulnerability_info.root_cause = f"Analysis failed: {e}"
 
     def _phase_path_exploration(self):
         """Phase 3: Coverage-guided path exploration"""
