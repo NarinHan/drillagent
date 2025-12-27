@@ -9,6 +9,134 @@ def get_file_size(file_path: str) -> int:
     # Get the size of a file in bytes.
     return os.path.getsize(file_path)
 
+def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str) -> bool:
+    # Check if a binary exists and contains LLVM coverage instrumentation
+    # Returns True if binary exists and contains __llvm_profile symbols, False otherwise
+    binary_path = Path(actual_repo_path) / binary_relative_path
+
+    # Check if file exists
+    if not binary_path.exists():
+        return False
+
+    # Check if binary contains LLVM coverage symbols
+    try:
+        result = subprocess.run(
+            f'strings "{binary_path}" | grep -q "__llvm_profile"',
+            shell=True,
+            timeout=10
+        )
+        # grep -q returns 0 if pattern found, 1 if not found
+        return result.returncode == 0
+    except Exception:
+        return False
+
+def compare_gitrepo_commit(repo_path: str, base_commit: str) -> bool:
+    # Check if the current commit in the repo matches the base_commit
+    # Returns True if current commit matches base_commit, False otherwise
+    try:
+        # Get the current HEAD commit hash (full SHA)
+        current_result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10
+        )
+        current_commit = current_result.stdout.strip()
+
+        # Resolve base_commit to full SHA (handles short hash, branch name, tag, etc.)
+        base_result = subprocess.run(
+            ['git', 'rev-parse', base_commit],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10
+        )
+        resolved_base_commit = base_result.stdout.strip()
+
+        # Compare the two full SHA hashes
+        matches = current_commit == resolved_base_commit
+        if matches:
+            print(f"Current commit matches base_commit: {current_commit[:12]}")
+        else:
+            print(f"Current commit {current_commit[:12]} != base_commit {resolved_base_commit[:12]}")
+
+        return matches
+
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to compare commits: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error comparing commits: {e}")
+        return False
+
+def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
+    # Checkout the target repository to the specified base commit
+    result = subprocess.run(
+        ['git', 'checkout', base_commit],
+        cwd=actual_repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    print(f"✓ Successfully checked out commit: {base_commit[:12]}...")
+    if result.stdout:
+        print(f"Git output: {result.stdout.strip()}")
+    
+    # Update git submodules
+    print("Updating git submodules...")
+    result = subprocess.run(
+        ['git', 'submodule', 'update', '--init', '--recursive'],
+        cwd=actual_repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    print("✓ Successfully updated git submodules")
+    if result.stdout:
+        print(f"Submodule output: {result.stdout.strip()}")
+
+def clean_gitrepo(actual_repo_path: str):
+    # Clean build artifacts (make clean or equivalent)
+    print("Cleaning build artifacts...")
+    clean_result = subprocess.run(
+        ['make', 'clean'],
+        cwd=actual_repo_path,
+        capture_output=True,
+        text=True,
+        timeout=60
+    )
+    if clean_result.returncode == 0:
+        print("✓ Build artifacts cleaned")
+    else:
+        print("make clean failed or not available (this is OK if no Makefile exists)")
+    
+    # Reset git repository state - discard all local changes
+    print("Resetting git repository state...")
+    subprocess.run(
+        ['git', 'reset', '--hard', 'HEAD'],
+        cwd=actual_repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    print("✓ Git repository reset to HEAD")
+    
+    # Clean untracked files and directories
+    print("Cleaning untracked files...")
+    subprocess.run(
+        ['git', 'clean', '-fd'], # Removed -x
+        cwd=actual_repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+# 
+# Old instrumented binary check functions (legacy)
+# 
 def check_coverage_binary_exists(
     target_repo_path: Path,
     cve_id: str,
@@ -154,7 +282,7 @@ def locate_instrumented_binary(
         
         if full_path.exists() and os.access(full_path, os.X_OK):
             # Check if it's a libtool wrapper script
-            if _is_libtool_wrapper(full_path):
+            if is_libtool_wrapper(full_path):
                 # Try to find actual binary in .libs directory
                 libs_binary = full_path.parent / '.libs' / full_path.name
                 if libs_binary.exists() and os.access(libs_binary, os.X_OK):
@@ -172,13 +300,13 @@ def locate_instrumented_binary(
         if executables:
             # Prefer binaries in build directories, and actual binaries over wrappers
             for exe in executables:
-                if 'build' in str(exe).lower() and not _is_libtool_wrapper(exe):
+                if 'build' in str(exe).lower() and not is_libtool_wrapper(exe):
                     logger.debug(f"Found binary at: {exe}")
                     return exe
             
             # If all are wrappers, try .libs version
             for exe in executables:
-                if _is_libtool_wrapper(exe):
+                if is_libtool_wrapper(exe):
                     libs_binary = exe.parent / '.libs' / exe.name
                     if libs_binary.exists() and os.access(libs_binary, os.X_OK):
                         logger.debug(f"Found actual binary (libtool): {libs_binary}")
@@ -190,12 +318,12 @@ def locate_instrumented_binary(
     logger.debug(f"Could not locate binary: {binary_name}")
     return None
 
-def _is_libtool_wrapper(path: Path) -> bool:
+def is_libtool_wrapper(path: Path) -> bool:
     """Check if a file is a libtool wrapper script
-    
+
     Args:
         path: Path to check
-        
+
     Returns:
         True if it's a libtool wrapper, False otherwise
     """
@@ -205,7 +333,3 @@ def _is_libtool_wrapper(path: Path) -> bool:
             return 'libtool' in first_lines.lower() and 'wrapper' in first_lines.lower()
     except:
         return False
-
-class BaseUtils:
-    # General utility functions for the project
-    pass

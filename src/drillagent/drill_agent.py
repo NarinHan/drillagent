@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
 from drillagent.models import LLM, LLMInterface, ConversationManager, UsageStats
-from drillagent.instrumentation import ConfigGeneratorAgent, DistanceAgent, CoverageInstrumentAgent
+from drillagent.instrumentation import DistanceAgent, CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
-from drillagent.utils.utils import check_coverage_binary_exists
+from drillagent.utils.utils import *
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -38,7 +38,7 @@ class DrillAgent:
         self.cve_id       = config.cve_id
         self.work_dir   = self.config.work_dir
         self.output_dir = self.config.output_dir
-        self.iteration = 0
+        self.iteration = 0 ##
         self.errors = []
 
         # LLM interfaces (We use different LLMs for different sub-tasks to optimize cost and performance)
@@ -53,11 +53,6 @@ class DrillAgent:
         # Path exploration results
         self.pov_candidates     = []
         self.coverage_data      = None
-        
-        # Instrumentation results
-        self.aflgo_config_path  = None # Path to AFLGo configuration file
-        self.instrumented_binary = None
-
         # Final analysis results
         self.crash_inputs = []         # Real PoV inputs that trigger the vulnerability
 
@@ -121,7 +116,7 @@ class DrillAgent:
         return logger
 
     def _init_components(self):
-        # Initialize all required components
+        # Initialize all required components (mainly LLM interfaces and tools)
         self.logger.info("Initializing components...")
 
         # Initialize old LLM interface (backward compatibility)
@@ -207,7 +202,6 @@ class DrillAgent:
                     logger=self.logger
                 )
                 self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
-
         except Exception as e:
             self.logger.error(f"Failed to initialize LLMInterface instances: {e}")
             # Fallback: keep them as None
@@ -217,105 +211,18 @@ class DrillAgent:
 
         self.logger.info("All components initialized")
 
-    def _clean_repository(self):
-        # Clean build artifacts and git repository state
-        self.logger.info("Cleaning repository...")
-
-        # Clean build artifacts (make clean or equivalent)
-        self.logger.info("Cleaning build artifacts...")
-        clean_result = subprocess.run(
-            ['make', 'clean'],
-            cwd=self.config.target_repo_path,
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        if clean_result.returncode == 0:
-            self.logger.info("✓ Build artifacts cleaned")
-        else:
-            self.logger.warning(f"make clean failed or not available (this is OK if no Makefile exists)")
-        
-        # Reset git repository state - discard all local changes
-        self.logger.info("Resetting git repository state...")
-        subprocess.run(
-            ['git', 'reset', '--hard', 'HEAD'],
-            cwd=self.config.target_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        self.logger.info("✓ Git repository reset to HEAD")
-        
-        # Clean untracked files and directories
-        self.logger.info("Cleaning untracked files...")
-        subprocess.run(
-            ['git', 'clean', '-fdx'],
-            cwd=self.config.target_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        self.logger.info("✓ Untracked files cleaned")
-
-    def _checkout_base_commit(self):
-        # Checkout the target repository to the specified base commit
-        self.logger.info(f"Checking out base commit: {self.config.base_commit}")
-
-        # Checkout the target commit
-        result = subprocess.run(
-            ['git', 'checkout', self.config.base_commit],
-            cwd=self.config.target_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-
-        self.logger.info(f"✓ Successfully checked out commit: {self.config.base_commit[:12]}...")
-        if result.stdout:
-            self.logger.debug(f"Git output: {result.stdout.strip()}")
-        
-        # Update git submodules
-        self.logger.info("Updating git submodules...")
-        result = subprocess.run(
-            ['git', 'submodule', 'update', '--init', '--recursive'],
-            cwd=self.config.target_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        self.logger.info("✓ Successfully updated git submodules")
-        if result.stdout:
-            self.logger.debug(f"Submodule output: {result.stdout.strip()}")
-
     def run(self) -> Dict[str, Any]:
-        """
-        Main orchestration workflow
-        Returns:
-            Dictionary containing analysis results and generated PoVs
-        """
+        # Main orchestration workflow
+        # Returns: Dict containing analysis results and generated PoVs
         print("")
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
 
-        # Checkout the base commit for the target repository
+        # Checkout the base commit for the target repository is provided!
         assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
 
         try:
-            # Always check if coverage instrumentation already exists
-            existing_binary = check_coverage_binary_exists(
-                target_repo_path=Path(self.config.target_repo_path),
-                cve_id=self.config.cve_id,
-                logger=self.logger
-            )
-            if existing_binary:
-                self.logger.info(f"✓ Using existing coverage-instrumented binary: {existing_binary}")
-                self.coverage_binary = existing_binary
-                # Disable coverage instrumentation since binary already exists
-                self.config.enable_coverage = False
-            else:
-                self.logger.info("No existing coverage-instrumented binary found; proceeding with instrumentation")
-            
             # Phase 1: Code Instrumentation
             if not self.skip_instrumentation:
                 self._phase_instrumentation()
@@ -334,7 +241,6 @@ class DrillAgent:
 
             # Mark as completed
             self.phase = "completed"
-
             return self._generate_report()
 
         except Exception as e:
@@ -347,91 +253,58 @@ class DrillAgent:
         self.logger.info("\n[Phase 1] Code Instrumentation")
         self.phase = "instrumentation"
 
-        # Step 1: Always ensure AFLGo configuration exists (for all CVE instances)
-        self.logger.info("  - Checking AFLGo configuration...")
-        try:
-            # Get project root for paths
-            project_root = Path(__file__).resolve().parent.parent.parent
-            
-            # Check if config already exists in instrumentation_configs
-            instrumentation_configs_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
-            existing_configs = list(instrumentation_configs_dir.glob(f"*.{self.config.cve_id.lower()}.yaml"))
-            
-            if existing_configs:
-                # Use existing config
-                config_path = existing_configs[0]
-                self.aflgo_config_path = str(config_path)
-                self.logger.info(f"    ✓ Using existing config: {config_path.name}")
-            else:
-                # Generate new config from CVE instance using ConfigGeneratorAgent
-                self.logger.info("    - Initializing ConfigGeneratorAgent...")
-                config_generator = ConfigGeneratorAgent(self)
-                
-                # Instance files are named: {project}.{cve-id}.json (e.g., exiv2.cve-2017-14857.json)
-                instance_path = project_root / 'datasets' / 'sec-bench' / 'CVE-instances' / f"{self.project_name}.{self.config.cve_id.lower()}.json"
-                
-                # Generate config for AFLGo instrumentation - save to instrumentation_configs
-                output_path = instrumentation_configs_dir / f"{self.project_name}.{self.config.cve_id.lower()}.yaml"
-                
-                self.logger.info(f"    - Generating config from: {instance_path.name}")
-                config_yaml = config_generator.generate_config(instance_path, output_path)
-                
-                # Store config path for later use
-                self.aflgo_config_path = str(output_path)
-                self.logger.info(f"    ✓ AFLGo config generated: {output_path}")
-        except Exception as e:
-            self.logger.error(f"    Failed to ensure AFLGo config: {e}")
-            self.errors.append(f"Config generation failed: {e}")
-            self.aflgo_config_path = None
-
-        # Step 2: Run AFLGo instrumentation if enabled
-        if self.config.enable_distance:
-            self.logger.info("  - Running AFLGo instrumentation...")
-            
-            # Load the YAML config file into a dictionary
-            with open(self.aflgo_config_path, 'r') as f:
-                config_dict = yaml.safe_load(f)
-            
-            instrumentation_agent = DistanceAgent(
-                config=config_dict,
-                llm=self.llm,
-                logger=self.logger
-            )
-            
-            # Execute the full instrumentation workflow
-            result = instrumentation_agent.run()
-            if result['success']:
-                self.logger.info(f"    ✓ AFLGo instrumentation completed: {result.get('instrumented_binary')}")
-                self.instrumented_binary = result.get('instrumented_binary')
-            else:
-                self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
-                self.errors.append(f"AFLGo instrumentation failed: {result.get('error')}")
+        # Substep 1: check if coverage instrumentation already exists
+        existing_binary = check_coverage_binary_exists(
+            target_repo_path=Path(self.config.target_repo_path),
+            cve_id=self.config.cve_id,
+            logger=self.logger
+        )
+        if existing_binary:
+            self.logger.info(f"✓ Using existing coverage-instrumented binary: {existing_binary}")
         else:
-            self.logger.info("  - AFLGo instrumentation disabled (enable_distance=False)")
+            self.logger.info("No existing coverage-instrumented binary found; proceeding with instrumentation")
+        
+        # Clean and checkout before instrumentation
+        self.logger.info("Cleaning repository...")
+        clean_gitrepo(self.config.target_repo_path)
+        self.logger.info("✓ Untracked files cleaned")
 
-        # Step 3: Build with coverage instrumentation
-        if self.config.enable_coverage:
-            self.logger.info("  - Building with coverage instrumentation...")
-            coverage_agent = CoverageInstrumentAgent(self)
-            
-            # Clean and checkout before instrumentation
-            self._clean_repository()
-            self._checkout_base_commit()
+        self.logger.info(f"Checking out base commit: {self.config.base_commit}")
+        checkout_gitrepo_commit(self.config.target_repo_path, self.config.base_commit)
+        self.logger.info("✓ Base commit checked out")
 
-            # Run coverage instrumentation
-            result = coverage_agent.run()
-                
-            if result['success']:
-                self.logger.info(f"    ✓ Coverage instrumentation completed")
-                self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
-                self.coverage_binary = result.get('instrumented_binary')
-            else:
-                self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
-                self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-        if self.config.enable_sanitizer:
-            self.logger.info("  - Applying memory sanitizer...")
-            # sanitized_binary = self.memory_sanitizer.instrument(self.config.target_repo)
-            self.logger.info("    TODO: Implement memory sanitizer")
+        # Substep 2: Build with coverage instrumentation
+        self.logger.info("  - Building with coverage instrumentation...")
+        coverage_agent = CoverageInstrumentAgent(self)
+        result = coverage_agent.run()
+        if result['success']:
+            self.logger.info(f"    ✓ Coverage instrumentation completed")
+            self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
+        else:
+            self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
+            self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
+        
+        # Substep 3: Memory sanitizer instrumentation (TODO)
+        self.logger.info("    To be developed: Implement memory sanitizer instrumentation.")
+
+        # # Run distance calculation if enabled
+        # self.logger.info("  - Running distance calculation...")
+        # # Load the YAML config file into a dictionary
+        # with open(self.aflgo_config_path, 'r') as f: # LHY: self.aflgo_config_path is not used anymore.
+        #     config_dict = yaml.safe_load(f)
+        # # Initialize DistanceAgent
+        # instrumentation_agent = DistanceAgent(
+        #     config=config_dict,
+        #     llm=self.llm,
+        #     logger=self.logger
+        # )
+        # # Execute the full instrumentation workflow
+        # result = instrumentation_agent.run()
+        # if result['success']:
+        #     self.logger.info(f"    ✓ Distance calculation completed: {result.get('instrumented_binary')}")
+        # else:
+        #     self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
+        #     self.errors.append(f"Distance calculation failed: {result.get('error')}")
 
         self.logger.info("  ✓ Instrumentation phase completed")
 
@@ -489,6 +362,7 @@ class DrillAgent:
     def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
         self.logger.info("\n[Phase 4] Crash Triggering and PoV Validation")
+        self.phase = "triggering"
 
         # Step 1: Analyze the vulnerability from a pwner perspective.
 

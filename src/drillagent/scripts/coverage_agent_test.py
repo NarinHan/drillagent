@@ -3,7 +3,6 @@
 Coverage Agent Test Script
 
 Test script for testing CoverageInstrumentAgent functionality.
-Similar to main_test.py but focused on coverage instrumentation.
 """
 
 import argparse
@@ -194,10 +193,6 @@ def main():
         api_key=args.api_key,
         output_dir=args.output_dir,
         verbose=args.verbose,
-        # Enable only coverage instrumentation for this test
-        enable_coverage=True,
-        enable_distance=False,
-        enable_sanitizer=False,
         # disable_program_instrumentation=True,
         # Skip other phases
         disable_vulnerability_analysis=True,

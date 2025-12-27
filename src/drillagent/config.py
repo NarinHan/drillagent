@@ -52,22 +52,10 @@ class AgentConfig:
     # Instrumentation options are not needed (LHY: The instrumentation choice should be fixed by us.)
 
     #
-    # Instrumentation options
-    #
-    enable_coverage: bool = True    # Enable coverage instrumentation
-    enable_distance: bool = True    # Enable distance calculation for AFLGo
-    enable_sanitizer: bool = True   # Enable memory sanitizer
-
-    #
     # Analysis options
     #
     max_iterations: int = 10
     timeout: int = 1200  # in seconds # 20mins
-
-    # Instrumentation options
-    enable_coverage: bool = False   # Enable coverage instrumentation
-    enable_distance: bool = False   # Enable distance calculation for guided fuzzing
-    enable_sanitizer: bool = False  # Enable memory sanitizer
 
     # 
     # Output options

@@ -149,8 +149,7 @@ class VulnAnalysisAgent:
             
             self.logger.info(f"  [VulnAnalysisAgent] Extraction complete!")
         
-        # Substep2: Refine harness command
-        # TODO: raw_harness_command could be used for cross checking.
+        # Substep2: Refine harness command (now this is a static refinement, not dependent on the completed compilation)
         if raw_harness_command and len(raw_harness_command) > 0:
             self.logger.info(f"  [VulnAnalysisAgent] Refining harness command...")
             self.logger.info(f"  [VulnAnalysisAgent] Raw harness command: {raw_harness_command}")
