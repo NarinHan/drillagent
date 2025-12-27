@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 import os
 import sys
-import yaml
 import json
 import logging
-import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
-from drillagent.models import LLM, LLMInterface, ConversationManager, UsageStats
-from drillagent.instrumentation import DistanceAgent, CoverageInstrumentAgent
+from drillagent.models import LLM, LLMInterface
+from drillagent.instrumentation import CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.utils.utils import *
@@ -278,18 +276,21 @@ class DrillAgent:
         self.logger.info("\n[Phase 2] Code Instrumentation")
         self.phase = "instrumentation"
 
+        target_repo_path = self.config.target_repo_path
+        binary_relative_path = self.vulnerability_info.binary_path
+
         # Substep 1: check if llvm-cov instrumented binary already exists
         existing_binary = check_llvmcov_binary_exists(
-            actual_repo_path=self.config.target_repo_path,
-            binary_relative_path=self.vulnerability_info.binary_path
+            actual_repo_path=target_repo_path,
+            binary_relative_path=binary_relative_path
         )
         if existing_binary:
             matched_commit = compare_gitrepo_commit(
-                actual_repo_path=self.config.target_repo_path,
+                actual_repo_path=target_repo_path,
                 base_commit=self.config.base_commit
             )
             if matched_commit:
-                tmp_path_str = f"{self.config.target_repo_path}/{self.vulnerability_info.binary_path}"
+                tmp_path_str = f"{target_repo_path}/{binary_relative_path}"
                 self.logger.info(f"✓ Found existing coverage-instrumented binary at {tmp_path_str}, built from commit {self.config.base_commit}")
                 self.logger.info(f"✓ Skipping instrumentation phase...")
                 return
@@ -300,11 +301,11 @@ class DrillAgent:
         
         # Before compiling, clean repository and checkout target commit.
         self.logger.info("Cleaning repository...")
-        clean_gitrepo(self.config.target_repo_path)
+        clean_gitrepo(target_repo_path)
         self.logger.info("✓ Untracked files cleaned")
 
         self.logger.info(f"Checking out base commit: {self.config.base_commit}")
-        checkout_gitrepo_commit(self.config.target_repo_path, self.config.base_commit)
+        checkout_gitrepo_commit(target_repo_path, self.config.base_commit)
         self.logger.info("✓ Base commit checked out")
 
         # Substep 2: Build source code with coverage instrumentation
