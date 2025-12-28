@@ -319,6 +319,7 @@ class DrillAgent:
         else:
             self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
             self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
+            exit(1) # Cannot proceed without coverage-instrumented binary
         
         # Substep 3: Build source code with memory sanitizer instrumentation (TODO)
         self.logger.info("To be developed: Implement memory sanitizer instrumentation.")

@@ -155,6 +155,7 @@ class CoverageInstrumentAgent(BaseInstrAgent):
         cov_flags = ' '.join(self.coverage_flags)
         
         # Initialize flags to empty if they might be used in expansions
+        # TODO: "#!/bin/bash -eu" will duplicate. 
         modified = f'''#!/bin/bash -eu
 # Coverage instrumentation flags
 COV_FLAGS="{cov_flags}"
@@ -200,7 +201,28 @@ LDFLAGS="${{LDFLAGS:-}}"
                 r'\1CC=clang CXX=clang++ cmake -DCMAKE_C_FLAGS="$COV_FLAGS $CFLAGS" -DCMAKE_CXX_FLAGS="$COV_FLAGS $CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$COV_FLAGS $LDFLAGS" ',
                 modified
             )
-        # Pattern 4: Direct make without configure
+        # Pattern 4: Rake/minirake builds
+        elif re.search(r'(mini)?rake', modified.lower()):
+            # For rake builds: insert exports before the first rake command
+            # This handles all rake formats: ./rake, minirake, rake clean, rake all, etc.
+            self.logger.debug("Detected Rake/minirake build, injecting coverage flags")
+
+            # Find the first rake/minirake command and insert exports before it
+            # Pattern matches: rake, minirake, ./rake, ./minirake (optionally followed by arguments like clean/all)
+            rake_pattern = r'(\n\s*)((?:\./)?(?:mini)?rake(?:\s+\w+)?)'
+            if re.search(rake_pattern, modified, re.IGNORECASE):
+                modified = re.sub(
+                    rake_pattern,
+                    r'\1export CC=clang\n\1export CXX=clang++\n\1export CFLAGS="$COV_FLAGS $CFLAGS"\n\1export CXXFLAGS="$COV_FLAGS $CXXFLAGS"\n\1export LDFLAGS="$COV_FLAGS $LDFLAGS"\n\1\2',
+                    modified,
+                    count=1,  # Only insert before the first rake command
+                    flags=re.IGNORECASE
+                )
+                self.logger.info("Injected coverage flags before rake command!!")
+            else:
+                self.logger.warning("Could not find rake command to inject coverage flags")
+
+        # Pattern 5: Direct make without configure
         else:
             # Ensure CC/CXX and flags are exported before make
             if 'make' in modified and 'export CC' not in modified:
@@ -240,40 +262,39 @@ LDFLAGS="${{LDFLAGS:-}}"
             self.logger.debug("No Docker patterns detected in build commands")
             return build_commands
         
-        if self.drill_agent.llm:
-            # Use LLM for intelligent path replacement
-            self.logger.info("Using LLM to replace Docker paths with actual repository path")
-            
-            prompt = CIA_replace_docker_paths_prompt.format(
-                target_repo=self.target_repo,
-                project_name=self.project_name,
-                build_commands=build_commands
+        # Use LLM for intelligent path replacement
+        self.logger.info("Using LLM to replace Docker paths with actual repository path")
+        
+        prompt = CIA_replace_docker_paths_prompt.format(
+            target_repo=self.target_repo,
+            project_name=self.project_name,
+            build_commands=build_commands
+        )
+        
+        try:
+            response = self.drill_agent.llm.generate(
+                prompt=prompt,
+                system_prompt=CIA_system_prompt,
+                temperature=0.1,
+                max_tokens=2048
             )
             
-            try:
-                response = self.drill_agent.llm.generate(
-                    prompt=prompt,
-                    system_prompt=CIA_system_prompt,
-                    temperature=0.1,
-                    max_tokens=2048
-                )
-                
-                # Clean up response - remove any markdown code blocks
-                response = response.strip()
-                if response.startswith('```'):
-                    lines = response.split('\n')
-                    # Remove first and last line if they're code block markers
-                    if lines[0].startswith('```'):
-                        lines = lines[1:]
-                    if lines and lines[-1].startswith('```'):
-                        lines = lines[:-1]
-                    response = '\n'.join(lines)
-                
-                self.logger.info(f"LLM replaced Docker paths:\n{response}")
-                return response
-                
-            except Exception as e:
-                self.logger.warning(f"LLM path replacement failed: {e}. Falling back to regex.")
+            # Clean up response - remove any markdown code blocks
+            response = response.strip()
+            if response.startswith('```'):
+                lines = response.split('\n')
+                # Remove first and last line if they're code block markers
+                if lines[0].startswith('```'):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith('```'):
+                    lines = lines[:-1]
+                response = '\n'.join(lines)
+            
+            self.logger.info(f"LLM replaced Docker paths:\n{response}")
+            return response
+            
+        except Exception as e:
+            self.logger.warning(f"LLM path replacement failed: {e}. Falling back to regex.")
         
         # Fallback: Use regex-based replacement. Replace common Docker path patterns.
         self.logger.info("Using regex to replace Docker paths")
@@ -339,8 +360,8 @@ LDFLAGS="${{LDFLAGS:-}}"
         modified = re.sub(r'[ \t]+', ' ', modified)
         
         # Clean up spaces next to quotes that were left by removed flags
-        modified = re.sub(r'"\s+([^"\n])', r'" \1', modified)
-        modified = re.sub(r'([^"\n])\s+"', r'\1 "', modified)
+        # modified = re.sub(r'"\s+([^"\n])', r'" \1', modified)
+        # modified = re.sub(r'([^"\n])\s+"', r'\1 "', modified)
         
         if removed_flags:
             self.logger.info(f"Removed conflicting sanitizer flags: {', '.join(set(removed_flags))}")

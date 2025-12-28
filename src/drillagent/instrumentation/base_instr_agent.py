@@ -206,18 +206,18 @@ class BaseInstrAgent:
             )
             success = result.returncode == 0
             
+            if success:
+                self.logger.info("✓ Build completed successfully")
+            else:
+                self.logger.error(f"✗ Build failed with exit code {result.returncode}")
+            
             # Log output
             if result.stdout:
                 self.logger.debug(f"Build stdout:\n{result.stdout}")
             if result.stderr:
                 log_level = logging.DEBUG if success else logging.ERROR
                 self.logger.log(log_level, f"Build stderr:\n{result.stderr}")
-            
-            if success:
-                self.logger.info("✓ Build completed successfully")
-            else:
-                self.logger.error(f"✗ Build failed with exit code {result.returncode}")
-            
+
             return success, result.stdout, result.stderr
             
         except subprocess.TimeoutExpired:
