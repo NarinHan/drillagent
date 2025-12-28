@@ -16,6 +16,7 @@ def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str
 
     # Check if file exists
     if not binary_path.exists():
+        print(f"Target binary does not exist: {binary_path}")
         return False
 
     # Check if binary contains LLVM coverage symbols
@@ -26,7 +27,11 @@ def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str
             timeout=10
         )
         # grep -q returns 0 if pattern found, 1 if not found
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
+        else:
+            print(f"Target binary does not contain \"__llvm_profile\" strings: {binary_path}")
+            return False
     except Exception:
         return False
 
@@ -83,7 +88,7 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
     )
     print(f"✓ Successfully checked out commit: {base_commit[:12]}...")
     if result.stdout:
-        print(f"Git output: {result.stdout.strip()}")
+        print(f"Git checkout output: {result.stdout.strip()}")
     
     # Update git submodules
     print("Updating git submodules...")

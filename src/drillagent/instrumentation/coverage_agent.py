@@ -85,15 +85,14 @@ class CoverageInstrumentAgent(BaseInstrAgent):
             if success:
                 # Step 4: Test coverage instrumentation
                 # Current step: 'testing'
-                self.logger.info("Testing Coverage Instrumentation")
+                self.logger.info("Testing Coverage Instrumentation...")
                 
                 # Verify the binary exists and has coverage symbols
                 if check_llvmcov_binary_exists(
                     actual_repo_path=self.target_repo,
                     binary_relative_path=self.binary_path
                 ):
-                    self.logger.info(f"✓ Coverage instrumentation successful")
-                    self.logger.info(f"  Instrumented binary: {self.binary_path}")
+                    self.logger.info(f"  Detected qualified instrumented binary!")
                     return {
                         'success': True,
                         'instrumented_binary': str(self.binary_path),

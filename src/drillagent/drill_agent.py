@@ -25,12 +25,11 @@ class DrillAgent:
     def __init__(self, config: AgentConfig):
         # The only init parameter is the AgentConfig dataclass instance.
         self.config = config       # Include all the PoV task information and configuration options.
-        self.phase = "initialized" # TODO: initialized, analyzing, instrumented, exploring, completed
-        self.skip_instrumentation     = config.disable_program_instrumentation
-        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis 
-        self.skip_crash_trigger_analysis = config.disable_crash_trigger_analysis
-        self.skip_path_exploration = config.disable_path_exploration
-        self.skip_pov_generation = config.disable_pov_generation
+        self.phase = "initialized" # initialized, analyzing, instrumented, exploring, completed
+        self.skip_instrumentation        = config.disable_program_instrumentation
+        self.skip_vulnerability_analysis = config.disable_vulnerability_analysis
+        self.skip_path_exploration       = config.disable_path_exploration 
+        self.skip_crash_triggering       = config.disable_crash_triggering
 
         self.project_name = config.project_name
         self.cve_id       = config.cve_id
@@ -59,9 +58,10 @@ class DrillAgent:
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
-        self.logger.info(f"Skip instrumentation: {self.skip_instrumentation}")
         self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
-        self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_trigger_analysis}")
+        self.logger.info(f"Skip instrumentation:  {self.skip_instrumentation}")
+        self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
+        self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
 
     def _setup_logger(self) -> logging.Logger:
         # Setup logging for DrillAgent
@@ -234,7 +234,7 @@ class DrillAgent:
                 self._phase_path_exploration()
 
             # Phase 4: PoV Generation and Verification
-            if not self.skip_pov_generation:
+            if not self.skip_crash_triggering:
                 self._phase_crash_triggering()
 
             # Mark as completed
@@ -254,7 +254,7 @@ class DrillAgent:
         # Use VulnAnalysisAgent for structured vulnerability analysis
         try:
             vuln_agent = VulnAnalysisAgent(self)
-            self.logger.info("  - Initialized VulnAnalysisAgent!")
+            self.logger.info("Initialized VulnAnalysisAgent!")
 
             # Run the analysis 
             # Store the returned VulnInfo object into DrillAgent's field directly!
@@ -263,7 +263,7 @@ class DrillAgent:
             # Print the formatted vulnerability analysis results
             vuln_info_str = self.vulnerability_info.format_output()
             print(vuln_info_str)
-            self.logger.info("  ✓ Vulnerability analysis completed")
+            self.logger.info("✓ Vulnerability analysis completed")
 
         except Exception as e:
             self.logger.error(f"  Failed to analyze vulnerability: {e}", exc_info=True)
@@ -292,35 +292,36 @@ class DrillAgent:
             if matched_commit:
                 tmp_path_str = f"{target_repo_path}/{binary_relative_path}"
                 self.logger.info(f"✓ Found existing coverage-instrumented binary at {tmp_path_str}, built from commit {self.config.base_commit}")
+                self.logger.info(f"    Binary relative path: {binary_relative_path}")
                 self.logger.info(f"✓ Skipping instrumentation phase...")
                 return
             else:
-                self.logger.info("Existing coverage-instrumented binary found, but built from a different commit. Proceeding with instrumentation")
+                self.logger.info("Existing qualified coverage-instrumented binary found, but built from a different commit. Proceeding with instrumentation")
         else:
-            self.logger.info("No existing coverage-instrumented binary found. Proceeding with instrumentation")
+            self.logger.info("No existing qualified coverage-instrumented binary found. Proceeding with instrumentation")
         
         # Before compiling, clean repository and checkout target commit.
         self.logger.info("Cleaning repository...")
         clean_gitrepo(target_repo_path)
-        self.logger.info("✓ Untracked files cleaned")
+        self.logger.info("✓ Cleaning finished!")
 
         self.logger.info(f"Checking out base commit: {self.config.base_commit}")
         checkout_gitrepo_commit(target_repo_path, self.config.base_commit)
-        self.logger.info("✓ Base commit checked out")
+        self.logger.info("✓ Checked out Base commit!")
 
         # Substep 2: Build source code with coverage instrumentation
         self.logger.info("  - Building with coverage instrumentation...")
-        coverage_agent = CoverageInstrumentAgent(self)
+        coverage_agent = CoverageInstrumentAgent(self, target_repo_path, binary_relative_path)
         result = coverage_agent.run()
         if result['success']:
-            self.logger.info(f"    ✓ Coverage instrumentation completed")
-            self.logger.info(f"      Binary: {result.get('instrumented_binary')}")
+            self.logger.info(f"✓ \"{self.project_name}\" coverage instrumentation completed.")
+            self.logger.info(f"    Binary relative path: {result.get('instrumented_binary')}")
         else:
             self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
             self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
         
-        # Substep 3: Memory sanitizer instrumentation (TODO)
-        self.logger.info("    To be developed: Implement memory sanitizer instrumentation.")
+        # Substep 3: Build source code with memory sanitizer instrumentation (TODO)
+        self.logger.info("To be developed: Implement memory sanitizer instrumentation.")
 
         # # Run distance calculation if enabled
         # self.logger.info("  - Running distance calculation...")
@@ -341,7 +342,7 @@ class DrillAgent:
         #     self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
         #     self.errors.append(f"Distance calculation failed: {result.get('error')}")
 
-        self.logger.info("  ✓ Instrumentation phase completed")
+        self.logger.info("✓ Instrumentation phase completed")
 
     def _phase_path_exploration(self):
         """Phase 3: Coverage-guided path exploration"""
@@ -353,7 +354,7 @@ class DrillAgent:
         # Utilize PathExplorationAgent to reach the vulnerable function
         try:
             path_agent = PathExplorationAgent(self)
-            self.logger.info("  - Initialized PathExplorationAgent!")
+            self.logger.info("Initialized PathExplorationAgent!")
 
             # Run the path exploration process
             path_agent.run()
@@ -367,7 +368,7 @@ class DrillAgent:
             self.logger.error(f"  Failed to run path exploration: {e}", exc_info=True)
             self.errors.append(f"Path exploration failed: {e}")
 
-        self.logger.info("  ✓ Path exploration completed")
+        self.logger.info("✓ Path exploration completed")
         self.logger.info(f"  - Total PoV candidates generated: {len(self.pov_candidates)}")
 
     def _phase_crash_triggering(self):
@@ -383,7 +384,7 @@ class DrillAgent:
 
         # Step 4: Generate summary report
 
-        self.logger.info("  ✓ Crash triggering analysis completed")
+        self.logger.info("✓ Crash triggering analysis completed")
         # successful_povs = sum(1 for c in self.pov_candidates if c.get('status') == 'generated')
         # self.logger.info(f"\n  ✓ PoV generation completed: {successful_povs}/{len(self.pov_candidates)} successful")
 

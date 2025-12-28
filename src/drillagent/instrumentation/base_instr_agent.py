@@ -145,7 +145,7 @@ class BaseInstrAgent:
                 return True, build_log
             
             # Record error
-            self.record_error(error, context=f"Build attempt {attempt}")
+            self.record_error(error)
             
             # If we have more attempts and LLM is available, ask for help
             if attempt < attempts and self.drill_agent.llm:
@@ -187,8 +187,8 @@ class BaseInstrAgent:
             Tuple of (success, stdout, stderr)
         """
         try:
-            self.logger.info(f"Executing build in {cwd}")
-            self.logger.debug(f"Build commands: \n{build_commands}")
+            self.logger.info(f"Building source code in {cwd} ...")
+            self.logger.debug(f"Executing build commands: \n{build_commands}")
             
             # Use provided env or copy current environment
             build_env = env if env is not None else os.environ.copy()

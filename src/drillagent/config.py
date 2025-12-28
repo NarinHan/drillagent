@@ -37,14 +37,11 @@ class AgentConfig:
     # Ablation options
     # 
     # By default, we will conduct all the inplemented analyses.
-    disable_program_instrumentation: bool    = False
     disable_vulnerability_analysis: bool     = False
-    disable_project_structure_analysis: bool = False
-    # TODO: Some options are too redundant and should be removed.
+    disable_program_instrumentation: bool    = False
     disable_path_exploration: bool           = False
-    disable_pov_generation: bool             = False
-    disable_coverage_feedback: bool          = False
-    disable_crash_trigger_analysis: bool     = False
+    disable_crash_triggering: bool           = False
+    disable_project_structure_analysis: bool = False # To be discussed
     disable_advanced_agent_tools: bool       = False # To be discussed
     disable_in_context_rl: bool              = False # To be discussed
     # More fine-grained ablation options can be added here.
@@ -101,11 +98,11 @@ class AgentConfig:
         # print(f"  Model Name:         {self.model_name}")
 
         print("\n[Ablation Options]")
-        print(f"  Disable Program Instrumentation:       {self.disable_program_instrumentation}")
         print(f"  Disable Vulnerability Analysis:        {self.disable_vulnerability_analysis}")
+        print(f"  Disable Program Instrumentation:       {self.disable_program_instrumentation}")
+        print(f"  Disable Path Exploration:              {self.disable_path_exploration}")
+        print(f"  Disable Crash Trigger Analysis:        {self.disable_crash_triggering}")
         # print(f"  Disable Project Structure Analysis:    {self.disable_project_structure_analysis}")
-        # print(f"  Disable Coverage Feedback:             {self.disable_coverage_feedback}")
-        # print(f"  Disable Crash Trigger Analysis:        {self.disable_crash_trigger_analysis}")
         # print(f"  Disable Advanced Agent Tools:          {self.disable_advanced_agent_tools}")
         # print(f"  Disable In-Context RL:                 {self.disable_in_context_rl}")
 

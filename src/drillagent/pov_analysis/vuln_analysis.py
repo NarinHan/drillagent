@@ -771,7 +771,10 @@ class VulnInfo:
         if self.root_cause:
             lines.append("\n[ROOT CAUSE ANALYSIS]")
             # Handle multi-line root cause descriptions
-            root_cause_lines = self.root_cause.split('\n')
+            root_cause_lines = self.root_cause.split('\n') # all lines
+            # first 20 lines for simplicity
+            root_cause_lines = root_cause_lines[:20] 
+            root_cause_lines.append("...") if len(self.root_cause.split('\n')) > 20 else None
             for rc_line in root_cause_lines:
                 if rc_line.strip():
                     lines.append(f"  {rc_line}")
