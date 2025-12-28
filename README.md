@@ -13,10 +13,13 @@ Target datasets:
 
 ## Getting Started
 
-To test DrillAgent, just run:
+To test DrillAgent on SEC-bench tasks, just run:
 
 ```sh
-python3 src/drillagent/scripts/main_test.py --test-loader datasets/sec-bench/CVE-instances --instances libplist.cve-2017-5545
+python3 src/drillagent/scripts/single_secb_task.py \
+      --instance-id njs.cve-2022-27007 \
+      --repo-path /home/shared_project/repos-llvm-cov/njs \
+      --model-name gpt-5.1-2025-11-13
 ```
 
 All the entry points should be included in `src/drillagent/scripts/`. You can also add your own python script here.

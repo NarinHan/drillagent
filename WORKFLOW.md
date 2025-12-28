@@ -8,15 +8,15 @@
 
 ## Pipeline
 
-### 1. Preprocessing
-- Calculate code distance using static program analysis (distance from basic blocks to crash location).
-- Instrument with LLVM coverage (llvm-cov) to track code execution paths.
-- Instrument with memory sanitizers to detect runtime issues/crashes.
-
-### 2. Vulnerability Analysis
+### 1. Vulnerability Analysis
 - Extract and summarize the basic and structured vulnerability information from the sanitizer report.
 - Reasoning about the vulnerability root cause and critical triggering conditions / steps.
 - The analysis results can be used as part of the context for the subsequent stages.
+
+### 2. Binary Instrumentation
+- Instrument with LLVM coverage (llvm-cov) to track code execution paths.
+- Instrument with memory sanitizers to detect runtime issues/crashes. (useless for sec-bench, useful for real-world analysis settings)
+- Calculate code distance using static program analysis (distance from basic blocks to crash location). optional...
 
 ### 3. Cov-feedback Path Exploration
 - Generate test cases that can reach the crash location at branch level (may not trigger crash).

@@ -1,3 +1,7 @@
+# 
+# 2025.12.26: This file should be abandoned in the future...
+# 
+
 """
 Base Agent class for DrillAgent
 
@@ -268,6 +272,7 @@ class BaseAgent:
             
         return logger
     
+    # Still used by DistanceAgent...
     def query_llm(
         self,
         prompt: str,
@@ -355,6 +360,7 @@ class BaseAgent:
 
     # ==================== Build Execution Methods ====================
     # These methods provide common build functionality for instrumentation agents
+    # Below methods are fine.
     
     def run_build(
         self,

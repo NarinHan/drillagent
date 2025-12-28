@@ -1,3 +1,7 @@
+# 
+# 2025.12.26: This class has been abandoned and is no longer in use.
+# 
+
 #!/usr/bin/env python3
 """
 LLM-Driven AFLGo Config Generator

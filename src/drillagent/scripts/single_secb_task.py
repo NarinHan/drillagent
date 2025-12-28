@@ -184,14 +184,19 @@ Examples:
 
     # Ablation options
     parser.add_argument(
-        '--disable-instrumentation',
-        action='store_true', # This means the default is False
-        help='Skip Phase 1 (program instrumentation)'
-    )
-    parser.add_argument(
         '--disable-vuln-analysis',
         action='store_true',
-        help='Skip Phase 2 (vulnerability analysis)'
+        help='Skip Phase 1 (vulnerability analysis)'
+    )
+    parser.add_argument(
+        '--disable-instrumentation',
+        action='store_true', # This means the default is False
+        help='Skip Phase 2 (program instrumentation)'
+    )
+    parser.add_argument(
+        '--disable-path-exploration',
+        action='store_true',
+        help='Skip Phase 3 (path exploration)'
     )
     parser.add_argument(
         '--disable-crash-analysis',
@@ -269,7 +274,7 @@ def main():
         target_repo_path=args.repo_path,
         vuln_location=task.vuln_location,
         base_commit=task.base_commit,
-        build_sh=None,  # Skip build since project is assumed to be already built
+        build_sh=task.build_sh,
         harness_command=task.harness_command,
         sanitizer_report=task.sanitizer_report,
 
@@ -281,7 +286,8 @@ def main():
         # Ablation options
         disable_program_instrumentation=args.disable_instrumentation,
         disable_vulnerability_analysis=args.disable_vuln_analysis,
-        disable_crash_trigger_analysis=args.disable_crash_analysis,
+        disable_path_exploration=args.disable_path_exploration,
+        disable_crash_triggering=args.disable_crash_analysis,
 
         # Analysis options
         max_iterations=args.max_iterations,

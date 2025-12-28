@@ -190,7 +190,7 @@ Before finalizing your answer, re-verify that the line_number is > 0 (NEVER 0)!!
 """
 
 
-# Prompt for refining harness command
+# Prompt for refining harness command (Even if the binary may not be compiled yet, this refinement should still work)
 VAA_harness_refine_prompt = """You are refining a harness command to accurately run target program and reproduce a vulnerability.
 
 Project: {project_name}
@@ -204,17 +204,14 @@ Current harness command:
 
 Your tasks:
 
-1. **Locate the binary**: Find the actual executable binary in the repository
-   - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/
-   - Use find_file or list_dir tools to locate the binary
-   - Verify it exists and is executable
-
-2. **Extract binary_path**: The path RELATIVE to the repository root
-   - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
+1. **Extract and infer the binary_path**: The path RELATIVE to the repository root
+   - You can refer to the provided harness command to infer the path. Or read README doc to find the built binary program location.
+   - Note that the repository path may not be compiled yet, so the binary may not exist currently. You can still infer the expected binary path based on harness command.
+   - Format example: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
    - Must be relative to: {actual_repo_path}
-
-3. **Refine the command**: Create a command that can be run from any directory
-   - The command should be executable when run from arbitrary directories, so try to use absolute path for the binary program
+   
+2. **Refine the command**: Create a command that can be run from any directory
+   - The command should be executable when run from arbitrary directories, so try to construct absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
    - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
    - Example: /absolute/path/to/build/njs <path/to/testcase>
@@ -222,7 +219,7 @@ Your tasks:
 IMPORTANT PATH REQUIREMENTS:
 - binary_path must be RELATIVE to repository root: {actual_repo_path}
 - refined_harness_command must be runnable from any directory (i.e., the binary program in the command should use absolute path)
-- Verify the program file exists in the repository using tools if needed!!
+- For the binary_path, you don't have to verify its existence in the repository (it may not be compiled yet)! Just infer the expected path.
 
 Use the available tools (find_file, list_dir) to explore the repository structure.
 
@@ -241,8 +238,20 @@ Then output should be:
     "refined_harness_command": "/home/ubuntu/PoV/Repos/njs-cov/build/njs <path/to/testcase>"
 }}
 
-Be thorough. Verify paths exist before responding.
 """
+
+binary_path_verify_prompt = """"
+"""
+# Some of the prompt contents are removed to handle the code repo that has not been compiled yet, since VulnAnalysis may be earlier than Instrumentation check.
+# 1. **Locate the binary**: Find the actual executable binary in the repository
+#    - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/
+#    - Use find_file or list_dir tools to locate the binary
+#    - Verify it exists and is executable
+# 2. **Extract binary_path**: The path RELATIVE to the repository root
+#    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
+#    - Must be relative to: {actual_repo_path}
+# Verify the program file exists in the repository using tools if needed!!
+# Be thorough. Verify paths exist before responding.
 
 
 # Prompt for root cause analysis

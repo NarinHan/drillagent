@@ -20,7 +20,7 @@ if str(src_dir) not in sys.path:
 
 from drillagent.config import AgentConfig
 from drillagent.drill_agent import DrillAgent
-from drillagent.task_loader import RawSecbTaskLoader
+from drillagent.task_loader import RawSecbTaskLoader, SecbTask
 
 
 def load_api_key(args):
@@ -100,6 +100,7 @@ def find_repo_path(repos_dir: Path, project_name: str) -> Path:
     Looks for directories matching the project name (case-insensitive).
     Common patterns: project_name, project_name-cov, project_name-instrumented
     """
+    # TODO: We should maintain a mapping file from project names to repo names (e.g., php -> php-src).
     if not repos_dir.exists():
         raise FileNotFoundError(f"Repositories directory not found: {repos_dir}")
 
@@ -107,9 +108,21 @@ def find_repo_path(repos_dir: Path, project_name: str) -> Path:
     exact_match = repos_dir / project_name
     if exact_match.exists() and exact_match.is_dir():
         return exact_match
+    
+    # Use hard-encoded mapping for SEC-bench projects
+    secb_mappings = { # From project_name to repo_name
+        "libdwarf" : "libdwarf-code",
+        "php"      : "php-src",
+        # "yaml"     : "yaml-cpp"
+    }
+    if project_name in secb_mappings:
+        mapped_name = secb_mappings[project_name]
+        mapped_path = repos_dir / mapped_name
+        if mapped_path.exists() and mapped_path.is_dir():
+            return mapped_path
 
     # Try with common suffixes
-    for suffix in ['-cov', '-instrumented', '-coverage']:
+    for suffix in ['-cov', '-instrumented', '-coverage', '-src', '-cpp']:
         candidate = repos_dir / f"{project_name}{suffix}"
         if candidate.exists() and candidate.is_dir():
             return candidate
@@ -120,7 +133,7 @@ def find_repo_path(repos_dir: Path, project_name: str) -> Path:
         if item.is_dir() and item.name.lower() == project_lower:
             return item
         # Also check with suffixes
-        for suffix in ['-cov', '-instrumented', '-coverage']:
+        for suffix in ['-cov', '-instrumented', '-coverage', '-src', '-cpp']:
             if item.is_dir() and item.name.lower() == f"{project_lower}{suffix}":
                 return item
 
@@ -235,14 +248,19 @@ Examples:
 
     # Ablation options
     parser.add_argument(
-        '--disable-instrumentation',
-        action='store_true',
-        help='Skip Phase 1 (program instrumentation)'
-    )
-    parser.add_argument(
         '--disable-vuln-analysis',
         action='store_true',
-        help='Skip Phase 2 (vulnerability analysis)'
+        help='Skip Phase 1 (vulnerability analysis)'
+    )
+    parser.add_argument(
+        '--disable-instrumentation',
+        action='store_true',
+        help='Skip Phase 2 (program instrumentation)'
+    )
+    parser.add_argument(
+        '--disable-path-exploration',
+        action='store_true',
+        help='Skip Phase 3 (path exploration)'
     )
     parser.add_argument(
         '--disable-crash-analysis',
@@ -269,7 +287,7 @@ Examples:
     return parser.parse_args()
 
 
-def run_single_task(task, repo_path: Path, args, api_key: str, model_provider: str) -> Dict[str, Any]:
+def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_provider: str) -> Dict[str, Any]:
     """
     Run DrillAgent on a single task.
 
@@ -303,7 +321,7 @@ def run_single_task(task, repo_path: Path, args, api_key: str, model_provider: s
         target_repo_path=str(repo_path),
         vuln_location=task.vuln_location,
         base_commit=task.base_commit,
-        build_sh=None,  # Skip build since project is assumed to be already built
+        build_sh=task.build_sh,
         harness_command=task.harness_command,
         sanitizer_report=task.sanitizer_report,
 
@@ -315,7 +333,8 @@ def run_single_task(task, repo_path: Path, args, api_key: str, model_provider: s
         # Ablation options
         disable_program_instrumentation=args.disable_instrumentation,
         disable_vulnerability_analysis=args.disable_vuln_analysis,
-        disable_crash_trigger_analysis=args.disable_crash_analysis,
+        disable_path_exploration=args.disable_path_exploration,
+        disable_crash_triggering=args.disable_crash_analysis,
 
         # Analysis options
         max_iterations=args.max_iterations,
@@ -542,23 +561,24 @@ def main():
 
     # Save summary to file
     base_output_dir = Path(args.output_dir or "./output")
-    summary_file = Path(args.summary_file) if args.summary_file else base_output_dir / "summary.json"
-    summary_file.parent.mkdir(parents=True, exist_ok=True)
-
-    summary_data = {
-        'execution_time': datetime.now().isoformat(),
-        'model': args.model_name,
-        'model_provider': model_provider,
-        'total_tasks': len(tasks),
-        'successful': successful,
-        'failed': failed,
-        'results': results
-    }
-
-    with open(summary_file, 'w') as f:
-        json.dump(summary_data, f, indent=2)
-
-    print(f"\n✓ Summary saved to: {summary_file}")
+    if args.summary_file:
+        summary_file = Path(args.summary_file)
+        summary_file.parent.mkdir(parents=True, exist_ok=True)
+        summary_data = {
+            'execution_time': datetime.now().isoformat(),
+            'model': args.model_name,
+            'model_provider': model_provider,
+            'total_tasks': len(tasks),
+            'successful': successful,
+            'failed': failed,
+            'results': results
+        }
+        with open(summary_file, 'w') as f:
+            json.dump(summary_data, f, indent=2)
+        print(f"\n✓ Summary saved to: {summary_file}")
+    else:
+        summary_file = base_output_dir / "summary.json"
+        # But we do nothing here...
     print("=" * 70)
 
     # Exit with appropriate code

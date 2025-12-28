@@ -4,106 +4,47 @@ Coverage Instrumentation Agent
 
 This module provides the CoverageInstrumentAgent class for building target binaries
 with LLVM source-based code coverage instrumentation enabled.
-
-The agent:
-- Loads existing build configuration from datasets/sec-bench/instrumentation_configs
-- Injects LLVM coverage flags into the build commands
-- Executes the build with coverage instrumentation
-- Uses LLM assistance for error resolution if needed
 """
 
 import os
-import logging
-import yaml
 import re
-import glob
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from typing import Dict, Optional, Any, TYPE_CHECKING
 
-from drillagent.models.llm import LLM
-from drillagent.instrumentation.base_agent import BaseAgent, AgentState
-from drillagent.utils.utils import check_existing_coverage_instrumentation, locate_instrumented_binary
+from drillagent.instrumentation.base_instr_agent import BaseInstrAgent
+from drillagent.utils.utils import *
 from drillagent.prompts.CoverageInstrumentAgent_prompt import (
     CIA_system_prompt,
     CIA_replace_docker_paths_prompt
 )
 
+if TYPE_CHECKING:
+    from drillagent.drill_agent import DrillAgent
 
-class CoverageInstrumentAgent(BaseAgent):
-    """Coverage instrumentation agent using SEC-bench configs
-    
-    This agent loads build configurations from datasets/sec-bench/instrumentation_configs,
-    injects LLVM coverage flags, and builds the instrumented binary.
-    """
-    
-    SYSTEM_PROMPT = CIA_system_prompt
+class CoverageInstrumentAgent(BaseInstrAgent):
+    # Coverage instrumentation agent based on llvm-cov
 
-    def __init__(self, drill_agent):
-        """Initialize coverage instrumentation agent
+    def __init__(self, drill_agent: 'DrillAgent', target_repo_path: str, binary_relative_path: str):
+        # Initialize base instrumentation agent first
+        super().__init__(drill_agent)
         
-        Args:
-            drill_agent: DrillAgent instance containing config, llm, logger, etc.
-        """
-        self.drill_agent = drill_agent
-        self.config = drill_agent.config
-        self.llm = drill_agent.llm
-        self.logger = drill_agent.logger
-        
-        self.cve_id = self.config.cve_id
-        
-        if not self.cve_id:
-            raise ValueError("cve_id is required in config")
-        
-        # Load instrumentation config first to get project_name and repo_url
-        self.instr_config = self._load_instrumentation_config()
-        
-        # Extract project name from repo_url
-        repo_url = self.instr_config.get('repo_url', '')
-        if repo_url:
-            # Extract project name from URL like https://github.com/nginx/njs.git -> njs
-            self.project_name = repo_url.rstrip('/').rstrip('.git').split('/')[-1]
-        else:
-            raise ValueError(f"repo_url not found in instrumentation config for {self.cve_id}")
-        
-        # Use target_repo_path from drill_agent config
-        self.target_repo = Path(self.config.target_repo_path)
-        self.output_dir = Path(self.config.output_dir)
+        # 
+        self.target_repo = Path(target_repo_path)
+        self.binary_path = binary_relative_path
+        self.work_dir    = drill_agent.work_dir
+        self.output_dir  = drill_agent.config.output_dir
         
         # Coverage flags
         self.coverage_flags = [
             '-fprofile-instr-generate',
             '-fcoverage-mapping'
         ]
-        
-        # State tracking
-        self.state = AgentState(phase='initialized', max_attempts=3)
-        self.build_log = []
-        self.instrumented_binary_path = None
-        
-        self.logger.info(f"CoverageInstrumentAgent initialized for {self.project_name} {self.cve_id}")
-        self.logger.info(f"Target repository: {self.target_repo}")
 
-    def _load_instrumentation_config(self) -> Dict[str, Any]:
-        """Load instrumentation config from SEC-bench datasets
+        # Load instrumentation config first to get project_name and repo_url
+        # self.instr_config = self._load_instrumentation_config()
         
-        Returns:
-            Loaded configuration dictionary
-        """
-        # Find config file by CVE ID
-        # Config files are named: <project>.<cve-id>.yaml (e.g., njs.cve-2022-43284.yaml)
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent.parent
-        config_dir = project_root / 'datasets' / 'sec-bench' / 'instrumentation_configs'
-        
-        # Search for config file matching CVE ID
-        cve_pattern = f"*.{self.cve_id.lower()}.yaml"
-        config_path = list(config_dir.glob(cve_pattern))[0]
-        
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        return config
+        self.logger.info(f"CoverageInstrumentAgent initialized for {self.project_name} {self.drill_agent.cve_id}")
+        self.logger.info(f"Target repository: {self.target_repo}")
 
     def run(self) -> Dict[str, Any]:
         """Execute coverage instrumentation workflow
@@ -111,7 +52,7 @@ class CoverageInstrumentAgent(BaseAgent):
         Returns:
             Dictionary with keys:
                 - success: bool
-                - instrumented_binary: path to instrumented binary
+                - instrumented_binary: absolute path to instrumented binary
                 - build_log: list of build outputs
                 - error: error message if failed
         """
@@ -120,76 +61,62 @@ class CoverageInstrumentAgent(BaseAgent):
         self.logger.info("=" * 60)
         
         try:
-            # Phase 1: Inject coverage flags into build commands
-            self.state.phase = 'prepare_build'
+            # Step 1: Inject coverage flags into build commands
+            # Current step: 'prepare_build'
             modified_commands = self._inject_coverage_flags()
-            self.logger.info("Coverage flags injected into build commands")
+            self.logger.info("Coverage flags injected into build commands.")
             
-            # Phase 2: Prepare build environment
-            self.state.phase = 'prepare_environment'
-            build_env = self._prepare_environment()
-            self.logger.info("Build environment prepared")
+            # Step 2: Prepare build environment
+            # Current step: 'prepare_environment'
+            build_env_vars = self._prepare_environment_vars()
+            self.logger.info("Building environment prepared.")
             
-            # Phase 3: Execute build with retries using base class method
-            self.state.phase = 'build'
-            success, self.build_log = self.execute_build_with_retries(
+            # Step 3: Execute build with retries using base class method
+            # Current step: 'build'
+            success, self.build_log = self.execute_build_with_retries( #BaseInstrAgent
                 build_commands=modified_commands,
                 cwd=self.target_repo,
-                env=build_env,
-                project_name=self.project_name,
-                context=f"CVE: {self.cve_id}, Coverage instrumentation",
-                system_prompt=self.SYSTEM_PROMPT,
+                env=build_env_vars,
+                context=f"Project name: {self.project_name}, Coverage instrumentation",
+                system_prompt=CIA_system_prompt,
                 fallback_fixes=self._coverage_fallback_fixes,
-                on_success=self._on_build_success
             )
             
             if success:
-                # Phase 4: Test coverage instrumentation
-                self.state.phase = 'testing'
-                self.logger.info("=" * 60)
-                self.logger.info("Testing Coverage Instrumentation")
-                self.logger.info("=" * 60)
+                # Step 4: Test coverage instrumentation
+                # Current step: 'testing'
+                self.logger.info("Testing Coverage Instrumentation...")
                 
-                # Verify the binary has coverage symbols
-                verified_binary = check_existing_coverage_instrumentation(
-                    target_repo=self.target_repo,
-                    instr_config=self.instr_config,
-                    project_name=self.project_name,
-                    logger=self.logger
-                )
-                
-                # Check if coverage instrumentation test passed
-                if verified_binary:
-                    self.state.phase = 'complete'
-                    self.logger.info(f"✓ Coverage instrumentation successful")
-                    self.logger.info(f"  Instrumented binary: {self.instrumented_binary_path}")
-                    
+                # Verify the binary exists and has coverage symbols
+                if check_llvmcov_binary_exists(
+                    actual_repo_path=self.target_repo,
+                    binary_relative_path=self.binary_path
+                ):
+                    self.logger.info(f"  Detected qualified instrumented binary!")
                     return {
                         'success': True,
-                        'instrumented_binary': str(self.instrumented_binary_path),
+                        'instrumented_binary': str(self.binary_path),
                         'build_log': self.build_log,
                         'coverage_flags': self.coverage_flags
                     }
                 else:
-                    self.state.phase = 'failed'
+                    # TODO: If we can not find the qualified binary according to the path from VulnAnalysis, we may need to search the repo more smartly.
                     error_msg = 'No __llvm_profile symbols found in binary'
                     self.logger.error(f"Coverage instrumentation test failed: {error_msg}")
-                    
                     return {
                         'success': False,
                         'error': error_msg,
                         'build_log': self.build_log
                     }
+
             else:
-                self.state.phase = 'failed'
-                error_msg = f"Build failed after {self.state.attempts} attempts"
+                error_msg = f"Build failed after {self.attempts} attempts"
                 self.logger.error(error_msg)
-                
                 return {
                     'success': False,
                     'error': error_msg,
                     'build_log': self.build_log,
-                    'errors': self.state.errors
+                    'errors': self.errors
                 }
                 
         except Exception as e:
@@ -207,8 +134,7 @@ class CoverageInstrumentAgent(BaseAgent):
             Modified build commands with coverage flags
         """
         # Get original build commands
-        build_commands = self.instr_config.get('build_config', {}).get('build_commands', '')
-        
+        build_commands = self.drill_agent.config.build_sh
         if not build_commands:
             raise ValueError("No build commands found in instrumentation config")
         
@@ -238,7 +164,7 @@ LDFLAGS="${{LDFLAGS:-}}"
 
 {build_commands}
 '''
-        
+
         # Replace patterns that modify CFLAGS/CXXFLAGS to append to COV_FLAGS instead
         # Handle: export CFLAGS="$CFLAGS -flag" -> export CFLAGS="$COV_FLAGS $CFLAGS -flag"
         modified = re.sub(
@@ -289,6 +215,7 @@ LDFLAGS="${{LDFLAGS:-}}"
         return modified
 
     def _replace_docker_paths(self, build_commands: str) -> str:
+        # LLM: One-shot refinement.
         """Replace Docker absolute paths with actual repository path
         
         Uses LLM to intelligently replace paths like /src/openexr with the actual
@@ -313,7 +240,7 @@ LDFLAGS="${{LDFLAGS:-}}"
             self.logger.debug("No Docker patterns detected in build commands")
             return build_commands
         
-        if self.llm:
+        if self.drill_agent.llm:
             # Use LLM for intelligent path replacement
             self.logger.info("Using LLM to replace Docker paths with actual repository path")
             
@@ -324,9 +251,9 @@ LDFLAGS="${{LDFLAGS:-}}"
             )
             
             try:
-                response = self.llm.generate(
+                response = self.drill_agent.llm.generate(
                     prompt=prompt,
-                    system_prompt=self.SYSTEM_PROMPT,
+                    system_prompt=CIA_system_prompt,
                     temperature=0.1,
                     max_tokens=2048
                 )
@@ -348,40 +275,33 @@ LDFLAGS="${{LDFLAGS:-}}"
             except Exception as e:
                 self.logger.warning(f"LLM path replacement failed: {e}. Falling back to regex.")
         
-        # Fallback: Use regex-based replacement
+        # Fallback: Use regex-based replacement. Replace common Docker path patterns.
         self.logger.info("Using regex to replace Docker paths")
-        
-        # Replace common Docker path patterns
         modified = build_commands
-        
         # Pattern 1: /src/project_name → target_repo
         modified = re.sub(
             rf'/src/{re.escape(self.project_name)}(?=/|\s|$)',
             str(self.target_repo),
             modified
         )
-        
         # Pattern 2: /src/... → target_repo (if project name not in path)
         modified = re.sub(
             r'/src(?=/|\s|$)',
             str(self.target_repo),
             modified
         )
-        
         # Pattern 3: /out/... → target_repo
         modified = re.sub(
             r'/out(?=/|\s|$)',
             str(self.target_repo),
             modified
         )
-        
         # Pattern 4: /work/... → target_repo
         modified = re.sub(
             r'/work(?=/|\s|$)',
             str(self.target_repo),
             modified
         )
-        
         self.logger.debug(f"Regex replaced paths:\n{modified}")
         return modified
 
@@ -398,16 +318,15 @@ LDFLAGS="${{LDFLAGS:-}}"
         Returns:
             Build commands with sanitizer flags removed
         """
+        modified = build_commands
+        removed_flags = []
+        
         # Common sanitizer flags to remove
         sanitizer_patterns = [
             r'-fsanitize=\S+',           # Any -fsanitize flag
             r'-fno-sanitize-recover=\S+', # Sanitizer recovery flags
             r'-fsanitize-coverage=\S+',  # Sanitizer coverage flags (different from LLVM coverage)
         ]
-        
-        modified = build_commands
-        removed_flags = []
-        
         for pattern in sanitizer_patterns:
             matches = re.findall(pattern, modified)
             if matches:
@@ -430,7 +349,7 @@ LDFLAGS="${{LDFLAGS:-}}"
         
         return modified
 
-    def _prepare_environment(self) -> Dict[str, str]:
+    def _prepare_environment_vars(self) -> Dict[str, str]:
         """Prepare environment variables for build
         
         Returns:
@@ -448,23 +367,6 @@ LDFLAGS="${{LDFLAGS:-}}"
         env['COVERAGE_FLAGS'] = cov_flags_str
         
         return env
-
-    def _on_build_success(self, stdout: str, stderr: str) -> None:
-        """Callback when build succeeds - locate the instrumented binary
-        
-        Args:
-            stdout: Build stdout
-            stderr: Build stderr
-        """
-        # Locate the instrumented binary using utils function
-        binary = locate_instrumented_binary(
-            self.target_repo,
-            self.instr_config,
-            self.project_name,
-            self.logger
-        )
-        if binary:
-            self.instrumented_binary_path = binary
 
     def _coverage_fallback_fixes(self, error: str, build_commands: str) -> Optional[str]:
         """Coverage-specific fallback fixes when LLM doesn't provide a valid fix
@@ -495,12 +397,3 @@ LDFLAGS="${{LDFLAGS:-}}"
         
         return None
 
-    def _format_error_history(self) -> str:
-        """Format error history for LLM context"""
-        if not self.state.errors:
-            return "None"
-        
-        repeated = self.state.get_repeated_errors(threshold=1)
-        if repeated:
-            return "\n".join([f"- {sig[:100]}" for sig, count in repeated[:3]])
-        return "None"

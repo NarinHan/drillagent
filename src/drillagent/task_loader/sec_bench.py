@@ -23,7 +23,7 @@ class SecbTask:
     # Any additional fields from the JSON
     extra_fields: Dict = field(default_factory=dict)
     # Further parsed fields. (easy to extend if needed)
-    repo_name: str = ""  # e.g., "openssl" from "openssl.cve-2021-3711"
+    repo_name: str = ""  # e.g., "openssl" from "openssl.cve-2021-3711" # This concept is only used in this file.
     cve_id: Optional[str] = None
     vuln_location: Optional[str] = None 
     harness_command: Optional[str] = None
