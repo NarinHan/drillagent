@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Coverage Instrumentation Agent
 
@@ -13,7 +12,7 @@ from typing import Dict, Optional, Any, TYPE_CHECKING
 
 from drillagent.instrumentation.base_instr_agent import BaseInstrAgent
 from drillagent.utils.utils import *
-from drillagent.prompts.CoverageInstrumentAgent_prompt import (
+from drillagent.prompts.InstrumentationAgent_prompt import (
     CIA_system_prompt,
     CIA_replace_docker_paths_prompt
 )
@@ -28,7 +27,7 @@ class CoverageInstrumentAgent(BaseInstrAgent):
         # Initialize base instrumentation agent first
         super().__init__(drill_agent)
         
-        # 
+        # Basic attributes
         self.target_repo = Path(target_repo_path)
         self.binary_path = binary_relative_path
         self.work_dir    = drill_agent.work_dir
