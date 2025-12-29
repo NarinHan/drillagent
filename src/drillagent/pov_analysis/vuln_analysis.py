@@ -581,6 +581,7 @@ class VulnAnalysisAgent:
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
             self.vuln_info.root_cause = f"Root cause analysis failed: {e}"
 
+    # TODO: This part is too simple for now, improve this identification in the future if needed (LHY).
     def _identify_critical_steps(self):
         # Identify critical function call steps for vulnerability triggering.
         # LLM uses tools to read code and identify which frames are critical vs non-critical.
