@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple, Callable, Optional, TYPE_CHECKING
 
 from drillagent.prompts.BaseAgent_prompt import (
-    BA_build_error_system_prompt,
     BA_diagnose_build_error_prompt
 )
 
@@ -204,19 +203,17 @@ class BaseInstrAgent:
                 text=True,
                 timeout=timeout
             )
-            success = result.returncode == 0
-            
+            success = (result.returncode == 0)
             if success:
                 self.logger.info("✓ Build completed successfully")
             else:
                 self.logger.error(f"✗ Build failed with exit code {result.returncode}")
-            
-            # Log output
-            if result.stdout:
-                self.logger.debug(f"Build stdout:\n{result.stdout}")
-            if result.stderr:
-                log_level = logging.DEBUG if success else logging.ERROR
-                self.logger.log(log_level, f"Build stderr:\n{result.stderr}")
+                # Log output only when failed.
+                if result.stdout:
+                    self.logger.debug(f"Build stdout:\n{result.stdout}")
+                if result.stderr:
+                    log_level = logging.DEBUG if success else logging.ERROR
+                    self.logger.log(log_level, f"Build stderr:\n{result.stderr}")
 
             return success, result.stdout, result.stderr
             
@@ -245,16 +242,13 @@ class BaseInstrAgent:
             output: Standard output from build (stdout)
             build_commands: Current build commands
             context: Additional context (e.g., CVE ID, build phase)
-            system_prompt: Custom system prompt (uses default if None)
+            system_prompt: Custom system prompt
             fallback_fixes: Optional callback for agent-specific fallback fixes
                            Signature: (error, build_commands) -> Optional[fixed_commands]
             
         Returns:
             Updated build commands if fix found, None otherwise
         """
-        # Use custom or default system prompt
-        sys_prompt = system_prompt or BA_build_error_system_prompt
-        
         # Build the diagnostic prompt
         prompt = BA_diagnose_build_error_prompt.format(
             project_name=self.project_name,
@@ -267,7 +261,7 @@ class BaseInstrAgent:
         try:
             response = self.drill_agent.llm.generate(
                 prompt=prompt,
-                system_prompt=sys_prompt,
+                system_prompt=system_prompt,
                 temperature=0.2,
                 max_tokens=2048
             )

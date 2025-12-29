@@ -36,6 +36,10 @@ mruby's Rakefile is incompatible with the installed Ruby version (3.0) - The sys
 
 The error occurs at line 40 of mruby's Rakefile - This is a Ruby syntax/API compatibility issue in mruby's build system itself, unrelated to your coverage flags.
 
+### php.cve-2018-12882
+
+Although php.cve-2017-12933 can be instrumented successfully, php.cve-2018-12882 even cannot finished the basic compilation.
+
 ### qpdf
 
 We are building a very old qpdf against a newer glibc toolchain.

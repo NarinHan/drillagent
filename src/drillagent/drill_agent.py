@@ -248,7 +248,7 @@ class DrillAgent:
 
     def _phase_vulnerability_analysis(self):
         """Phase 1: Analyze vulnerability using LLM"""
-        self.logger.info("\n[Phase 1] Vulnerability Analysis")
+        self.logger.info("[Phase 1] Vulnerability Analysis")
         self.phase = "analyzing"
 
         # Use VulnAnalysisAgent for structured vulnerability analysis
@@ -273,7 +273,7 @@ class DrillAgent:
 
     def _phase_instrumentation(self):
         """Phase 2: Instrument the target binary with coverage and sanitizers"""
-        self.logger.info("\n[Phase 2] Code Instrumentation")
+        self.logger.info("[Phase 2] Code Instrumentation")
         self.phase = "instrumentation"
 
         target_repo_path = self.config.target_repo_path
@@ -309,7 +309,10 @@ class DrillAgent:
         checkout_gitrepo_commit(target_repo_path, self.config.base_commit)
         self.logger.info("✓ Checked out Base commit!")
 
-        # Substep 2: Build source code with coverage instrumentation
+        # Substep 2: Build source code with memory sanitizer instrumentation (TODO)
+        self.logger.info("To be developed: Implement memory sanitizer instrumentation.")
+
+        # Substep 3: Build source code with coverage instrumentation
         self.logger.info("  - Building with coverage instrumentation...")
         coverage_agent = CoverageInstrumentAgent(self, target_repo_path, binary_relative_path)
         result = coverage_agent.run()
@@ -319,10 +322,7 @@ class DrillAgent:
         else:
             self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
             self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-            exit(1) # Cannot proceed without coverage-instrumented binary
-        
-        # Substep 3: Build source code with memory sanitizer instrumentation (TODO)
-        self.logger.info("To be developed: Implement memory sanitizer instrumentation.")
+            # exit(1) # Cannot proceed without coverage-instrumented binary
 
         # # Run distance calculation if enabled
         # self.logger.info("  - Running distance calculation...")
@@ -347,7 +347,7 @@ class DrillAgent:
 
     def _phase_path_exploration(self):
         """Phase 3: Coverage-guided path exploration"""
-        self.logger.info("\n[Phase 3] Path Exploration")
+        self.logger.info("[Phase 3] Path Exploration")
         self.phase = "exploring"
 
         max_iterations = self.config.max_iterations
@@ -374,7 +374,7 @@ class DrillAgent:
 
     def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
-        self.logger.info("\n[Phase 4] Crash Triggering and PoV Validation")
+        self.logger.info("[Phase 4] Crash Triggering and PoV Validation")
         self.phase = "triggering"
 
         # Step 1: Analyze the vulnerability from a pwner perspective.

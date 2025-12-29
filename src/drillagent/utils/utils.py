@@ -9,6 +9,43 @@ def get_file_size(file_path: str) -> int:
     # Get the size of a file in bytes.
     return os.path.getsize(file_path)
 
+def is_text_file(file_path: str) -> bool:
+    # Check if a file is a text file using the file command.
+    # Returns True if the file is a text file, False otherwise
+    try:
+        result = subprocess.run(
+            ['file', '--mime-type', file_path],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            # Output format: "filename: text/plain" or "filename: application/octet-stream"
+            mime_type = result.stdout.strip().split(':', 1)[-1].strip()
+            return mime_type.startswith('text/')
+        return False
+    except Exception:
+        return False
+
+def is_binary_file(file_path: str) -> bool:
+    # Check if a file is an ELF binary file using the file command.
+    # Returns True if the file is an ELF binary (executable or shared library), False otherwise
+    try:
+        result = subprocess.run(
+            ['file', file_path],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            # Output format for ELF files: "filename: ELF 64-bit LSB executable, ..." or
+            # "filename: ELF 64-bit LSB shared object, ..."
+            file_type = result.stdout.strip()
+            return 'ELF' in file_type
+        return False
+    except Exception:
+        return False
+
 def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str) -> bool:
     # Check if a binary exists and contains LLVM coverage instrumentation
     # Returns True if binary exists and contains __llvm_profile symbols, False otherwise
@@ -132,7 +169,7 @@ def clean_gitrepo(actual_repo_path: str):
     # Clean untracked files and directories
     print("Cleaning untracked files...")
     subprocess.run(
-        ['git', 'clean', '-fd'], # Removed -x
+        ['git', 'clean', '-fdx'], # If set -x, also removes files ignored by .gitignore!
         cwd=actual_repo_path,
         capture_output=True,
         text=True,

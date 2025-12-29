@@ -61,9 +61,14 @@ class CoverageInstrumentAgent(BaseInstrAgent):
         self.logger.info("=" * 60)
         
         try:
+            # Get basic build commands
+            basic_build_cmds = self.drill_agent.config.build_sh
+            if not basic_build_cmds:
+                raise ValueError("No build commands found in instrumentation config")
+            
             # Step 1: Inject coverage flags into build commands
             # Current step: 'prepare_build'
-            modified_commands = self._inject_coverage_flags()
+            modified_commands = self._inject_coverage_flags(basic_build_cmds)
             self.logger.info("Coverage flags injected into build commands.")
             
             # Step 2: Prepare build environment
@@ -127,17 +132,12 @@ class CoverageInstrumentAgent(BaseInstrAgent):
                 'build_log': self.build_log
             }
 
-    def _inject_coverage_flags(self) -> str:
+    def _inject_coverage_flags(self, build_commands: str) -> str:
         """Inject coverage flags into build commands from config
         
         Returns:
             Modified build commands with coverage flags
         """
-        # Get original build commands
-        build_commands = self.drill_agent.config.build_sh
-        if not build_commands:
-            raise ValueError("No build commands found in instrumentation config")
-        
         # Step 1: Remove Docker-specific commands that will fail locally
         build_commands = re.sub(
             r'\nmkdir\s+-p\s+/(?:src|out|testcase|work)\S*\s*',
@@ -233,7 +233,7 @@ LDFLAGS="${{LDFLAGS:-}}"
                     1  # Only replace first occurrence
                 )
         
-        self.logger.debug(f"Modified build commands:\n{modified}")
+        # self.logger.debug(f"Modified build commands:\n{modified}")
         return modified
 
     def _replace_docker_paths(self, build_commands: str) -> str:
