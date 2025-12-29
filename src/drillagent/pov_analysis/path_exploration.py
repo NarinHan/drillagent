@@ -590,7 +590,7 @@ class PathExplorationAgent:
         """
         Check if we should stop path exploration based on execution results.
         - Exit code 127: Command not found (raises error)
-        - Exit code 139/-11: Segmentation fault/crash (updates crash_input_pov)
+        - Exit code 139/-11: Segmentation fault/crash (updates crash_input_pov, also stores test case to files in output_dir)
         - Other potential stop conditions
         Returns:
             bool: True if a crash input pov is found, False otherwise

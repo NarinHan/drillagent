@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Callable, Optional, TYPE_CHECKING
 
-from drillagent.prompts.BaseAgent_prompt import (
+from drillagent.prompts.InstrumentationAgent_prompt import (
     BA_diagnose_build_error_prompt
 )
 
