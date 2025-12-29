@@ -13,6 +13,7 @@ from drillagent.instrumentation import CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.utils.utils import *
+from drillagent.utils.tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool, FuncLineCovTool
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -43,6 +44,9 @@ class DrillAgent:
         self.basic_llm: LLMInterface     = None
         self.reasoning_llm: LLMInterface = None
         self.low_cost_llm:  LLMInterface = None
+        # LLM agent tools
+        self.agent_tools: List[Any] = []
+        self.agent_cov_tools: List[Any] = []
 
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
@@ -131,7 +135,6 @@ class DrillAgent:
             self.llm = None
 
         # Initialize agent tools for LLM
-        from drillagent.utils.tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool
         try:
             self.agent_tools = [
                 ReadFileTool(self.config.target_repo_path),
@@ -141,9 +144,12 @@ class DrillAgent:
                 TreeTool(self.config.target_repo_path)
             ]
             self.logger.info(f"✓ Agent tools initialized: {len(self.agent_tools)} tools available")
+            self.agent_cov_tools = [
+                FuncLineCovTool(self.config.target_repo_path)
+            ]
+            self.logger.info(f"✓ Coverage agent tools initialized: {len(self.agent_cov_tools)} tools available")
         except Exception as e:
             self.logger.error(f"Failed to initialize agent tools: {e}")
-            self.agent_tools = []
 
         # Initialize new LLMInterface instances
         # We use different models for different sub-tasks to optimize cost and performance
@@ -323,25 +329,6 @@ class DrillAgent:
             self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
             self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
             # exit(1) # Cannot proceed without coverage-instrumented binary
-
-        # # Run distance calculation if enabled
-        # self.logger.info("  - Running distance calculation...")
-        # # Load the YAML config file into a dictionary
-        # with open(self.aflgo_config_path, 'r') as f: # LHY: self.aflgo_config_path is not used anymore.
-        #     config_dict = yaml.safe_load(f)
-        # # Initialize DistanceAgent
-        # instrumentation_agent = DistanceAgent(
-        #     config=config_dict,
-        #     llm=self.llm,
-        #     logger=self.logger
-        # )
-        # # Execute the full instrumentation workflow
-        # result = instrumentation_agent.run()
-        # if result['success']:
-        #     self.logger.info(f"    ✓ Distance calculation completed: {result.get('instrumented_binary')}")
-        # else:
-        #     self.logger.error(f"    Failed to instrument binary: {result.get('error')}")
-        #     self.errors.append(f"Distance calculation failed: {result.get('error')}")
 
         self.logger.info("✓ Instrumentation phase completed")
 
