@@ -725,14 +725,14 @@ class VulnInfo:
             critical_steps=data.get('critical_steps', {}),
         )
 
-    def format_output(self) -> str:
+    def format_output(self, skip_rca_result=False) -> str:
         lines = []
         lines.append("=" * 80)
         lines.append("VULNERABILITY ANALYSIS RESULTS")
         lines.append("=" * 80)
         # Section 1: Vulnerability Details
         lines.append("[VULNERABILITY DETAILS]")
-        lines.append(f"  Type:              {self.vuln_type if self.vuln_type else 'N/A'}")
+        lines.append(f"  Vuln Type:              {self.vuln_type if self.vuln_type else 'N/A'}")
         lines.append(f"  Crash Location:    {self.refined_vuln_location if self.refined_vuln_location else 'N/A'}")
         lines.append(f"  Crash Function:    {self.crash_function if self.crash_function else 'N/A'}")
         lines.append(f"  Entry Location:    {self.entry_location if self.entry_location else 'N/A'}")
@@ -769,13 +769,13 @@ class VulnInfo:
         else:
             lines.append("  N/A")
         # Section 4: Root Cause Analysis
-        if self.root_cause:
+        if self.root_cause and not skip_rca_result:
             lines.append("\n[ROOT CAUSE ANALYSIS]")
             # Handle multi-line root cause descriptions
             root_cause_lines = self.root_cause.split('\n') # all lines
-            # first 20 lines for simplicity
-            root_cause_lines = root_cause_lines[:20] 
-            root_cause_lines.append("...") if len(self.root_cause.split('\n')) > 20 else None
+            # first 20 lines for simplicity (update: should not limit here, full details needed)
+            # root_cause_lines = root_cause_lines[:20] #
+            # root_cause_lines.append("...") if len(self.root_cause.split('\n')) > 20 else None #
             for rc_line in root_cause_lines:
                 if rc_line.strip():
                     lines.append(f"  {rc_line}")
@@ -787,6 +787,10 @@ class VulnInfo:
         lines.append("=" * 80)
         # print('\n'.join(lines))
         return '\n'.join(lines)
+
+    def get_full_root_cause(self) -> str:
+        # Get the full root cause analysis text
+        return self.root_cause if self.root_cause else "N/A"
 
     def get_refined_call_trace_as_string(self) -> str:
         # Get the refined call trace as a formatted string
