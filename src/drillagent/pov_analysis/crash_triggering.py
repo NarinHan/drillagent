@@ -5,7 +5,7 @@ import re
 import resource
 from datetime import datetime
 
-from typing import Tuple, Any, TYPE_CHECKING
+from typing import Tuple, Dict, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
 
@@ -28,12 +28,40 @@ class CrashTriggerAgent:
         self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
 
-        # Input files.
-        self.history_pov_candidates = []  # List of file paths to all generated test cases.
+        # Input files. (three files should be enough)
+        self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
+        # Output files.
+        self.history_pov_candidates = []  # List of file paths to all test cases generated during crash triggering.
         self.final_pov = None             # The final PoV that successfully triggers a crash.
 
     def run(self) -> None:
-        self.logger.info("  [CrashTriggerAgent] Starting crash triggering attempts...")
+        self.logger.info("  [CrashTriggerAgent] Starting running. Checking previous path exploration results...")
+
+        # Before all: Examine the progress from previous path exploration.
+        path_agent = self.drill_agent.path_agent
+        if path_agent is not None:
+            # Check if we already have a crash input
+            if path_agent.crash_input_pov is not None:
+                is_validated = self._validate_pov(path_agent.crash_input_pov)
+                if is_validated:
+                    self.logger.info("  [CrashTriggerAgent] Valid crash input found from path exploration phase! Using it as final PoV.")
+                    self.final_pov = path_agent.crash_input_pov
+                    return
+                else:
+                    self.logger.info("  [CrashTriggerAgent] Crash input from path exploration did not validate successfully. Proceeding with crash triggering attempts...")
+            else:
+                self.logger.info("  [CrashTriggerAgent] Starting crash triggering attempts...")
+
+            # Fill useful_testcase_paths with up to 3 testcases
+            # First from vfunc_reached_testcases (reversed), then from history_testcases (reversed)
+            if path_agent.vfunc_reached_testcases:
+                self.useful_testcase_paths.extend(list(reversed(path_agent.vfunc_reached_testcases)))
+            if len(self.useful_testcase_paths) < 3 and path_agent.history_testcases:
+                remaining = 3 - len(self.useful_testcase_paths)
+                self.useful_testcase_paths.extend(list(reversed(path_agent.history_testcases))[:remaining])
+            # Ensure we have at most 3 testcases
+            self.useful_testcase_paths = self.useful_testcase_paths[:3]
+            assert len(self.useful_testcase_paths) > 0, "No useful test cases found from path exploration!"
 
         # Main loop for crash triggering attempts
         for iteration in range(1, self.max_trigger_iterations + 1):
@@ -109,22 +137,32 @@ class CrashTriggerAgent:
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
         root_cause_str = self.drill_agent.vulnerability_info.get_full_root_cause()
 
-        # Gather path exploration feedback from the last few rounds
-        # We'll summarize the last 3 test cases from history_pov_candidates
-        # TODO: Maybe this should implement in PathExplorationAgent and expose an interface 🤔
-        path_exploration_feedback = self._format_path_exploration_feedback()
+        # Try to prepare and provide previously-generated useful test cases.
+        if len(self.useful_testcase_paths) > 0:
+            # Transform self.useful_testcase_paths into a string containing several test case paths.
+            # Each testcase path and its corresponding coverage_record.md are included.
+            tmp_paths = []
+            for testcase_path in self.useful_testcase_paths:
+                tmp_paths.append(testcase_path)
+                dir_path = os.path.dirname(testcase_path)
+                coverage_path = os.path.join(dir_path, "coverage_record.md")
+                tmp_paths.append(coverage_path)
+            path_exploration_progress = "\n".join(tmp_paths)
+        else:
+            path_exploration_progress = "No useful test cases available from path exploration. You have to generate PoV from current knowledge."
 
         # Step 2: Use LLMInterface to generate the final PoV
         # Format the prompt for PoV generation
         prompt = CTA_final_pov_generation_prompt.format(
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
-            vulnerability_info=vuln_info_str,
+            vulnerability_info=vuln_info_str,   # Including vuln type, call trace, etc.
             root_cause_analysis=root_cause_str,
-            path_exploration_feedback=path_exploration_feedback
+            path_exploration_progress=path_exploration_progress
         )
 
         self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
+        # TODO: The llvm-cov tool usage should be further taught out.
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=prompt,
             tools=self.tools,  # Allow LLM to use tools for exploration
@@ -225,56 +263,7 @@ class CrashTriggerAgent:
         self.logger.info(f"  [CrashTriggerAgent] Command exit code: {exit_code}")
         return exit_code, exec_output
 
-    def _format_path_exploration_feedback(self) -> str:
-        # Format feedback from PathExplorationAgent's test case history
-        # Returns a formatted string summarizing the last few test case attempts
-        # TODO: This should be further thought out and improved (LHY).
-        feedback_lines = []
-        feedback_lines.append("=" * 80)
-        feedback_lines.append("PATH EXPLORATION FEEDBACK")
-        feedback_lines.append("=" * 80)
-
-        # Check if we have access to path exploration agent's history
-        if not hasattr(self.drill_agent, 'path_exploration_agent'):
-            feedback_lines.append("No path exploration history available.")
-            return '\n'.join(feedback_lines)
-
-        pea = self.drill_agent.path_exploration_agent
-
-        # Show crash input if found during path exploration
-        if hasattr(pea, 'crash_input_pov') and pea.crash_input_pov:
-            feedback_lines.append("\n[CRASH INPUT FOUND DURING PATH EXPLORATION]")
-            crash_info = pea.crash_input_pov
-            feedback_lines.append(f"  Iteration: {crash_info.get('iteration', 'N/A')}/{crash_info.get('max_iterations', 'N/A')}")
-            feedback_lines.append(f"  Exit Code: {crash_info.get('exit_code', 'N/A')}")
-            feedback_lines.append(f"  Test Case: {crash_info.get('testcase_path', 'N/A')}")
-            feedback_lines.append(f"  Saved PoV: {crash_info.get('saved_pov_path', 'N/A')}")
-            feedback_lines.append("\nThis crash input can serve as a strong baseline for the final PoV!")
-
-        # Show summary of last 3 test case attempts
-        if hasattr(pea, 'history_pov_candidates') and pea.history_pov_candidates:
-            num_to_show = min(3, len(pea.history_pov_candidates))
-            feedback_lines.append(f"\n[RECENT TEST CASE ATTEMPTS] (Last {num_to_show} of {len(pea.history_pov_candidates)})")
-
-            # Show last N test cases
-            for idx, testcase_path in enumerate(pea.history_pov_candidates[-num_to_show:], 1):
-                feedback_lines.append(f"\n  Test Case {len(pea.history_pov_candidates) - num_to_show + idx}: {testcase_path}")
-                # Try to read a preview of the test case
-                try:
-                    if os.path.exists(testcase_path):
-                        with open(testcase_path, 'r', errors='replace') as f:
-                            content_preview = f.read(200)  # First 200 chars
-                            feedback_lines.append(f"    Preview: {content_preview[:100]}...")
-                            feedback_lines.append(f"    Size: {len(content_preview)} bytes (showing first 100)")
-                except Exception as e:
-                    feedback_lines.append(f"    (Could not read test case: {e})")
-        else:
-            feedback_lines.append("\nNo test case history available from path exploration.")
-
-        feedback_lines.append("=" * 80)
-        return '\n'.join(feedback_lines)
-
-    def _validate_pov(self, pov_data: Any) -> bool:
+    def _validate_pov(self, pov_data: Dict) -> bool:
         # Validate the generated PoV by checking if it triggers a crash (segmentation fault, memory errors, etc.)
         # pov_data: dict containing 'testcase_path', 'exit_code', 'exec_output', etc.
         # Returns: True if PoV is valid (triggers crash), False otherwise

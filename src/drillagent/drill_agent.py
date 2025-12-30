@@ -28,7 +28,7 @@ class DrillAgent:
         # The only init parameter is the AgentConfig dataclass instance.
         self.config = config       # Include all the PoV task information and configuration options.
         self.phase = "initialized" # initialized, analyzing, instrumented, exploring, completed
-        self.skip_instrumentation        = config.disable_program_instrumentation
+        self.skip_code_instrumentation        = config.disable_program_instrumentation
         self.skip_vulnerability_analysis = config.disable_vulnerability_analysis
         self.skip_path_exploration       = config.disable_path_exploration 
         self.skip_crash_triggering       = config.disable_crash_triggering
@@ -71,7 +71,7 @@ class DrillAgent:
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
         self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
-        self.logger.info(f"Skip instrumentation:  {self.skip_instrumentation}")
+        self.logger.info(f"Skip instrumentation:  {self.skip_code_instrumentation}")
         self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
         self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
 
@@ -240,8 +240,8 @@ class DrillAgent:
                 self._phase_vulnerability_analysis()
 
             # Phase 2: Code Instrumentation
-            if not self.skip_instrumentation:
-                self._phase_instrumentation()
+            if not self.skip_code_instrumentation:
+                self._phase_code_instrumentation()
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:
@@ -286,7 +286,7 @@ class DrillAgent:
             # Keep the VulnInfo instance but mark it with error in root_cause field
             self.vulnerability_info.root_cause = f"Analysis failed: {e}"
 
-    def _phase_instrumentation(self):
+    def _phase_code_instrumentation(self):
         """Phase 2: Instrument the target binary with coverage and sanitizers"""
         print("\n")
         self.logger.info("[Phase 2] Code Instrumentation")
@@ -383,12 +383,13 @@ class DrillAgent:
             self.crash_agent.run()
 
             # Extract final PoV result
-            if self.crash_agent.final_pov:
+            final_pov = self.crash_agent.final_pov
+            if final_pov:
                 self.logger.info(f"  ✓ Final PoV successfully generated and validated!")
-                self.logger.info(f"  - PoV path: {self.crash_agent.final_pov['pov_path']}")
-                self.logger.info(f"  - Found at iteration: {self.crash_agent.final_pov['iteration']}")
+                self.logger.info(f"  - PoV path: {final_pov['pov_path']}.")
+                # self.logger.info(f"  - Found at iteration: {final_pov['iteration']}")
             else:
-                self.logger.warning(f"  ✗ No valid PoV generated after {self.crash_agent.max_trigger_iterations} iterations")
+                self.logger.warning(f"  ✗ No valid PoV generated after {self.crash_agent.current_trigger_iteration} iterations")
                 self.errors.append("Crash triggering failed: No valid PoV found")
 
         except Exception as e:
@@ -396,8 +397,6 @@ class DrillAgent:
             self.errors.append(f"Crash triggering failed: {e}")
 
         self.logger.info("✓ Crash triggering analysis completed")
-        # successful_povs = sum(1 for c in self.pov_candidates if c.get('status') == 'generated')
-        # self.logger.info(f"\n  ✓ PoV generation completed: {successful_povs}/{len(self.pov_candidates)} successful")
 
     def _generate_report(self) -> Dict[str, Any]:
         """Generate final analysis report"""
@@ -433,13 +432,12 @@ class DrillAgent:
         return report
 
 
-@dataclass
-class AnalysisState:
-    # LHY: Not use it currently, but kept for reference.
-    # Track the state of vulnerability analysis
-    phase: str = "initialized"  # initialized, instrumented, analyzing, exploring, completed
-    crash_inputs: List[str] = field(default_factory=list)
-    pov_candidates: List[Dict] = field(default_factory=list)
-    iteration: int = 0
-
+# # Not use it currently, but kept for reference.
+# @dataclass
+# class AnalysisState:
+#     # Track the state of vulnerability analysis
+#     phase: str = "initialized"  # initialized, instrumented, analyzing, exploring, completed
+#     crash_inputs: List[str] = field(default_factory=list)
+#     pov_candidates: List[Dict] = field(default_factory=list)
+#     iteration: int = 0
 

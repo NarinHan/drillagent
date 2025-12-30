@@ -25,9 +25,9 @@ ROOT CAUSE ANALYSIS:
 
 {root_cause_analysis}
 
-PATH EXPLORATION FEEDBACK:
+PATH EXPLORATION PROGRESS:
 
-{path_exploration_feedback}
+{path_exploration_progress}
 
 YOUR TASK:
 

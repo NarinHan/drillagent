@@ -44,7 +44,7 @@ class PathExplorationAgent:
 
         # All of the intermediate PoV results should be stored, and can be passed to next agent easily.
         self.history_testcases = []       # List of file paths to all generated test cases.
-        self.vfunc_reached_testcases = [] # List of test cases that reached the vulnerable function.
+        self.vfunc_reached_testcases = [] # List of file paths to test cases that reached the vulnerable function.
         self.crash_input_pov = None       # A dict initialized when triggering segmentation fault.
         ## crash_input_pov['saved_pov_path']: The path where the crash PoV is saved in output_dir.
 
@@ -101,6 +101,7 @@ class PathExplorationAgent:
                 f.write(coverage_record)
 
             ## Special B: Check vuln_func reached early-stop after inspecting coverage
+            ## If we disable here's "break", the agent will continue to explore branch-level coverage.
             if first_uncovered_frame is None:
                 self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered. Stopping early.")
                 self.vfunc_reached_testcases.append(test_case_path)
