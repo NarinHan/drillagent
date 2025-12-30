@@ -49,6 +49,13 @@ class DrillAgent:
         self.agent_tools: List[Any] = []
         self.agent_cov_tools: List[Any] = []
 
+        # Sub-agents: These can be used for inter-communication.
+        self.vuln_agent: VulnAnalysisAgent           = None
+        self.coverage_agent: CoverageInstrumentAgent = None
+        self.path_agent: PathExplorationAgent        = None
+        self.crash_agent: CrashTriggerAgent          = None
+
+
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD
@@ -261,12 +268,12 @@ class DrillAgent:
 
         # Use VulnAnalysisAgent for structured vulnerability analysis
         try:
-            vuln_agent = VulnAnalysisAgent(self)
+            self.vuln_agent = VulnAnalysisAgent(self)
             self.logger.info("Initialized VulnAnalysisAgent!")
 
             # Run the analysis 
             # Store the returned VulnInfo object into DrillAgent's field directly!
-            self.vulnerability_info = vuln_agent.run()
+            self.vulnerability_info = self.vuln_agent.run()
 
             # Print the formatted vulnerability analysis results
             vuln_info_str = self.vulnerability_info.format_output()
@@ -323,8 +330,8 @@ class DrillAgent:
 
         # Substep 3: Build source code with coverage instrumentation
         self.logger.info("  - Building with coverage instrumentation...")
-        coverage_agent = CoverageInstrumentAgent(self, target_repo_path, binary_relative_path)
-        result = coverage_agent.run()
+        self.coverage_agent = CoverageInstrumentAgent(self, target_repo_path, binary_relative_path)
+        result = self.coverage_agent.run()
         if result['success']:
             self.logger.info(f"✓ \"{self.project_name}\" coverage instrumentation completed.")
             self.logger.info(f"    Binary relative path: {result.get('instrumented_binary')}")
@@ -341,20 +348,18 @@ class DrillAgent:
         self.logger.info("[Phase 3] Path Exploration")
         self.phase = "exploring"
 
-        max_iterations = self.config.max_iterations
-
         # Utilize PathExplorationAgent to reach the vulnerable function
         try:
-            path_agent = PathExplorationAgent(self)
+            self.path_agent = PathExplorationAgent(self)
             self.logger.info("Initialized PathExplorationAgent!")
 
             # Run the path exploration process
-            path_agent.run()
+            self.path_agent.run()
 
-            # Extract exploration results
-            self.pov_candidates = path_agent.history_pov_candidates
-
-            # TODO: Print the formatted exploration results
+            # Print the formatted exploration results
+            self.logger.info(f"Generated {len(self.path_agent.history_testcases)} test cases in total during path exploration.")
+            self.logger.info(f"  - {len(self.path_agent.vfunc_reached_testcases)} reached the vulnerable function.")
+            self.logger.info(60 * "-")
 
         except Exception as e:
             self.logger.error(f"  Failed to run path exploration: {e}", exc_info=True)
@@ -371,19 +376,19 @@ class DrillAgent:
 
         # Utilize CrashTriggerAgent to generate and validate final PoV
         try:
-            crash_agent = CrashTriggerAgent(self)
+            self.crash_agent = CrashTriggerAgent(self)
             self.logger.info("Initialized CrashTriggerAgent!")
 
             # Run the crash triggering process
-            crash_agent.run()
+            self.crash_agent.run()
 
             # Extract final PoV result
-            if crash_agent.final_pov:
+            if self.crash_agent.final_pov:
                 self.logger.info(f"  ✓ Final PoV successfully generated and validated!")
-                self.logger.info(f"  - PoV path: {crash_agent.final_pov['pov_path']}")
-                self.logger.info(f"  - Found at iteration: {crash_agent.final_pov['iteration']}")
+                self.logger.info(f"  - PoV path: {self.crash_agent.final_pov['pov_path']}")
+                self.logger.info(f"  - Found at iteration: {self.crash_agent.final_pov['iteration']}")
             else:
-                self.logger.warning(f"  ✗ No valid PoV generated after {crash_agent.max_trigger_iterations} iterations")
+                self.logger.warning(f"  ✗ No valid PoV generated after {self.crash_agent.max_trigger_iterations} iterations")
                 self.errors.append("Crash triggering failed: No valid PoV found")
 
         except Exception as e:

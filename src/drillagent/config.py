@@ -51,6 +51,7 @@ class AgentConfig:
     #
     # Analysis options
     #
+    # 2025.12.30: Currently not put into use.
     max_iterations: int = 10
     timeout: int = 1200  # in seconds # 20mins
 

@@ -1,5 +1,4 @@
 import os
-import json
 import subprocess
 import shutil
 import re
@@ -25,7 +24,7 @@ from drillagent.utils.llvm_cov import LLVMCovUtils
 # 
 class PathExplorationAgent:
     # Responsible for exploring paths leading to vulnerabilities, fully utilizing the coverage feedback.
-    # LHY: The goal of this agent is to at least generate a PoV that can reach the vulnerable function, better if in branch-level.
+    # The goal of this agent is to at least generate a PoV that can reach the vulnerable function, better if in branch-level.
 
     def __init__(self, drill_agent: 'DrillAgent'):
         self.drill_agent = drill_agent
@@ -34,23 +33,30 @@ class PathExplorationAgent:
         self.tools = drill_agent.agent_tools
 
         # In each exploration, the agent will generate a PoV test case, execute it, and collect coverage feedback.
-        # After LLM reasoning about the current status, the agent will repeat the above process until stopped.
+        # The outermost-loop counters:
         self.max_exp_iterations = 8
         self.current_exp_iteration = 0
 
-        # For coverage collection
+        # Fields for coverage collection
         self.llvm_cov_utils : LLVMCovUtils = None
         self.vuln_call_trace = self.drill_agent.vulnerability_info.call_trace # Obtained from VulnAnalysisAgent directly
         # self.coverage_state = dict()  # e.g., covered functions/branches
 
-        # LHY: All of the intermediate PoV results should be stored, and we should maintain a best PoV candidate.
-        self.history_pov_candidates = []  # List of file paths to all generated test cases.
-        self.crash_input_pov = None       # A dict initilized in _detect_stop_status function when causing segmentation fault.
-        # crash_input_pov['saved_pov_path']: The path where the crash PoV is saved in output_dir.
+        # All of the intermediate PoV results should be stored, and can be passed to next agent easily.
+        self.history_testcases = []       # List of file paths to all generated test cases.
+        self.vfunc_reached_testcases = [] # List of test cases that reached the vulnerable function.
+        self.crash_input_pov = None       # A dict initialized when triggering segmentation fault.
+        ## crash_input_pov['saved_pov_path']: The path where the crash PoV is saved in output_dir.
 
     def run(self) -> None:
         # Run the path exploration process to generate PoV candidates that can reach the vulnerable function.
         self.logger.info("  [PathExplorationAgent] Starting path exploration analysis...")
+
+        # Clear all the previous roundN directories if exist
+        for i in range(1, self.max_exp_iterations+1+4):
+            round_dir = self._get_round_dir(i)
+            if os.path.exists(round_dir):
+                shutil.rmtree(round_dir)
 
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
         previous_feedback = None # From coverage feedback analysis
@@ -73,20 +79,35 @@ class PathExplorationAgent:
             # Substep1: Generate test case (with feedback from previous iteration if available)
             # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
             test_case_path = self._generate_test_case(previous_feedback)
-            self.history_pov_candidates.append(test_case_path)
+            self.history_testcases.append(test_case_path)
 
             # Substep2: Execute test case dynamically (using actual repo path)
             # This will also generate a profraw/profdata file.
             exit_code, exec_output = self._execute_test_case(test_case_path)
 
-            ## Special: Check early-stop after each execution
+            ## Special A: Check segmentation fault early-stop after each execution
             found_pov = self._detect_stop_status(exit_code, exec_output)
             if found_pov:
-                self.logger.info(f"  [PathExplorationAgent] Crash-inducing PoV found! Triggered early stop.")
+                self._record_current_pov(test_case_path, exit_code, exec_output)
+                self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Triggered early stop.")
                 break
 
             # Substep3: Collect useful coverage feedback along the vulnerable call trace
             sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data = self._collect_coverage_feedback()
+            ## Store the collected coverage data into roundN dir.
+            coverage_record = f"Exit code: {exit_code}\n" + f"Execution output:\n{exec_output}\n" + "\n"
+            coverage_record += self._format_coverage_feedback(sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data)
+            with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
+                f.write(coverage_record)
+
+            ## Special B: Check vuln_func reached early-stop after inspecting coverage
+            if first_uncovered_frame is None:
+                self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered. Stopping early.")
+                self.vfunc_reached_testcases.append(test_case_path)
+                # If there are at least 3 test cases that have reached the vulnerable function, we can also stop early.
+                if len(self.vfunc_reached_testcases) >= 3:
+                    self.logger.info(f"  [PathExplorationAgent] Multiple test cases have reached the vulnerable function. Stopping early.")
+                    break
 
             # Substep4: Analyze coverage feedback around the first uncovered point A in the call trace
             # Output: reachability failure analysis, test case adjustment suggestion.
@@ -102,11 +123,11 @@ class PathExplorationAgent:
         self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
         if not self.crash_input_pov:
-            self.logger.info(f"  [PathExplorationAgent] No crash-inducing PoV generated during path exploration. But we get closer ^^")
-            # TODO: Select 1~2 best candidates and copy them to output_dir for fhurther usage.
-            pass
+            self.logger.info(f"  [PathExplorationAgent] Although no crash-triggering PoV generated during path exploration, we get closer ^^")
+            usable_testcases = max(len(self.history_testcases), len(self.vfunc_reached_testcases))
+            assert usable_testcases >= 3, "Failed to obtain enough useful test cases during path exploration!"
         else:
-            self.logger.info(f"  [PathExplorationAgent] Crash-inducing PoV successfully generated during path exploration!")
+            self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV successfully generated during path exploration!")
 
     def _get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
@@ -229,8 +250,7 @@ class PathExplorationAgent:
 
         # Step 3: Execute the command with memory limit
         self.logger.info (f"  [PathExplorationAgent] Executing command: {command} in {round_dir}")
-        self.logger.info (f"  [PathExplorationAgent] Memory limit set to 12GB for subprocess")
-        # Define memory limit function for subprocess (12GB limit)
+        # self.logger.info (f"  [PathExplorationAgent] Memory limit set to 12GB for subprocess")
         def set_memory_limit():
             """Set memory limit to 12GB for the subprocess to prevent memory leaks"""
             max_memory_bytes = 12 * 1024 * 1024 * 1024  # 12GB in bytes
@@ -303,6 +323,8 @@ class PathExplorationAgent:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
             return "ERROR: No vulnerability call trace available for coverage analysis"
 
+        # TODO: We need special inspection for the crash happening function (innermost function).
+
         # Step 1: Extract function information from vulnerable call trace
         # Build a list of (function_name, file_path) tuples for batch query
         valid_frames: List[Tuple[Dict, Any]] = []  # Store (frame, abs_file_path) tuples for frames we'll query
@@ -331,7 +353,7 @@ class PathExplorationAgent:
         #     self.logger.error(f"  [PathExplorationAgent] Failed to query function coverage: {e}")
         #     return f"ERROR: Coverage query failed - {str(e)}"
 
-        # Step2: Collecting coverage results of current execution using LLVMCovUtils.
+        # Step2: Collecting current execution's coverage data using LLVMCovUtils.
         # Use get_function_coverage, get_line_coverage, get_detailed_function_coverage.
         cov_frames: List[Dict] = []
         for frame, abs_file_path in valid_frames:
@@ -419,6 +441,7 @@ class PathExplorationAgent:
         else:
             self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered!!!!!")
 
+        # If first_uncovered_frame is still None here, it means all callsites are covered!
         return sorted_frames, first_uncovered_frame, detailed_func_cov_data
 
     def _format_coverage_feedback(self, sorted_cov_frames: List[Dict], first_uncovered_frame: Dict|None, detailed_func_cov_data: str|None) -> str:
@@ -501,9 +524,8 @@ class PathExplorationAgent:
 
         output_lines.append("=" * 80)
         formatted_output = '\n'.join(output_lines)
-        # Log summary
-        self.logger.info(f"  [PathExplorationAgent] Formatted coverage feedback!")
 
+        self.logger.info(f"  [PathExplorationAgent] Formatted coverage feedback!")
         return formatted_output
 
     def _analyze_coverage_feedback(
@@ -602,7 +624,6 @@ class PathExplorationAgent:
         print("\n***\nINPUT ADJUSTMENT SUGGESTION(debug)\n***\n" + input_adjustment_suggestion)
         return (formatted_cov_info, coverage_stagnation_reasons, input_adjustment_suggestion)
 
-    ## TODO: If all callsites are executed and it already reached the crash location, we can also stop early(?).
     def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
         """
         Check if we should stop path exploration based on execution results.
@@ -610,11 +631,11 @@ class PathExplorationAgent:
         - Exit code 139/-11: Segmentation fault/crash (updates crash_input_pov, also stores test case to files in output_dir)
         - Other potential stop conditions
         Returns:
-            bool: True if a crash input pov is found, False otherwise
+            bool: True if a crash-triggering pov is found, False otherwise
         Raises:
             RuntimeError: If command not found (exit code 127)
         """
-        # Check for command not found - this is a fatal error
+        # Check for "command not found" - this is a fatal error
         if exit_code == 127:
             self.logger.error(f"  [PathExplorationAgent] Command not found (exit code 127)")
             self.logger.error(f"  [PathExplorationAgent] Execution output:\n{exec_output}")
@@ -623,87 +644,12 @@ class PathExplorationAgent:
                 "Please check if the binary path and harness command are correct."
             )
 
-        # Check for segmentation fault (crash) - this is our target!
+        # Check for "segmentation fault" (crash) - this is our target!
         # Exit code 139 = 128 + 11 (SIGSEGV signal) (-11 = SIGSEGV on some systems)
         if exit_code == 139 or exit_code == -11:
             self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
-
-            # Get current test case path
-            current_testcase_path = os.path.join(
-                self._get_round_dir(self.current_exp_iteration),
-                f"testcase-round{self.current_exp_iteration}"
-            )
-
-            # Store the crashing input
-            try:
-                with open(current_testcase_path, 'rb') as f:
-                    crash_input_content = f.read()
-
-                # Update crash_input_pov with detailed information
-                self.crash_input_pov = {
-                    'testcase_path': current_testcase_path,
-                    'exit_code': exit_code,
-                    'exec_output': exec_output,
-                    'iteration': self.current_exp_iteration,
-                    'max_iterations': self.max_exp_iterations
-                }
-
-                # Copy the crash PoV to output directory with timestamped name
-                timestamp = datetime.now().strftime("%y%m%d-%H%M")
-                pov_filename = f"pov-{self.drill_agent.project_name}-{timestamp}"
-                pov_output_path = os.path.join(self.drill_agent.output_dir, pov_filename)
-                os.makedirs(self.drill_agent.output_dir, exist_ok=True)
-                shutil.copy(current_testcase_path, pov_output_path)
-                self.logger.info(f"  [PathExplorationAgent] Crash PoV saved to output directory: {pov_output_path}")
-                # Update crash_input_pov with the saved path
-                self.crash_input_pov['saved_pov_path'] = pov_output_path
-
-                # Log the crash discovery
-                self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND ***")
-                self.logger.info(f"  [PathExplorationAgent] Test case: {current_testcase_path}")
-                self.logger.info(f"  [PathExplorationAgent] Iteration: {self.current_exp_iteration}")
-                self.logger.info(f"  [PathExplorationAgent] Content size: {len(crash_input_content)} bytes")
-
-                # Print crash information to console for visibility
-                print("\n")
-                print("=" * 80)
-                print("CRASH INPUT POV DISCOVERED")
-                print("=" * 80)
-                print(f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!")
-                print(f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}")
-                print(f"Exit Code:       {exit_code}")
-                print(f"Test Case Path:  {current_testcase_path}")
-                print(f"Content Size:    {len(crash_input_content)} bytes")
-                print(f"\n--- Test Case Content (hex) ---")
-                # Print hex representation for binary data
-                hex_str = crash_input_content.hex()
-                for i in range(0, min(len(hex_str), 512), 64):  # Print first 256 bytes in hex
-                    print(hex_str[i:i+64])
-                if len(hex_str) > 512:
-                    print(f"... ({len(crash_input_content) - 256} more bytes)")
-
-                # Try to print as text if it's printable
-                try:
-                    text_content = crash_input_content.decode('utf-8', errors='replace')
-                    if text_content.isprintable() or '\n' in text_content:
-                        print(f"\n--- Test Case Content (text) ---")
-                        print(text_content)  # Print all!
-                        # print(text_content[:500])  # Print first 500 chars
-                        # if len(text_content) > 500:
-                        #     print(f"... ({len(text_content) - 500} more chars)")
-                except:
-                    pass
-
-                print(f"\n--- Execution Output ---")
-                print(exec_output[:1000])  # Print first 1000 chars of output
-                if len(exec_output) > 1000:
-                    print(f"... ({len(exec_output) - 1000} more chars)")
-                print("=" * 80)
-                print("\n")
-                return True  # Indicate that we found a crash input pov
-
-            except Exception as e:
-                self.logger.error(f"  [PathExplorationAgent] Failed to read crash input: {e}")
+            # Record the current testcase as crash-triggering PoV
+            return True  # Crash input pov found
 
         # Check for other interesting exit codes
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
@@ -716,3 +662,74 @@ class PathExplorationAgent:
 
         return False  # No crash input pov found
 
+    def _record_current_pov(self, test_case_path: str, exit_code: int, exec_output: str) -> None:
+        # Record the current crash-triggering PoV.
+        # This function handles all the storage and logging operations when a crash is detected.
+        try:
+            with open(test_case_path, 'rb') as f:
+                crash_input_content = f.read()
+
+            # Update crash_input_pov with detailed information
+            self.crash_input_pov = {
+                'testcase_path': test_case_path,
+                'exit_code': exit_code,
+                'exec_output': exec_output,
+                'iteration': self.current_exp_iteration,
+                'max_iterations': self.max_exp_iterations
+            }
+
+            # Copy the crash PoV to output directory with timestamped name
+            timestamp = datetime.now().strftime("%y%m%d-%H%M")
+            pov_filename = f"pov-{self.drill_agent.project_name}-{timestamp}-PEA"
+            pov_output_path = os.path.join(self.drill_agent.output_dir, pov_filename)
+            os.makedirs(self.drill_agent.output_dir, exist_ok=True)
+            shutil.copy(test_case_path, pov_output_path)
+            self.logger.info(f"  [PathExplorationAgent] Crash PoV saved to output directory: {pov_output_path}")
+            # Update crash_input_pov with the saved path
+            self.crash_input_pov['saved_pov_path'] = pov_output_path
+
+            # Log the crash discovery
+            self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND ***")
+            self.logger.info(f"  [PathExplorationAgent] Test case: {test_case_path}")
+            self.logger.info(f"  [PathExplorationAgent] Iteration: {self.current_exp_iteration}")
+            self.logger.info(f"  [PathExplorationAgent] Content size: {len(crash_input_content)} bytes")
+
+            # Print crash information to console for visibility
+            print("\n")
+            print("=" * 80)
+            print("CRASH INPUT POV DISCOVERED")
+            print("=" * 80)
+            print(f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!")
+            print(f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}")
+            print(f"Exit Code:       {exit_code}")
+            print(f"Test Case Path:  {test_case_path}")
+            print(f"Content Size:    {len(crash_input_content)} bytes")
+            print(f"\n--- Test Case Content (hex) ---")
+            # Print hex representation for binary data
+            hex_str = crash_input_content.hex()
+            for i in range(0, min(len(hex_str), 512), 64):  # Print first 256 bytes in hex
+                print(hex_str[i:i+64])
+            if len(hex_str) > 512:
+                print(f"... ({len(crash_input_content) - 256} more bytes)")
+
+            # Try to print as text if it's printable
+            try:
+                text_content = crash_input_content.decode('utf-8', errors='replace')
+                if text_content.isprintable() or '\n' in text_content:
+                    print(f"\n--- Test Case Content (text) ---")
+                    print(text_content)  # Print all!
+                    # print(text_content[:500])  # Print first 500 chars
+                    # if len(text_content) > 500:
+                    #     print(f"... ({len(text_content) - 500} more chars)")
+            except:
+                pass
+
+            print(f"\n--- Execution Output ---")
+            print(exec_output[:1000])  # Print first 1000 chars of output
+            if len(exec_output) > 1000:
+                print(f"... ({len(exec_output) - 1000} more chars)")
+            print("=" * 80)
+            print("\n")
+
+        except Exception as e:
+            self.logger.error(f"  [PathExplorationAgent] Failed to read crash input: {e}")

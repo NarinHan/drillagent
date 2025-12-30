@@ -25,7 +25,7 @@ class CrashTriggerAgent:
         self.tools.extend(drill_agent.agent_cov_tools) # For crash triggering, we also provide coverage tools.
 
         # The outermost-loop counters.
-        self.max_trigger_iterations = 3
+        self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
 
         # Input files.
@@ -190,9 +190,7 @@ class CrashTriggerAgent:
 
         # Execute the command (no coverage collection needed for PoV validation)
         self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} in {round_dir}")
-        self.logger.info(f"  [CrashTriggerAgent] Memory limit set to 12GB for subprocess")
-
-        # Define memory limit function for subprocess (12GB limit)
+        # self.logger.info(f"  [CrashTriggerAgent] Memory limit set to 12GB for subprocess")
         def set_memory_limit():
             """Set memory limit to 12GB for the subprocess to prevent memory leaks"""
             max_memory_bytes = 12 * 1024 * 1024 * 1024  # 12GB in bytes
