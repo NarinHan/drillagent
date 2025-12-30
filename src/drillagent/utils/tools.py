@@ -953,15 +953,6 @@ class FuncLineCovTool(AgentTool):
                 ),
                 "required": True
             },
-            "file_path": {
-                "type": "string",
-                "description": (
-                    "Path to the source file containing the function. "
-                    "Can be absolute or relative to repository root. "
-                    "Examples: 'src/parser.c', '/absolute/path/to/parser.c'"
-                ),
-                "required": True
-            },
             "function_name": {
                 "type": "string",
                 "description": (
@@ -970,26 +961,36 @@ class FuncLineCovTool(AgentTool):
                     "Examples: 'main', 'parse_input', 'calculate_sum'"
                 ),
                 "required": True
-            }
+            },
+            "source_file_path": {
+                "type": "string",
+                "description": (
+                    "Path to the source file containing the function. "
+                    "Can be absolute or relative to repository root. "
+                    "If not specified, llvm-cov will search all files for the function. "
+                    "Examples: 'src/parser.c', '/absolute/path/to/parser.c'"
+                ),
+                "required": False
+            },
         }
 
     def execute(self, binary_path: str, profdata_path: str,
-                file_path: str, function_name: str) -> Dict[str, Any]:
+                function_name: str, source_file_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute llvm-cov show to retrieve function line coverage.
 
         Args:
             binary_path: Path to instrumented binary
             profdata_path: Path to profdata file
-            file_path: Path to source file (absolute or relative to repo)
             function_name: Function name to analyze
+            source_file_path: Optional path to source file (absolute or relative to repo)
 
         Returns:
             Dict containing:
             - success: bool indicating if execution succeeded
             - coverage_output: str with line-by-line coverage information
             - function_name: str the queried function name
-            - file_path: str the resolved file path
+            - source_file_path: str the resolved file path (if provided)
             - error: str error message if failed
         """
         try:
@@ -997,14 +998,15 @@ class FuncLineCovTool(AgentTool):
             binary_path = os.path.abspath(binary_path)
             profdata_path = os.path.abspath(profdata_path)
 
-            # Handle file_path: if relative, resolve against repo_path
-            file_path_obj = Path(file_path)
-            if file_path_obj.is_absolute():
-                resolved_file_path = file_path_obj
-            else:
-                resolved_file_path = self.repo_path / file_path
-
-            resolved_file_path = resolved_file_path.resolve()
+            # Handle source_file_path: if provided, resolve it
+            resolved_file_path = None
+            if source_file_path is not None:
+                file_path_obj = Path(source_file_path)
+                if file_path_obj.is_absolute():
+                    resolved_file_path = file_path_obj
+                else:
+                    resolved_file_path = self.repo_path / source_file_path
+                resolved_file_path = resolved_file_path.resolve()
 
             # Validate inputs
             if not Path(binary_path).exists():
@@ -1012,7 +1014,7 @@ class FuncLineCovTool(AgentTool):
                     "success": False,
                     "error": f"Binary file not found: {binary_path}",
                     "function_name": function_name,
-                    "file_path": str(resolved_file_path)
+                    "source_file_path": str(resolved_file_path) if resolved_file_path else None
                 }
 
             if not Path(profdata_path).exists():
@@ -1020,27 +1022,33 @@ class FuncLineCovTool(AgentTool):
                     "success": False,
                     "error": f"Profdata file not found: {profdata_path}",
                     "function_name": function_name,
-                    "file_path": str(resolved_file_path)
+                    "source_file_path": str(resolved_file_path) if resolved_file_path else None
                 }
 
-            if not resolved_file_path.exists():
+            if resolved_file_path is not None and not resolved_file_path.exists():
                 return {
                     "success": False,
                     "error": f"Source file not found: {resolved_file_path}",
                     "function_name": function_name,
-                    "file_path": str(resolved_file_path)
+                    "source_file_path": str(resolved_file_path)
                 }
 
             # Construct llvm-cov show command
-            # Format: llvm-cov show <binary> <source_file> -instr-profile=<profdata> --name=<function_name>
+            # Format: llvm-cov show <binary> [<source_file>] -instr-profile=<profdata> --name=<function_name>
             cmd = [
                 self.llvm_cov_path,
                 'show',
-                binary_path,
-                str(resolved_file_path),
+                binary_path
+            ]
+
+            # Only add source file if provided
+            if resolved_file_path is not None:
+                cmd.append(str(resolved_file_path))
+
+            cmd.extend([
                 f'-instr-profile={profdata_path}',
                 f'--name={function_name}'
-            ]
+            ])
 
             # Execute command
             result = subprocess.run(
@@ -1055,41 +1063,46 @@ class FuncLineCovTool(AgentTool):
                     "success": False,
                     "error": f"llvm-cov command failed: {result.stderr}",
                     "function_name": function_name,
-                    "file_path": str(resolved_file_path)
+                    "source_file_path": str(resolved_file_path) if resolved_file_path else None
                 }
 
             # Check if output is empty (function might not exist or not covered)
             output = result.stdout.strip()
             if not output:
+                file_info = f" in {resolved_file_path}" if resolved_file_path else ""
                 return {
                     "success": False,
                     "error": (
-                        f"No coverage data found for function '{function_name}' in {resolved_file_path}. "
+                        f"No coverage data found for function '{function_name}'{file_info}. "
                         f"The function may not exist, or it was not executed during coverage collection."
                     ),
                     "function_name": function_name,
-                    "file_path": str(resolved_file_path)
+                    "source_file_path": str(resolved_file_path) if resolved_file_path else None
                 }
 
-            return {
+            result_dict = {
                 "success": True,
                 "coverage_output": output,
                 "function_name": function_name,
-                "file_path": str(resolved_file_path),
                 "message": f"Successfully retrieved coverage for function '{function_name}'"
             }
+
+            if resolved_file_path is not None:
+                result_dict["source_file_path"] = str(resolved_file_path)
+
+            return result_dict
 
         except subprocess.TimeoutExpired:
             return {
                 "success": False,
                 "error": "llvm-cov command timed out (>30s)",
                 "function_name": function_name,
-                "file_path": file_path
+                "source_file_path": source_file_path
             }
         except Exception as e:
             return {
                 "success": False,
                 "error": f"Unexpected error: {str(e)}",
                 "function_name": function_name,
-                "file_path": file_path
+                "source_file_path": source_file_path
             }

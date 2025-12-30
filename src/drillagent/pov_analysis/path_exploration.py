@@ -649,7 +649,6 @@ class PathExplorationAgent:
         # Exit code 139 = 128 + 11 (SIGSEGV signal) (-11 = SIGSEGV on some systems)
         if exit_code == 139 or exit_code == -11:
             self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
-            # Record the current testcase as crash-triggering PoV
             return True  # Crash input pov found
 
         # Check for other interesting exit codes

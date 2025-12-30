@@ -31,8 +31,9 @@ class CrashTriggerAgent:
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
         # Output files.
-        self.history_pov_candidates = []  # List of file paths to all test cases generated during crash triggering.
+        self.generated_pov_candidates = []  # List of file paths to all test cases generated during crash triggering.
         self.final_pov = None             # The final PoV that successfully triggers a crash.
+        ## final_pov['saved_pov_path']: The path where the final validated PoV is saved in output_dir.
 
     def run(self) -> None:
         self.logger.info("  [CrashTriggerAgent] Starting running. Checking previous path exploration results...")
@@ -45,7 +46,10 @@ class CrashTriggerAgent:
                 is_validated = self._validate_pov(path_agent.crash_input_pov)
                 if is_validated:
                     self.logger.info("  [CrashTriggerAgent] Valid crash input found from path exploration phase! Using it as final PoV.")
-                    self.final_pov = path_agent.crash_input_pov
+                    # Save the crash input as final PoV
+                    crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
+                    assert crash_pov_path is not None, "Crash input PoV path from PathExplorationAgent not found!"
+                    self._record_final_pov(path_agent.crash_input_pov, crash_pov_path)
                     return
                 else:
                     self.logger.info("  [CrashTriggerAgent] Crash input from path exploration did not validate successfully. Proceeding with crash triggering attempts...")
@@ -63,30 +67,43 @@ class CrashTriggerAgent:
             self.useful_testcase_paths = self.useful_testcase_paths[:3]
             assert len(self.useful_testcase_paths) > 0, "No useful test cases found from path exploration!"
 
-        # Main loop for crash triggering attempts
+        # Main loop for crash triggering attempts.
         for iteration in range(1, self.max_trigger_iterations + 1):
             print("\n" + "=" * 80)
             self.logger.info(f"  [CrashTriggerAgent] Iteration {iteration}/{self.max_trigger_iterations}")
             self.current_trigger_iteration = iteration
 
-            # Create round directory
+            # Create round directory.
             round_dir = self._get_round_dir(self.current_trigger_iteration)
             os.makedirs(round_dir, exist_ok=True)
+            for item in os.listdir(round_dir): # Clear previous contents
+                item_path = os.path.join(round_dir, item)
+                if os.path.isfile(item_path):
+                    os.remove(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+            self.logger.debug(f"  [CrashTriggerAgent] Created and cleared round directory: {round_dir}")
 
             try:
-                # Step 1: Generate final PoV
+                # Step 1: Generate final PoV.
                 pov_path = self._generate_final_pov()
-                self.history_pov_candidates.append(pov_path)
+                self.generated_pov_candidates.append(pov_path)
 
-                # Step 2: Execute PoV candidate
+                # Step 2: Execute PoV candidate.
                 exit_code, exec_output = self._execute_pov_candidate(pov_path)
+                # Check whether the execution triggered segmentation fault.
+                is_segfault = self._detect_stop_status(exit_code, exec_output)
+                if not is_segfault:
+                    self.logger.info(f"  [CrashTriggerAgent] PoV at iteration {iteration} did not trigger crash, continue attempting...")
+                    continue
 
-                # Step 3: Validate PoV
+                # Step 3: Validate PoV (only if we have abnormal exit_code==139/-11/...)
                 pov_data = {
                     'testcase_path': pov_path,
                     'exit_code': exit_code,
                     'exec_output': exec_output,
-                    'iteration': iteration
+                    'iteration': iteration,
+                    'max_iterations': self.max_trigger_iterations
                 }
                 is_valid = self._validate_pov(pov_data)
 
@@ -94,21 +111,9 @@ class CrashTriggerAgent:
                 if is_valid:
                     self.logger.info(f"  [CrashTriggerAgent] *** Valid PoV found at iteration {iteration}! ***")
                     # Save the final PoV to output directory
-                    timestamp = datetime.now().strftime("%y%m%d-%H%M")
-                    final_pov_filename = f"final-pov-{self.config.project_name}-{timestamp}"
-                    final_pov_path = os.path.join(self.drill_agent.output_dir, final_pov_filename)
-                    os.makedirs(self.drill_agent.output_dir, exist_ok=True)
-                    shutil.copy(pov_path, final_pov_path)
-
-                    self.final_pov = {
-                        'pov_path': final_pov_path,
-                        'exit_code': exit_code,
-                        'exec_output': exec_output,
-                        'iteration': iteration
-                    }
-                    self.logger.info(f"  [CrashTriggerAgent] Final PoV saved to: {final_pov_path}")
+                    self._record_final_pov(pov_data, pov_path)
                     break
-                else:
+                else: # validation failed
                     self.logger.info(f"  [CrashTriggerAgent] PoV at iteration {iteration} did not trigger crash, continuing...")
 
             except Exception as e:
@@ -119,7 +124,7 @@ class CrashTriggerAgent:
         if self.final_pov:
             self.logger.info(f"  [CrashTriggerAgent] Successfully generated valid PoV!")
         else:
-            self.logger.info(f"  [CrashTriggerAgent] No valid PoV found after {self.max_trigger_iterations} iterations.")
+            self.logger.info(f"  [CrashTriggerAgent] No valid PoV found after {self.current_trigger_iteration} iterations.")
 
     def _get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
@@ -165,7 +170,7 @@ class CrashTriggerAgent:
         # TODO: The llvm-cov tool usage should be further taught out.
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=prompt,
-            tools=self.tools,  # Allow LLM to use tools for exploration
+            tools=self.tools,  # Allow LLM to use tools for exploration (e.g., retrieve_function_line_coverage, read_file, etc.)
             system_prompt=CTA_system_prompt,
             max_iterations=max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation
@@ -264,10 +269,9 @@ class CrashTriggerAgent:
         return exit_code, exec_output
 
     def _validate_pov(self, pov_data: Dict) -> bool:
-        # Validate the generated PoV by checking if it triggers a crash (segmentation fault, memory errors, etc.)
+        # Validate the generated PoV by checking if it can violate the memory sanitizer as expected.
         # pov_data: dict containing 'testcase_path', 'exit_code', 'exec_output', etc.
-        # Returns: True if PoV is valid (triggers crash), False otherwise
-        # TODO: This should be further thought out and improved (LHY).
+        # Returns True if PoV is valid (triggers crash), False otherwise
 
         if not pov_data:
             self.logger.warning("  [CrashTriggerAgent] No PoV data provided for validation")
@@ -277,46 +281,73 @@ class CrashTriggerAgent:
         exit_code = pov_data.get('exit_code', 0)
         exec_output = pov_data.get('exec_output', '')
         testcase_path = pov_data.get('testcase_path', '')
-
         self.logger.info(f"  [CrashTriggerAgent] Validating PoV: {testcase_path}")
         self.logger.info(f"  [CrashTriggerAgent] Exit code: {exit_code}")
 
-        # Check for segmentation fault (SIGSEGV) - exit code 139 or -11
+        # TODO: Now we simply assume all segmentation faults are valid PoVs and return True. 
+        # In future, we should use sanitizer-instrumented binaries to validate.
+        return True ###
+
+    def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
+        """The same function as in PathExplorationAgent."""
+        # Check for "command not found" - this is a fatal error
+        if exit_code == 127:
+            self.logger.error(f"  [CrashTriggerAgent] Command not found (exit code 127)")
+            self.logger.error(f"  [CrashTriggerAgent] Execution output:\n{exec_output}")
+            raise RuntimeError(
+                "Command not found during test case execution of CrashTriggerAgent (exit code 127). "
+                "Please check if the binary path and harness command are correct."
+            )
+
+        # Check for "segmentation fault" (crash) - this is our target!
+        # Exit code 139 = 128 + 11 (SIGSEGV signal) (-11 = SIGSEGV on some systems)
         if exit_code == 139 or exit_code == -11:
-            self.logger.info(f"  [CrashTriggerAgent] *** PoV VALID: Segmentation fault detected (exit code {exit_code}) ***")
-            return True
+            self.logger.warning(f"  [CrashTriggerAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
+            return True  # Crash input pov found
 
-        # Check for SIGABRT (assertion failure, abort()) - exit code 134 or -6
-        if exit_code == -6 or exit_code == 134:
-            self.logger.info(f"  [CrashTriggerAgent] *** PoV VALID: Program aborted (exit code {exit_code}) ***")
+        # Check for other interesting exit codes
+        elif exit_code == -6 or exit_code == 134:  # SIGABRT
+            self.logger.warning(f"  [CrashTriggerAgent] Program aborted (exit code {exit_code})")
+            self.logger.debug  (f"  [CrashTriggerAgent] This may indicate assertion failure or abort() call")
             # Check if this is a memory sanitizer error in the output
-            if any(keyword in exec_output for keyword in ['AddressSanitizer', 'MemorySanitizer', 'heap-use-after-free', 'heap-buffer-overflow', 'stack-buffer-overflow']):
-                self.logger.info(f"  [CrashTriggerAgent] Memory sanitizer detected vulnerability!")
-                return True
-            return True  # Still consider SIGABRT as valid crash
-
-        # Check for other crash-related signals
-        if exit_code == -9 or exit_code == 137:  # SIGKILL
+            # if any(keyword in exec_output for keyword in ['AddressSanitizer', 'MemorySanitizer', 'heap-use-after-free', 'heap-buffer-overflow', 'stack-buffer-overflow']):
+            #     self.logger.info(f"  [CrashTriggerAgent] Memory sanitizer detected vulnerability!")
+            #     return True
+        
+        elif exit_code == -9 or exit_code == 137:  # SIGKILL
             self.logger.warning(f"  [CrashTriggerAgent] Program killed (exit code {exit_code})")
-            return True  # Consider SIGKILL as valid crash
+        
+        elif exit_code < 0 or exit_code > 128:  # Signal-based exit
+            self.logger.debug(f"  [CrashTriggerAgent] Program terminated with signal (exit code {exit_code})")
 
-        # Check for sanitizer error messages in output even with non-crash exit codes
-        sanitizer_keywords = [
-            'AddressSanitizer', 'MemorySanitizer', 'UndefinedBehaviorSanitizer',
-            'heap-use-after-free', 'heap-buffer-overflow', 'stack-buffer-overflow',
-            'use-after-free', 'buffer-overflow', 'null-dereference', 'SEGV'
-        ]
-        if any(keyword in exec_output for keyword in sanitizer_keywords):
-            self.logger.info(f"  [CrashTriggerAgent] *** PoV VALID: Memory error detected in output ***")
-            return True
+        return False  # No crash input pov found
 
-        # Check for general signal-based termination (exit code > 128 or < 0)
-        if exit_code < 0 or exit_code > 128:
-            self.logger.info(f"  [CrashTriggerAgent] PoV potentially valid: Signal-based termination (exit code {exit_code})")
-            return True
+    def _record_final_pov(self, pov_data: Dict[str, Any], pov_path: str) -> str:
+        """
+        Record and save the final validated PoV to the output directory.
 
-        # No crash detected
-        self.logger.info(f"  [CrashTriggerAgent] PoV invalid: No crash detected (exit code {exit_code})")
-        return False
+        Args:
+            pov_data: Dictionary containing PoV information (exit_code, exec_output, iteration, etc.)
+            pov_path: Path to the original PoV file to be saved
 
+        Returns:
+            The path where the final PoV is saved
+        """
+        # Generate timestamp and filename for the final PoV
+        timestamp = datetime.now().strftime("%y%m%d-%H%M")
+        final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA"
+        final_pov_path = os.path.join(self.drill_agent.output_dir, final_pov_filename)
 
+        # Create output directory if it doesn't exist
+        os.makedirs(self.drill_agent.output_dir, exist_ok=True)
+
+        # Copy the PoV file to the output directory
+        shutil.copy(pov_path, final_pov_path)
+
+        # Update the final_pov record with all necessary information
+        self.final_pov = pov_data.copy()
+        self.final_pov['saved_pov_path'] = final_pov_path
+
+        self.logger.info(f"  [CrashTriggerAgent] Final PoV saved to: {final_pov_path}")
+
+        return final_pov_path
