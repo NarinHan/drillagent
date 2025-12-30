@@ -2,6 +2,7 @@ import os
 import subprocess
 import shutil
 import re
+import resource
 from datetime import datetime
 
 from typing import Tuple, Any, TYPE_CHECKING
@@ -189,6 +190,15 @@ class CrashTriggerAgent:
 
         # Execute the command (no coverage collection needed for PoV validation)
         self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} in {round_dir}")
+        self.logger.info(f"  [CrashTriggerAgent] Memory limit set to 12GB for subprocess")
+
+        # Define memory limit function for subprocess (12GB limit)
+        def set_memory_limit():
+            """Set memory limit to 12GB for the subprocess to prevent memory leaks"""
+            max_memory_bytes = 12 * 1024 * 1024 * 1024  # 12GB in bytes
+            # RLIMIT_AS limits the address space (total virtual memory)
+            resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))
+
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
@@ -197,7 +207,8 @@ class CrashTriggerAgent:
                 cwd=round_dir,
                 capture_output=True,
                 text=True,
-                timeout=30  # 30 seconds timeout
+                timeout=30,  # 30 seconds timeout
+                preexec_fn=set_memory_limit  # Apply memory limit to subprocess
             )
             exit_code = result.returncode
             stdout = result.stdout

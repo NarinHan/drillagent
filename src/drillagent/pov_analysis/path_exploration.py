@@ -3,6 +3,7 @@ import json
 import subprocess
 import shutil
 import re
+import resource
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, TYPE_CHECKING
@@ -78,7 +79,7 @@ class PathExplorationAgent:
             # This will also generate a profraw/profdata file.
             exit_code, exec_output = self._execute_test_case(test_case_path)
 
-            # Special: Check early-stop after each execution
+            ## Special: Check early-stop after each execution
             found_pov = self._detect_stop_status(exit_code, exec_output)
             if found_pov:
                 self.logger.info(f"  [PathExplorationAgent] Crash-inducing PoV found! Triggered early stop.")
@@ -93,6 +94,10 @@ class PathExplorationAgent:
                 test_case_path, exit_code, exec_output, 
                 sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data
             ) # Also store feedback for next iteration
+
+            # FIX: LLVMCovUtils.clear_data should be called to avoid memory leak!!! (conservative operation)
+            if self.llvm_cov_utils:
+                self.llvm_cov_utils.clear_data()
         
         self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
@@ -105,7 +110,8 @@ class PathExplorationAgent:
 
     def _get_round_dir(self, round_num: int) -> str:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
-        return os.path.join(self.drill_agent.work_dir, f"round{round_num}")
+        # By default, work_dir is a relative path (./workspace). So round_dir is also relative.
+        return os.path.join(self.drill_agent.work_dir, f"round{round_num}") 
 
     # TODO: Support generating separate binary-encoded test case files in the future.
     def _generate_test_case(self, previous_feedback: Tuple = None) -> str:
@@ -119,7 +125,8 @@ class PathExplorationAgent:
         max_generation_turns = 10 # We can set this parameter.
 
         # Step 1: Construct the prompt for test case generation
-        vuln_info_str = self.drill_agent.vulnerability_info.format_output()
+        vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
+        vuln_info_str += "\n" + self.drill_agent.vulnerability_info.get_full_root_cause()
 
         # Build feedback section if we have previous iteration results
         feedback_section = ""
@@ -168,11 +175,12 @@ class PathExplorationAgent:
 
         response = result['final_response']
         self.logger.info(f"  [PathExplorationAgent] LLM completed in {result['iterations']} iteration(s)")
-        self.logger.info(f"  [PathExplorationAgent] Stop reason: {result['stop_reason']}")
+        # self.logger.info(f"  [PathExplorationAgent] Stop reason: {result['stop_reason']}")
         self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
 
         # Step 3: Extract testcase content from response and save to file
-        testcase_pattern = r'```testcase\s*\n(.*?)\n```'
+        # testcase_pattern = r'```testcase\s*\n(.*?)\n```'
+        testcase_pattern = r'```testcase\s*\n([\s\S]*?)```'
         match = re.search(testcase_pattern, response, re.DOTALL)
         if not match:
             # Fallback: try to find any code block
@@ -217,27 +225,36 @@ class PathExplorationAgent:
         # Step 2: Set environment variable to generate profraw file
         profraw_path = os.path.join(round_dir, f"test_{self.current_exp_iteration}.profraw")
         env = os.environ.copy()
-        env['LLVM_PROFILE_FILE'] = profraw_path
+        env['LLVM_PROFILE_FILE'] = profraw_path 
 
-        # Step 3: Execute the command
+        # Step 3: Execute the command with memory limit
         self.logger.info (f"  [PathExplorationAgent] Executing command: {command} in {round_dir}")
-        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE: {profraw_path}")
+        self.logger.info (f"  [PathExplorationAgent] Memory limit set to 12GB for subprocess")
+        # Define memory limit function for subprocess (12GB limit)
+        def set_memory_limit():
+            """Set memory limit to 12GB for the subprocess to prevent memory leaks"""
+            max_memory_bytes = 12 * 1024 * 1024 * 1024  # 12GB in bytes
+            # RLIMIT_AS limits the address space (total virtual memory)
+            resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))
+
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
                 command,
                 shell=True,
-                cwd=round_dir,
+                cwd=round_dir, # Path to instrumented binary is absolute, so we can execute anywhere.
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=30  # 30 seconds timeout
+                timeout=30,  # 30 seconds timeout
+                preexec_fn=set_memory_limit  # Apply memory limit to subprocess
             )
             exit_code = result.returncode
             stdout = result.stdout
             stderr = result.stderr
             # Merge stdout and stderr as exec_output
             exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
+            self.logger.info(f"  [PathExplorationAgent] Command exit code: {exit_code}")
         except subprocess.TimeoutExpired as e:
             self.logger.warning(f"  [PathExplorationAgent] Command execution timeout after 30s")
             exit_code = -1
@@ -247,25 +264,25 @@ class PathExplorationAgent:
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
-        self.logger.info(f"  [PathExplorationAgent] Command exit code: {exit_code}")
-
         # Step 4: After each execution, use LLVMCovUtils to store the coverage profile data.
-        if not os.path.exists(profraw_path): # Check if profraw file is generated
+        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE: {profraw_path}")
+        if not os.path.exists(profraw_path): # Check if profraw file has been generated
             self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
-            self.logger.warning(f"  [PathExplorationAgent] This might indicate the binary was not instrumented or the execution failed early")
-            # Return without initializing llvm_cov_utils (coverage collection will handle this gracefully)
+            self.logger.warning(f"  [PathExplorationAgent] This might indicate the binary was not instrumented or the execution failed early!")
+            # Return without initializing llvm_cov_utils! If None, next step will return directly.
             return exit_code, exec_output
 
-        try:
+        try:   # Here we already have llvm profraw file in current round directory.
             if self.llvm_cov_utils is None:
                 # First time init
                 self.llvm_cov_utils = LLVMCovUtils(
                     binary_path=binary_abs_path, # absolute path to the instrumented binary
-                    profraw_path=profraw_path    # absolute path?
+                    profraw_path=profraw_path    # relative path (by default)
                 )
             else:
-                # LLVMCovUtils will automatically convert profraw to profdata
-                self.llvm_cov_utils.update_profile_data(profraw_path) # absolute path?
+                # LLVMCovUtils will replace last round's coverage data with new execution results.
+                # And automatically convert profraw to profdata inside.
+                self.llvm_cov_utils.update_profile_data(profraw_path) # relative path (by default)
             self.logger.info(f"  [PathExplorationAgent] current profdata file generated at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
         except Exception as e:

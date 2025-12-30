@@ -11,8 +11,10 @@ claude.key
 gemini.key
 src/drillagent/scripts/lhy_*
 scripts/lhy_*
+default.profraw
+default.profdata
 
-# Phase 1: instrumentation agents
+# For instrumentation agents
 instrumented/
 src/instrumentation/
 fuzzing/

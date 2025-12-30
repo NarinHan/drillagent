@@ -255,6 +255,7 @@ class DrillAgent:
 
     def _phase_vulnerability_analysis(self):
         """Phase 1: Analyze vulnerability using LLM"""
+        print("\n")
         self.logger.info("[Phase 1] Vulnerability Analysis")
         self.phase = "analyzing"
 
@@ -280,6 +281,7 @@ class DrillAgent:
 
     def _phase_instrumentation(self):
         """Phase 2: Instrument the target binary with coverage and sanitizers"""
+        print("\n")
         self.logger.info("[Phase 2] Code Instrumentation")
         self.phase = "instrumentation"
 
@@ -335,6 +337,7 @@ class DrillAgent:
 
     def _phase_path_exploration(self):
         """Phase 3: Coverage-guided path exploration"""
+        print("\n")
         self.logger.info("[Phase 3] Path Exploration")
         self.phase = "exploring"
 
@@ -362,6 +365,7 @@ class DrillAgent:
 
     def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
+        print("\n")
         self.logger.info("[Phase 4] Crash Triggering and PoV Validation")
         self.phase = "triggering"
 

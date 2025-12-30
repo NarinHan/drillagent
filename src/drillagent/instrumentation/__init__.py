@@ -6,6 +6,7 @@ This module handles code instrumentation for coverage tracking, distance calcula
 
 from .base_instr_agent import BaseInstrAgent
 from .coverage_agent import CoverageInstrumentAgent
+from .sanitizer_agent import SanitizerInstrumentAgent
 
 # TODO: Import instrumentation components once created
 # from .distance import DistanceCalculator
@@ -18,5 +19,6 @@ __all__ = [
 
     # Now only these classes should be used by DrillAgent main workflow.
     'BaseInstrAgent',
-    'CoverageInstrumentAgent'
+    'CoverageInstrumentAgent',
+    'SanitizerInstrumentAgent'
 ]
