@@ -904,21 +904,25 @@ class FuncLineCovTool(AgentTool):
     Uses llvm-cov show command to display execution counts and source code.
     """
 
-    def __init__(self, repo_path: str, llvm_cov_path: str = "llvm-cov"):
+    def __init__(self, repo_path: str, binary_path: str, llvm_cov_path: str = "llvm-cov"):
         """
         Initialize FuncLineCovTool.
 
         Args:
             repo_path: Absolute path to the repository root
+            binary_path: Absolute path to the instrumented binary (FIXED for entire session)
             llvm_cov_path: Path to llvm-cov executable (default: "llvm-cov")
         """
         self.repo_path = Path(repo_path).resolve()
+        self.binary_path = os.path.abspath(binary_path)
         self.llvm_cov_path = llvm_cov_path
 
         if not self.repo_path.exists():
             raise ValueError(f"Repository path does not exist: {repo_path}")
         if not self.repo_path.is_dir():
             raise ValueError(f"Repository path is not a directory: {repo_path}")
+        if not Path(self.binary_path).exists():
+            raise ValueError(f"Binary file not found: {binary_path}")
 
     def name(self) -> str:
         return "retrieve_function_line_coverage"
@@ -934,16 +938,6 @@ class FuncLineCovTool(AgentTool):
 
     def parameters_schema(self) -> Dict[str, Any]:
         return {
-            "binary_path": {
-                "type": "string",
-                "description": (
-                    "Absolute path to the instrumented binary executable. "
-                    "This binary must have been compiled with coverage instrumentation "
-                    "(e.g., -fprofile-instr-generate -fcoverage-mapping). "
-                    "Example: '/path/to/project/build/myapp'"
-                ),
-                "required": True
-            },
             "profdata_path": {
                 "type": "string",
                 "description": (
@@ -974,13 +968,12 @@ class FuncLineCovTool(AgentTool):
             },
         }
 
-    def execute(self, binary_path: str, profdata_path: str,
-                function_name: str, source_file_path: Optional[str] = None) -> Dict[str, Any]:
+    def execute(self, profdata_path: str, function_name: str,
+                source_file_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute llvm-cov show to retrieve function line coverage.
 
         Args:
-            binary_path: Path to instrumented binary
             profdata_path: Path to profdata file
             function_name: Function name to analyze
             source_file_path: Optional path to source file (absolute or relative to repo)
@@ -994,8 +987,8 @@ class FuncLineCovTool(AgentTool):
             - error: str error message if failed
         """
         try:
-            # Resolve paths
-            binary_path = os.path.abspath(binary_path)
+            # Use the binary_path from initialization
+            binary_path = self.binary_path
             profdata_path = os.path.abspath(profdata_path)
 
             # Handle source_file_path: if provided, resolve it

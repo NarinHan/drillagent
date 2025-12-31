@@ -18,6 +18,7 @@ from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_coverage_analysis_prompt,
 )
 from drillagent.utils.llvm_cov import LLVMCovUtils
+from drillagent.utils.utils import set_memory_limit
 
 # 
 # Currently we assume that the PathExplorationAgent **has** usable call trace. (LHY)
@@ -251,13 +252,6 @@ class PathExplorationAgent:
 
         # Step 3: Execute the command with memory limit
         self.logger.info (f"  [PathExplorationAgent] Executing command: {command} in {round_dir}")
-        # self.logger.info (f"  [PathExplorationAgent] Memory limit set to 12GB for subprocess")
-        def set_memory_limit():
-            """Set memory limit to 12GB for the subprocess to prevent memory leaks"""
-            max_memory_bytes = 12 * 1024 * 1024 * 1024  # 12GB in bytes
-            # RLIMIT_AS limits the address space (total virtual memory)
-            resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))
-
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
@@ -285,7 +279,7 @@ class PathExplorationAgent:
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
-        # Step 4: After each execution, use LLVMCovUtils to store the coverage profile data.
+        # Step 4: After each execution, use LLVMCovUtils to transform profraw and store the coverage profile data.
         self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE: {profraw_path}")
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
             self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
@@ -304,8 +298,9 @@ class PathExplorationAgent:
                 # LLVMCovUtils will replace last round's coverage data with new execution results.
                 # And automatically convert profraw to profdata inside.
                 self.llvm_cov_utils.update_profile_data(profraw_path) # relative path (by default)
-            self.logger.info(f"  [PathExplorationAgent] current profdata file generated at: {self.llvm_cov_utils.profdata_path}")
+            self.logger.info(f"  [PathExplorationAgent] Current profdata file generated/updated at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
+
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to convert profraw to profdata: {e}")
             return exit_code, exec_output
@@ -369,6 +364,7 @@ class PathExplorationAgent:
                     'func_execution_count' : func_cov['execution_count']
                 })
             except Exception as e:
+                # TODO: FIX: Here we meet too many failures/fallbacks!!! Jepordizes the analysis...
                 self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage: {e}.  Maybe caused by compiler optimizations (omitted)...")
                 updated_frame.update({
                     'failed_getting_cov'   : True,

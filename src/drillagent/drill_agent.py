@@ -59,13 +59,11 @@ class DrillAgent:
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD
-        # Path exploration results
-        self.pov_candidates     = []
-        self.coverage_data      = None
-        # Final analysis results
-        self.crash_inputs = []         # Real PoV inputs that trigger the vulnerability
 
-        # # Initialize logger and components
+        # Final analysis results
+        self.crash_inputs = [] # Real PoV inputs that trigger the vulnerability
+
+        ## Initialize logger and components
         self.logger = self._setup_logger()
         self._init_components()
 
@@ -152,10 +150,8 @@ class DrillAgent:
                 TreeTool(self.config.target_repo_path)
             ]
             self.logger.info(f"✓ Agent tools initialized: {len(self.agent_tools)} tools available")
-            self.agent_cov_tools = [
-                FuncLineCovTool(self.config.target_repo_path)
-            ]
-            self.logger.info(f"✓ Coverage agent tools initialized: {len(self.agent_cov_tools)} tools available")
+            # Note: agent_cov_tools will be initialized after vulnerability analysis
+            # when binary_path becomes available
         except Exception as e:
             self.logger.error(f"Failed to initialize agent tools: {e}")
 
@@ -242,6 +238,20 @@ class DrillAgent:
             # Phase 2: Code Instrumentation
             if not self.skip_code_instrumentation:
                 self._phase_code_instrumentation()
+
+            # Initialize coverage analysis tools now that we have binary_path
+            try:
+                binary_abs_path = os.path.join(
+                    self.config.target_repo_path,
+                    self.vulnerability_info.binary_path
+                )
+                self.agent_cov_tools = [
+                    FuncLineCovTool(self.config.target_repo_path, binary_abs_path)
+                ]
+                self.logger.info(f"✓ Coverage agent tools initialized: {len(self.agent_cov_tools)} tools available")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize coverage agent tools: {e}")
+                self.agent_cov_tools = []  # Keep empty list to avoid errors
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:
@@ -366,7 +376,6 @@ class DrillAgent:
             self.errors.append(f"Path exploration failed: {e}")
 
         self.logger.info("✓ Path exploration completed")
-        self.logger.info(f"  - Total PoV candidates generated: {len(self.pov_candidates)}")
 
     def _phase_crash_triggering(self):
         """Phase 4: Generate and verify PoV test cases"""
@@ -386,8 +395,9 @@ class DrillAgent:
             final_pov = self.crash_agent.final_pov
             if final_pov:
                 self.logger.info(f"  ✓ Final PoV successfully generated and validated!")
-                self.logger.info(f"  - PoV path: {final_pov['pov_path']}.")
+                self.logger.info(f"  - PoV path: {final_pov['saved_pov_path']}")
                 # self.logger.info(f"  - Found at iteration: {final_pov['iteration']}")
+                self.crash_inputs.append(final_pov['saved_pov_path'])
             else:
                 self.logger.warning(f"  ✗ No valid PoV generated after {self.crash_agent.current_trigger_iteration} iterations")
                 self.errors.append("Crash triggering failed: No valid PoV found")
@@ -404,12 +414,9 @@ class DrillAgent:
             "target_repo_path": self.config.target_repo_path,
             "cve_id": self.config.cve_id,
             "final_phase": self.phase,
-            "iterations": self.iteration,
             "crashes_found": len(self.crash_inputs),
-            "povs_generated": len(self.pov_candidates),
             "errors": self.errors,
             "vulnerability_info": self.vulnerability_info.to_dict(),
-            "pov_candidates": self.pov_candidates,
         }
 
         self.logger.info("\n" + "=" * 60)
@@ -418,9 +425,7 @@ class DrillAgent:
         self.logger.info(f"Target: {report['target_repo_path']}")
         self.logger.info(f"CVE ID: {report['cve_id']}")
         self.logger.info(f"Final Phase: {report['final_phase']}")
-        self.logger.info(f"Iterations: {report['iterations']}")
         self.logger.info(f"Crashes Found: {report['crashes_found']}")
-        self.logger.info(f"PoVs Generated: {report['povs_generated']}")
 
         if report['errors']:
             self.logger.warning(f"Errors: {len(report['errors'])}")

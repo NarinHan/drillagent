@@ -21,7 +21,7 @@ class LLVMCovUtils:
     """
     # TODO: All paths used here is absolute or relative? This should be further refactored. (LHY)
     def __init__(self, binary_path: str, 
-                 profraw_path: str = "", profdata_path: str = "", 
+                 profraw_path: str = "", profdata_path: str = "", # not necessary for init
                  llvm_cov_path: str = "llvm-cov", llvm_profdata_path: str = "llvm-profdata"):
         """
         Initialize LLVMCovUtils.
@@ -33,10 +33,17 @@ class LLVMCovUtils:
             llvm_profdata_path: Path to llvm-profdata tool (default: "llvm-profdata")
         """
         self.binary_path = os.path.abspath(binary_path)
-        self.llvm_cov_path = llvm_cov_path
-        self.llvm_profdata_path = llvm_profdata_path
+        self.llvm_cov_path = llvm_cov_path           # llvm-cov command
+        self.llvm_profdata_path = llvm_profdata_path # llvm-profdata command
+        # Path to the profdata file (coverage data), should be update after each new execution.
+        self.profdata_path = ""  # Will be set below
+        # Cache for exported JSON data (can be large, use clear_data() to free memory).
+        self._coverage_data: Optional[Dict[str, Any]] = None
 
-        assert profraw_path or profdata_path, "Either profraw_path or profdata_path must be provided."
+        # assert profraw_path or profdata_path, "Either profraw_path or profdata_path must be provided."
+        if len(profraw_path) == 0 and len(profdata_path) == 0:
+            return  # Both paths are empty, skip initialization for now. The user must call update_profile_data() later.
+
         if profraw_path:
             assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
         if profdata_path:
@@ -49,8 +56,17 @@ class LLVMCovUtils:
         else:
             self.profdata_path = self._convert_profraw_to_profdata(profraw_path)
 
-        # Cache for exported JSON data (can be large, use clear_data() to free memory)
-        self._coverage_data: Optional[Dict[str, Any]] = None
+    def update_profile_data(self, profraw_path: str) -> None:
+        # First clear self.profdata_path and self._coverage_data. Then re-generate these two fields from profraw_path.
+        # Validate profraw_path format
+        assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
+
+        # Clear cached coverage data before updating
+        self.clear_data()
+
+        # Convert new profraw to profdata and update path
+        self.profdata_path = self._convert_profraw_to_profdata(profraw_path)
+        # The cov json data will be parsed lazily when needed.
 
     def _convert_profraw_to_profdata(self, profraw_path: str) -> str:
         # LHY: This function should be executed implicitly when init and update.
@@ -468,18 +484,6 @@ class LLVMCovUtils:
         assert os.path.isfile(index_path), "llvm-cov: HTML report generation failed."
         return index_path
 
-    def update_profile_data(self, profraw_path: str) -> None:
-        # First clear self.profdata_path and self._coverage_data. Then re-generate these two fields from profraw_path.
-        # Validate profraw_path format
-        assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
-
-        # Clear cached coverage data
-        self.clear_data()
-
-        # Convert new profraw to profdata and update path
-        self.profdata_path = self._convert_profraw_to_profdata(profraw_path)
-        # The cov json data will be parsed lazily when needed.
-
     def clear_data(self) -> None:
         """
         Clear cached coverage data to free memory.
@@ -489,7 +493,8 @@ class LLVMCovUtils:
             # ... process result ...
             cov.clear_data()  # Free memory
         """
-        self._coverage_data.clear()
+        if self._coverage_data is not None: # FIX: Avoid operating on a None object!
+            self._coverage_data.clear()
         self._coverage_data = None
 
 def main():

@@ -314,8 +314,6 @@ def main():
         print("DrillAgent Execution Summary")
         print("=" * 70)
         print(f"Final Phase: {result['final_phase']}")
-        print(f"Iterations: {result['iterations']}")
-        print(f"PoVs Generated: {result['povs_generated']}")
         print(f"Crashes Found: {result['crashes_found']}")
 
         if result['errors']:
@@ -327,7 +325,7 @@ def main():
         print("=" * 70)
 
         # Exit with appropriate code
-        if result['final_phase'] == 'completed' and result['povs_generated'] > 0:
+        if result['final_phase'] == 'completed':
             print("\n✓ SUCCESS: PoVs generated successfully!")
             sys.exit(0)
         else:

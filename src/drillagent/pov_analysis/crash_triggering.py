@@ -11,8 +11,13 @@ if TYPE_CHECKING:
 
 from drillagent.prompts.CrashTriggerAgent_prompt import (
     CTA_system_prompt,
+    CTA_useful_testcase_and_cov_template,
+    CTA_coverage_config_template,
     CTA_final_pov_generation_prompt,
 )
+
+from drillagent.utils.llvm_cov import LLVMCovUtils
+from drillagent.utils.utils import set_memory_limit
 
 class CrashTriggerAgent:
     # Responsible for triggering crashes based on analyzed paths
@@ -31,12 +36,26 @@ class CrashTriggerAgent:
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
         # Output files.
-        self.generated_pov_candidates = []  # List of file paths to all test cases generated during crash triggering.
-        self.final_pov = None             # The final PoV that successfully triggers a crash.
+        ## Mapping from iteration number to a dict including: "testcase_path", "profdata_path".
+        self.generated_candidates = {i: {} for i in range(1, self.max_trigger_iterations + 1)}  
+        ## The final PoV that successfully triggers a crash.
+        self.final_pov = None
         ## final_pov['saved_pov_path']: The path where the final validated PoV is saved in output_dir.
+
+        # Init the LLVM coverage util. Set the profdata_path later after each execution.
+        repo_path = self.drill_agent.config.target_repo_path
+        binary_relative_path = self.drill_agent.vulnerability_info.binary_path
+        binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_relative_path))
+        self.llvm_cov_utils = LLVMCovUtils(binary_path=binary_abs_path)
 
     def run(self) -> None:
         self.logger.info("  [CrashTriggerAgent] Starting running. Checking previous path exploration results...")
+
+        # Clear all the previous roundN directories if exist
+        for i in range(1, self.max_trigger_iterations+1+4):
+            round_dir = self._get_round_dir(i)
+            if os.path.exists(round_dir):
+                shutil.rmtree(round_dir)
 
         # Before all: Examine the progress from previous path exploration.
         path_agent = self.drill_agent.path_agent
@@ -56,7 +75,7 @@ class CrashTriggerAgent:
             else:
                 self.logger.info("  [CrashTriggerAgent] Starting crash triggering attempts...")
 
-            # Fill useful_testcase_paths with up to 3 testcases
+            # Fill useful_testcase_paths with up to 3 testcases (used for the first round generation)
             # First from vfunc_reached_testcases (reversed), then from history_testcases (reversed)
             if path_agent.vfunc_reached_testcases:
                 self.useful_testcase_paths.extend(list(reversed(path_agent.vfunc_reached_testcases)))
@@ -87,7 +106,7 @@ class CrashTriggerAgent:
             try:
                 # Step 1: Generate final PoV.
                 pov_path = self._generate_final_pov()
-                self.generated_pov_candidates.append(pov_path)
+                self.generated_candidates[iteration]["testcase_path"] = pov_path
 
                 # Step 2: Execute PoV candidate.
                 exit_code, exec_output = self._execute_pov_candidate(pov_path)
@@ -138,38 +157,53 @@ class CrashTriggerAgent:
         round_dir = self._get_round_dir(self.current_trigger_iteration)
         os.makedirs(round_dir, exist_ok=True)
 
-        # Step 1: Gather all necessary information for PoV generation
+        # Substep 1: Gather all necessary information for PoV generation
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
         root_cause_str = self.drill_agent.vulnerability_info.get_full_root_cause()
 
-        # Try to prepare and provide previously-generated useful test cases.
-        if len(self.useful_testcase_paths) > 0:
-            # Transform self.useful_testcase_paths into a string containing several test case paths.
-            # Each testcase path and its corresponding coverage_record.md are included.
-            tmp_paths = []
-            for testcase_path in self.useful_testcase_paths:
-                tmp_paths.append(testcase_path)
-                dir_path = os.path.dirname(testcase_path)
-                coverage_path = os.path.join(dir_path, "coverage_record.md")
-                tmp_paths.append(coverage_path)
-            path_exploration_progress = "\n".join(tmp_paths)
+        # For history exec info, we provide path exploration progress to the first round and previous CTA-generated testcase for later rounds.
+        if self.current_trigger_iteration == 1:
+            # Try to prepare and provide previously-generated useful test cases.
+            if len(self.useful_testcase_paths) > 0:
+                # Transform self.useful_testcase_paths into a string containing several test case paths.
+                # Each testcase path and its corresponding coverage_record.md are included.
+                tmp_paths = []
+                for testcase_path in self.useful_testcase_paths:
+                    # LHY: Currently, we don't add "test_N.profdata" into prompt. All cov data is already organized.
+                    dir_path = os.path.dirname(testcase_path)
+                    coverage_path = os.path.join(dir_path, "coverage_record.md")
+                    tmp_paths.append(testcase_path)
+                    tmp_paths.append(coverage_path)
+                    tmp_paths.append("")
+                # Format the useful test cases and coverage info into previous_progress.
+                previous_progress = CTA_useful_testcase_and_cov_template.format(
+                    testcase_and_cov_paths="\n".join(tmp_paths)
+                )
+            else:
+                previous_progress = "No useful test cases available from path exploration. You have to generate PoV from current knowledge."
         else:
-            path_exploration_progress = "No useful test cases available from path exploration. You have to generate PoV from current knowledge."
+            last_round_info = self.generated_candidates.get(self.current_trigger_iteration - 1, {})
+            last_testcase_path = last_round_info.get("testcase_path", "N/A")
+            last_profdata_path = last_round_info.get("profdata_path", "N/A")
+            # Format the cov tool usage instructions with pre-round info.
+            previous_progress = CTA_coverage_config_template.format(
+                testcase_path=last_testcase_path,
+                profdata_path=last_profdata_path
+            )
 
-        # Step 2: Use LLMInterface to generate the final PoV
-        # Format the prompt for PoV generation
-        prompt = CTA_final_pov_generation_prompt.format(
+        # Substep 2: Use LLMInterface to generate the final PoV
+        # Format the user prompt for PoV generation
+        user_prompt = CTA_final_pov_generation_prompt.format(
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
             vulnerability_info=vuln_info_str,   # Including vuln type, call trace, etc.
-            root_cause_analysis=root_cause_str,
-            path_exploration_progress=path_exploration_progress
+            root_cause_analysis=root_cause_str, # Markdown format content
+            previous_pov_gen_progress=previous_progress # 🤔
         )
 
         self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
-        # TODO: The llvm-cov tool usage should be further taught out.
         result = self.drill_agent.basic_llm.run_agent_loop(
-            task=prompt,
+            task=user_prompt,
             tools=self.tools,  # Allow LLM to use tools for exploration (e.g., retrieve_function_line_coverage, read_file, etc.)
             system_prompt=CTA_system_prompt,
             max_iterations=max_generation_turns,
@@ -188,8 +222,9 @@ class CrashTriggerAgent:
         self.logger.info (f"  [CrashTriggerAgent] Stop reason: {result['stop_reason']}")
         self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
 
-        # Step 3: Extract PoV content from response
-        pov_pattern = r'```pov\s*\n(.*?)\n```'
+        # Substep 3: Extract PoV content from response
+        # pov_pattern = r'```pov\s*\n(.*?)\n```'
+        pov_pattern = r'```pov\s*\n([\s\S]*?)```' # more general and robust
         match = re.search(pov_pattern, response, re.DOTALL)
         if not match:
             # Fallback: try to find any code block
@@ -198,18 +233,17 @@ class CrashTriggerAgent:
             match = re.search(fallback_pattern, response, re.DOTALL)
         if not match:
             raise ValueError(f"No PoV code block found in LLM response after {result['iterations']} iterations")
-
         pov_content = match.group(1)
         self.logger.info(f"  [CrashTriggerAgent] PoV extracted successfully!")
 
-        # Step 4: Save PoV to file
-        pov_filename = f"pov-round{self.current_trigger_iteration}"
+        # Substep 4: Save PoV candidate to file
+        pov_filename = f"testcase-round{self.current_trigger_iteration}" # "testcase-roundN"
         pov_path = os.path.join(round_dir, pov_filename)
         with open(pov_path, 'w') as f:
             f.write(pov_content)
 
-        self.logger.debug(f"  [CrashTriggerAgent] Saved PoV content ({len(pov_content)} bytes) to {pov_path}")
-        self.logger.info(f"  [CrashTriggerAgent] Final PoV generated at: {pov_path}")
+        self.logger.debug(f"  [CrashTriggerAgent] Saved PoV candidate content ({len(pov_content)} bytes) to {pov_path}")
+        self.logger.info(f"  [CrashTriggerAgent] Final PoV candidate generated at: {pov_path}")
         return pov_path
 
     def _execute_pov_candidate(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed
@@ -219,7 +253,6 @@ class CrashTriggerAgent:
         round_dir = self._get_round_dir(self.current_trigger_iteration)
 
         # Prepare the command
-        # repo_path = self.drill_agent.config.target_repo_path
         binary_path = self.drill_agent.vulnerability_info.binary_path
         harness_command = self.drill_agent.vulnerability_info.refined_harness_command
         if not binary_path:
@@ -231,21 +264,20 @@ class CrashTriggerAgent:
         abs_test_case_path = os.path.abspath(test_case_path)
         command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
 
-        # Execute the command (no coverage collection needed for PoV validation)
-        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} in {round_dir}")
-        # self.logger.info(f"  [CrashTriggerAgent] Memory limit set to 12GB for subprocess")
-        def set_memory_limit():
-            """Set memory limit to 12GB for the subprocess to prevent memory leaks"""
-            max_memory_bytes = 12 * 1024 * 1024 * 1024  # 12GB in bytes
-            # RLIMIT_AS limits the address space (total virtual memory)
-            resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))
+        # Prepare environment for LLVM coverage data collection
+        profraw_path = os.path.join(round_dir, f"test_{self.current_trigger_iteration}.profraw")
+        env = os.environ.copy()
+        env['LLVM_PROFILE_FILE'] = profraw_path 
 
+        # Execute the command
+        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} in {round_dir}")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
                 command,
                 shell=True,
                 cwd=round_dir,
+                env=env, # Specify environment with LLVM_PROFILE_FILE
                 capture_output=True,
                 text=True,
                 timeout=30,  # 30 seconds timeout
@@ -265,7 +297,15 @@ class CrashTriggerAgent:
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
-        self.logger.info(f"  [CrashTriggerAgent] Command exit code: {exit_code}")
+        # After execution finished, convert the profraw to profdata, and record the file path.
+        if os.path.exists(profraw_path):
+            self.llvm_cov_utils.update_profile_data(profraw_path)
+            self.generated_candidates[self.current_trigger_iteration]["profdata_path"] = self.llvm_cov_utils.profdata_path
+        else:
+            self.logger.error(f"  [CrashTriggerAgent] Expected profraw file not found: {profraw_path}")
+
+        self.logger.info (f"  [CrashTriggerAgent] Command exit code: {exit_code}")
+        self.logger.debug(f"  [CrashTriggerAgent] Command execution output:\n{exec_output[:500]}...")
         return exit_code, exec_output
 
     def _validate_pov(self, pov_data: Dict) -> bool:
@@ -286,7 +326,7 @@ class CrashTriggerAgent:
 
         # TODO: Now we simply assume all segmentation faults are valid PoVs and return True. 
         # In future, we should use sanitizer-instrumented binaries to validate.
-        return True ###
+        return True #tmp
 
     def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
         """The same function as in PathExplorationAgent."""
