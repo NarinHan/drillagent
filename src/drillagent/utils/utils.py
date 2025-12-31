@@ -1,7 +1,8 @@
 import os
+import yaml
+import resource
 import subprocess
 import logging
-import yaml
 from pathlib import Path
 from typing import Optional
 
@@ -175,6 +176,12 @@ def clean_gitrepo(actual_repo_path: str):
         text=True,
         check=True
     )
+
+def set_memory_limit(): # For subprocesses.run
+    """Set memory limit to 12GB for the subprocess to prevent memory leaks"""
+    max_memory_bytes = 12 * 1024 * 1024 * 1024  # 12GB in bytes
+    # RLIMIT_AS limits the address space (total virtual memory)
+    resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))
 
 # 
 # Old instrumented binary check functions (legacy)

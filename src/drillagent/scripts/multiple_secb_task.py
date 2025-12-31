@@ -378,8 +378,6 @@ def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_p
             'end_time': end_time.isoformat(),
             'duration_seconds': duration,
             'final_phase': agent_result['final_phase'],
-            'iterations': agent_result['iterations'],
-            'povs_generated': agent_result['povs_generated'],
             'crashes_found': agent_result['crashes_found'],
             'errors': agent_result['errors'],
             'output_dir': str(output_dir)
@@ -389,8 +387,6 @@ def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_p
         print("\n" + "-" * 70)
         print(f"Task {instance_id} Summary:")
         print(f"  Final Phase: {agent_result['final_phase']}")
-        print(f"  Iterations: {agent_result['iterations']}")
-        print(f"  PoVs Generated: {agent_result['povs_generated']}")
         print(f"  Crashes Found: {agent_result['crashes_found']}")
         print(f"  Duration: {duration:.1f}s")
         if agent_result['errors']:
@@ -551,10 +547,9 @@ def main():
         instance_id = result['instance_id']
 
         if result['success']:
-            povs = result.get('povs_generated', 0)
             crashes = result.get('crashes_found', 0)
             duration = result.get('duration_seconds', 0)
-            print(f"  {status} {instance_id}: {povs} PoVs, {crashes} crashes ({duration:.1f}s)")
+            print(f"  {status} {instance_id}: {crashes} crash(es) found ({duration:.1f}s)")
         else:
             error = result.get('error', 'Unknown error')
             print(f"  {status} {instance_id}: {error}")

@@ -78,6 +78,7 @@ Raw Call Trace:
 ```
 
 Your task is to parse this call trace and extract structured information for each frame.
+- Special note: If there are multiple sets of call traces in "Raw Call Trace", only keep the first one trace and ignore the other sets of traces!!
 
 For each line starting with '#' in the call trace:
 1. Extract the sequence number (the number after #).

@@ -8,10 +8,41 @@ When generating PoVs:
 - For NULL Pointer Dereference (NPD): create inputs that cause NULL pointers to be dereferenced
 - For Integer Overflow/Underflow: design inputs that cause arithmetic operations to wrap around
 - For Out-of-Bounds (OOB) access: generate inputs that access memory beyond valid bounds (e.g., larger array indices)
-- Focus on reliability: ensure the PoV consistently triggers the crash
+"""
+# - Focus on reliability: ensure the PoV consistently triggers the crash
+
+
+CTA_useful_testcase_and_cov_template = """The following test cases were generated during path exploration and successfully reached closer to the vulnerability (but failed to trigger the crash). 
+Each test case is accompanied by its coverage record:
+
+{testcase_and_cov_paths}
+
+Review these test cases and their coverage records to understand:
+- Which code paths were successfully explored
+- Patterns in successful inputs that you can build upon
+
+Use the `read_file` tool to examine these files and synthesize their insights into your final PoV.
 """
 
+# **Coverage Analysis Configuration:**
+CTA_coverage_config_template = """During previous round of PoV generation, the generated test case is at `{testcase_path}` (failed to trigger the crash).
 
+By executing this test case, we have obtained code coverage profile data stored in:
+- profdata_path: `{profdata_path}`
+
+You are encouraged to use the `retrieve_function_line_coverage` tool to analyze code coverage of previous execution, and synthesize the insights into your final PoV.
+
+Example tool call:
+{{
+    "profdata_path": "{profdata_path}",
+    "function_name": "target_function_name",
+    "source_file_path": "src/file.c"  // optional, can be omitted to search all files
+}}
+
+Note: The binary path is already configured in the tool. You only need to provide profdata_path, function_name, and optionally source_file_path.
+"""
+
+# Use `previous_pov_gen_progress` to provide previous execution feedback.
 CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to reliably trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV possible.
 
 Vulnerable Project Name: {project_name}
@@ -25,9 +56,9 @@ ROOT CAUSE ANALYSIS:
 
 {root_cause_analysis}
 
-PATH EXPLORATION FEEDBACK:
+PREVIOUS PoV GENERATION PROGRESS:
 
-{path_exploration_feedback}
+{previous_pov_gen_progress}
 
 YOUR TASK:
 
@@ -38,7 +69,7 @@ YOUR TASK:
    - Understand what worked and what didn't from previous test case attempts
    - You are encouraged to use provided tools to read relevant source code again if needed
 
-2. **Synthesize a final PoV**:
+2. **Synthesize a final PoV to violate the memory safety policies**:
    - Combine successful elements from previous test cases with vulnerability insights
    - Target the exact triggering conditions identified in the root cause analysis
    - Ensure the input satisfies all preconditions along the call trace
@@ -62,7 +93,6 @@ YOUR TASK:
 
 4. **Explain your PoV strategy** (briefly, outside the code block):
    - What specific vulnerability condition does this PoV target?
-   - How does it leverage the root cause analysis and path exploration feedback?
    - Why should this PoV successfully trigger the crash?
 
 IMPORTANT:

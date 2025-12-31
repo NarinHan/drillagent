@@ -1,6 +1,7 @@
 import subprocess
 import json
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -20,7 +21,7 @@ class LLVMCovUtils:
     """
     # TODO: All paths used here is absolute or relative? This should be further refactored. (LHY)
     def __init__(self, binary_path: str, 
-                 profraw_path: str = "", profdata_path: str = "", 
+                 profraw_path: str = "", profdata_path: str = "", # not necessary for init
                  llvm_cov_path: str = "llvm-cov", llvm_profdata_path: str = "llvm-profdata"):
         """
         Initialize LLVMCovUtils.
@@ -32,10 +33,17 @@ class LLVMCovUtils:
             llvm_profdata_path: Path to llvm-profdata tool (default: "llvm-profdata")
         """
         self.binary_path = os.path.abspath(binary_path)
-        self.llvm_cov_path = llvm_cov_path
-        self.llvm_profdata_path = llvm_profdata_path
+        self.llvm_cov_path = llvm_cov_path           # llvm-cov command
+        self.llvm_profdata_path = llvm_profdata_path # llvm-profdata command
+        # Path to the profdata file (coverage data), should be update after each new execution.
+        self.profdata_path = ""  # Will be set below
+        # Cache for exported JSON data (can be large, use clear_data() to free memory).
+        self._coverage_data: Optional[Dict[str, Any]] = None
 
-        assert profraw_path or profdata_path, "Either profraw_path or profdata_path must be provided."
+        # assert profraw_path or profdata_path, "Either profraw_path or profdata_path must be provided."
+        if len(profraw_path) == 0 and len(profdata_path) == 0:
+            return  # Both paths are empty, skip initialization for now. The user must call update_profile_data() later.
+
         if profraw_path:
             assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
         if profdata_path:
@@ -48,8 +56,17 @@ class LLVMCovUtils:
         else:
             self.profdata_path = self._convert_profraw_to_profdata(profraw_path)
 
-        # Cache for exported JSON data (can be large, use clear_data() to free memory)
-        self._coverage_data: Optional[Dict[str, Any]] = None
+    def update_profile_data(self, profraw_path: str) -> None:
+        # First clear self.profdata_path and self._coverage_data. Then re-generate these two fields from profraw_path.
+        # Validate profraw_path format
+        assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
+
+        # Clear cached coverage data before updating
+        self.clear_data()
+
+        # Convert new profraw to profdata and update path
+        self.profdata_path = self._convert_profraw_to_profdata(profraw_path)
+        # The cov json data will be parsed lazily when needed.
 
     def _convert_profraw_to_profdata(self, profraw_path: str) -> str:
         # LHY: This function should be executed implicitly when init and update.
@@ -111,7 +128,7 @@ class LLVMCovUtils:
 
         return self._coverage_data
 
-    def get_function_coverage(self, file_path: str, function_name: str) -> Dict[str, Any]:
+    def get_function_coverage(self, file_path: str, function_name: str) -> Dict[str, Any]: # Based on JSON data
         """
         Get function coverage details.
         Args:
@@ -181,7 +198,7 @@ class LLVMCovUtils:
         # Anyone whp calls this function should handle the exception with try-except.
         raise ValueError(f"Function '{function_name}' not found in file '{file_path}'")
 
-    def get_multi_functions_coverage(self, function_with_filepath_list: List[tuple]) -> Dict[tuple, Dict[str, Any]]:
+    def get_multi_functions_coverage(self, function_with_filepath_list: List[tuple]) -> Dict[tuple, Dict[str, Any]]: # Based on JSON data
         """
         Get coverage details for multiple functions in batch.
         This is more efficient than calling get_function_coverage() multiple times.
@@ -247,7 +264,7 @@ class LLVMCovUtils:
 
         return target_functions
 
-    def get_detailed_function_coverage(self, file_path: str, function_name: str) -> str:
+    def get_detailed_function_coverage(self, file_path: str, function_name: str) -> str: # Based on llvm-cov show command
         """
         Get detailed line-by-line coverage for a specific function in a human-readable format.
         Uses llvm-cov show command to get the coverage output directly.
@@ -287,44 +304,7 @@ class LLVMCovUtils:
         return result.stdout
 
 
-    @staticmethod
-    def _parse_execution_count(count_str: str) -> int:
-        """
-        Parse execution count string which may contain suffixes like k, M, G, T.
-
-        Args:
-            count_str: Count string (e.g., "42", "2.14M", "410k")
-
-        Returns:
-            Integer execution count
-
-        Examples:
-            "42" -> 42
-            "2.14M" -> 2140000
-            "410k" -> 410000
-            "1.5G" -> 1500000000
-        """
-        count_str = count_str.strip()
-
-        # Suffix multipliers
-        multipliers = {
-            'k': 1000,
-            'K': 1000,
-            'M': 1000000,
-            'G': 1000000000,
-            'T': 1000000000000
-        }
-
-        # Check if the last character is a suffix
-        if count_str and count_str[-1] in multipliers:
-            # Extract numeric part and multiply
-            numeric_part = float(count_str[:-1])
-            return int(numeric_part * multipliers[count_str[-1]])
-        else:
-            # No suffix, just convert to int
-            return int(float(count_str))
-
-    def get_line_coverage(self, file_path: str, line_number: int) -> Dict[str, Any]:
+    def get_line_coverage(self, file_path: str, line_number: int) -> Dict[str, Any]: # Based on llvm-cov show command
         """
         Get line coverage details using llvm-cov show command.
 
@@ -340,8 +320,6 @@ class LLVMCovUtils:
             - is_executed: Whether line was executed
             - execution_count: Execution count
         """
-        import re
-
         file_path = os.path.abspath(file_path)
 
         # Construct llvm-cov show command to get line counts for the entire file
@@ -381,9 +359,28 @@ class LLVMCovUtils:
                 current_line_num = int(match.group(1))
                 count_str = match.group(2)
 
+                # Parse execution count for count_str
+                # Count string (e.g., "42", "2.14M", "410k"). We want standard integer.
+                count_str = count_str.strip()
+                # Suffix multipliers
+                multipliers = {
+                    'k': 1000, 'K': 1000,
+                    'm': 1000000, 'M': 1000000,
+                    'g': 1000000000, 'G': 1000000000,
+                    't': 1000000000000, 'T': 1000000000000
+                }
+                # Check if the last character is a suffix
+                if count_str and count_str[-1] in multipliers:
+                    # Extract numeric part and multiply
+                    numeric_part = float(count_str[:-1])
+                    count_int = int(numeric_part * multipliers[count_str[-1]])
+                else:
+                    # No suffix, just convert to int
+                    count_int = int(float(count_str))
+
                 # Found the target line
                 if current_line_num == line_number:
-                    execution_count = self._parse_execution_count(count_str)
+                    execution_count = count_int
                     return {
                         'is_executed': execution_count > 0,
                         'execution_count': execution_count
@@ -399,7 +396,7 @@ class LLVMCovUtils:
             'execution_count': 0
         }
 
-    def get_function_regions(self, file_path: str, function_name: str) -> List[Dict[str, Any]]:
+    def get_function_regions(self, file_path: str, function_name: str) -> List[Dict[str, Any]]: # Based on JSON data
         """
         Get function region coverage details.
         Args:
@@ -487,15 +484,6 @@ class LLVMCovUtils:
         assert os.path.isfile(index_path), "llvm-cov: HTML report generation failed."
         return index_path
 
-    def update_profile_data(self, profraw_path: str) -> None:
-        # First clear self.profdata_path and self._coverage_data. Then re-generate these two fields from profraw_path.
-        # Validate profraw_path format
-        assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
-        # Clear cached coverage data
-        self._coverage_data = None
-        # Convert new profraw to profdata and update path
-        self.profdata_path = self._convert_profraw_to_profdata(profraw_path)
-
     def clear_data(self) -> None:
         """
         Clear cached coverage data to free memory.
@@ -505,6 +493,8 @@ class LLVMCovUtils:
             # ... process result ...
             cov.clear_data()  # Free memory
         """
+        if self._coverage_data is not None: # FIX: Avoid operating on a None object!
+            self._coverage_data.clear()
         self._coverage_data = None
 
 def main():

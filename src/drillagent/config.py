@@ -46,11 +46,11 @@ class AgentConfig:
     disable_in_context_rl: bool              = False # To be discussed
     # More fine-grained ablation options can be added here.
     disable_root_cause_analysis: bool        = False
-    # Instrumentation options are not needed (LHY: The instrumentation choice should be fixed by us.)
 
     #
     # Analysis options
     #
+    # 2025.12.30: Currently not put into use.
     max_iterations: int = 10
     timeout: int = 1200  # in seconds # 20mins
 
