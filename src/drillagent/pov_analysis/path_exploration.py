@@ -145,7 +145,7 @@ class PathExplorationAgent:
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep1: Generating test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
-        max_generation_turns = 10 # We can set this parameter.
+        max_generation_turns = 20 # We can set this parameter.
 
         # Step 1: Construct the prompt for test case generation
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
@@ -319,9 +319,7 @@ class PathExplorationAgent:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
             return "ERROR: No vulnerability call trace available for coverage analysis"
 
-        # TODO: We need special inspection for the crash happening function (innermost function).
-
-        # Step 1: Extract function information from vulnerable call trace
+        # Substep 1: Extract function information from vulnerable call trace
         # Build a list of (function_name, file_path) tuples for batch query
         valid_frames: List[Tuple[Dict, Any]] = []  # Store (frame, abs_file_path) tuples for frames we'll query
         repo_path = self.drill_agent.config.target_repo_path
@@ -349,8 +347,8 @@ class PathExplorationAgent:
         #     self.logger.error(f"  [PathExplorationAgent] Failed to query function coverage: {e}")
         #     return f"ERROR: Coverage query failed - {str(e)}"
 
-        # Step2: Collecting current execution's coverage data using LLVMCovUtils.
-        # Use get_function_coverage, get_line_coverage, get_detailed_function_coverage.
+        # Substep 2: Collecting current execution's coverage data using LLVMCovUtils.
+        # Use get_function_coverage, get_line_coverage.
         cov_frames: List[Dict] = []
         for frame, abs_file_path in valid_frames:
             updated_frame = frame.copy()
@@ -390,7 +388,7 @@ class PathExplorationAgent:
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
         sorted_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
 
-        # Step3: Identify the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
+        # Substep 3: Identify the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
         first_uncovered_frame  = None
         for frame in sorted_frames:
             # Check if we can get function coverage for this frame
@@ -420,23 +418,25 @@ class PathExplorationAgent:
             # Both function and callsite line executed, continue to next frame
             continue
 
-        # If we found an uncovered callsite, get detailed function coverage for branch-level analysis
-        # If there is no uncovered callsite, maybe we have already reached the vulnerable function!!!
         detailed_func_cov_data = None
-        if first_uncovered_frame:
-            try:
-                # Get detailed line-by-line coverage for the uncovered function
-                abs_file_path = os.path.abspath(os.path.join(repo_path, first_uncovered_frame['file_path']))
-                detailed_func_cov_data = self.llvm_cov_utils.get_detailed_function_coverage(
-                    file_path=abs_file_path,
-                    function_name=first_uncovered_frame['function_name']
-                )
-                self.logger.info(f"  [PathExplorationAgent] Retrieved detailed coverage for '{first_uncovered_frame['function_name']}'")
-            except Exception as e:
-                self.logger.warning(f"  [PathExplorationAgent] Failed to get detailed function coverage for '{first_uncovered_frame['function_name']}': {e}")
-                detailed_func_cov_data = None
-        else:
+        # If there is no uncovered callsite, maybe we have already reached the vulnerable function!!!
+        if not first_uncovered_frame:
             self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered!!!!!")
+
+        # 2026.01.03: We don't hard-encode detailed function coverage results here.
+        # # If we found an uncovered callsite, get detailed function coverage for branch-level analysis
+        # if first_uncovered_frame:
+        #     try:
+        #         # Get detailed line-by-line coverage for the uncovered function
+        #         abs_file_path = os.path.abspath(os.path.join(repo_path, first_uncovered_frame['file_path']))
+        #         detailed_func_cov_data = self.llvm_cov_utils.get_detailed_function_coverage(
+        #             file_path=abs_file_path,
+        #             function_name=first_uncovered_frame['function_name']
+        #         )
+        #         self.logger.info(f"  [PathExplorationAgent] Retrieved detailed coverage for '{first_uncovered_frame['function_name']}'")
+        #     except Exception as e:
+        #         self.logger.warning(f"  [PathExplorationAgent] Failed to get detailed function coverage for '{first_uncovered_frame['function_name']}': {e}")
+        #         detailed_func_cov_data = None
 
         # If first_uncovered_frame is still None here, it means all callsites are covered!
         return sorted_frames, first_uncovered_frame, detailed_func_cov_data
@@ -506,13 +506,14 @@ class PathExplorationAgent:
             output_lines.append(f"Line-Level First Un-executed Callsite:") #####
             output_lines.append(f"  Function: #{first_uncovered_frame['sequence_num']} {first_uncovered_frame['function_name']}")
             output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (the un-executed line in the func body)")
+            # output_lines.append(f"    Based on the provided call trace, determine which callee was not invoked here and explain why it was not called.")
             output_lines.append("")
-            if detailed_func_cov_data:
-                output_lines.append("Function Body Code with Coverage:")
-                output_lines.append("  - The leftmost column shows the source code line numbers.)")
-                output_lines.append("  - The middle column shows the execution counts.")
-                output_lines.append("  - The rightmost column contains the source code.")
-                output_lines.append(detailed_func_cov_data) # Add the detailed coverage output directly
+            # if detailed_func_cov_data: # Add the detailed coverage output directly
+            #     output_lines.append("Function Body Code with Coverage:")
+            #     output_lines.append("  - The leftmost column shows the source code line numbers.)")
+            #     output_lines.append("  - The middle column shows the execution counts.")
+            #     output_lines.append("  - The rightmost column contains the source code.")
+            #     output_lines.append(detailed_func_cov_data)
         else:
             output_lines.append("-" * 80)
             output_lines.append(f"Line-Level First Un-executed Callsite: (if any)") #####
@@ -649,12 +650,16 @@ class PathExplorationAgent:
 
         # Check for other interesting exit codes
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
-            self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code})")
-            self.logger.debug(f"  [PathExplorationAgent] This may indicate assertion failure or abort() call")
+            self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code}).")
+            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
+                self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
+                return True
+
         elif exit_code == -9 or exit_code == 137:  # SIGKILL
-            self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code})")
+            self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code}).")
+        
         elif exit_code < 0 or exit_code > 128:  # Signal-based exit
-            self.logger.debug(f"  [PathExplorationAgent] Program terminated with signal (exit code {exit_code})")
+            self.logger.debug(f"  [PathExplorationAgent] Program terminated with signal (exit code {exit_code}).")
 
         return False  # No crash input pov found
 

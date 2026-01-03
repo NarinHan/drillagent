@@ -243,7 +243,7 @@ class DrillAgent:
             try:
                 binary_abs_path = os.path.join(
                     self.config.target_repo_path,
-                    self.vulnerability_info.binary_path
+                    self.vulnerability_info.binary_path # obtained from two phases ago
                 )
                 self.agent_cov_tools = [
                     FuncLineCovTool(self.config.target_repo_path, binary_abs_path)

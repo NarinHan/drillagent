@@ -418,19 +418,35 @@ class LLMInterface:
             # Create conversation manager to handle history automatically
             conversation = ConversationManager(self.provider)
 
-            current_prompt = task
             text_response = ""
             stop_reason = "unknown"
 
-            for iteration in range(1, max_iterations + 1):
+            # Prepare initial prompt based on whether this is the last iteration
+            if max_iterations == 1:
+                # Only one iteration allowed - must provide final answer immediately
+                current_prompt = (
+                    "CRITICAL: You have ONLY ONE iteration to complete this task. "
+                    "You can NO LONGER call any tools. "
+                    "You must provide your final answer based on all available context and knowledge. "
+                    "Analyze thoroughly and give your complete response as required. The task is as below.\n\n"
+                    f"{task}"
+                )
+            else:
+                current_prompt = task
+
+            for iteration in range(1, max_iterations + 1): # 1 ~ max_iterations 
+                # Determine tools availability based on iteration
+                # On the last iteration, disable tools to force final answer
+                current_tools = [] if iteration == max_iterations else tools
+
                 # Retry logic for rate limits and timeouts
                 retry_count = 0
                 while retry_count <= max_retries:
                     try:
                         # Call LLM with tools
                         text_response, tool_calls, assistant_message, stop_reason = self.generate_with_tools(
-                            prompt=current_prompt,
-                            tools=tools,
+                            prompt=current_prompt, # prepared before for-loop or at the end of for-loop
+                            tools=current_tools,
                             system_prompt=system_prompt,
                             conversation_history=conversation.get_messages(),
                             temperature=temperature,
@@ -570,8 +586,27 @@ class LLMInterface:
                 # Automatically add tool results to history (handles provider differences)
                 conversation.add_tool_results(tool_calls, tool_results)
 
-                # Prepare next iteration prompt
-                current_prompt = continuation_prompt
+                # Prepare next iteration prompt based on remaining iterations
+                # In the second-to-last round, tools can still be called one final time, and in the final round (the last round), tool calls are disabled.
+                next_iteration = iteration + 1
+                if next_iteration == max_iterations:
+                    # Next iteration is the last one: it will have no tools, must provide final answer
+                    current_prompt = (
+                        "CRITICAL: You can NO LONGER call any tools. "
+                        "You must provide your final answer based on all the context and information gathered so far. "
+                        "Analyze the available information thoroughly and give your complete response as required by the task."
+                    )
+                elif next_iteration == max_iterations - 1:
+                    # Next iteration is second-to-last: warn this is the last chance to use tools
+                    current_prompt = (
+                        "IMPORTANT: This is your LAST chance to call tools. "
+                        "After this iteration, you will need to provide your final answer based on all available context. "
+                        "Use tools wisely if needed, or provide your final answer now if you have enough information.\n\n"
+                        f"{continuation_prompt}"
+                    )
+                else:
+                    # Normal continuation
+                    current_prompt = continuation_prompt
 
             # Max iterations reached
             return {

@@ -29,7 +29,7 @@ Your task is to extract the following information from the sanitizer report:
    - Skip functions in system libraries (libc, libstdc++, etc.)
    - Find the first function that is in the project's source code
 
-3. **Crash Location (refined_vuln_location)**: Must be in format "file_relative_path:line_number"
+3. **Crash Location (crash_location)**: Must be in format "file_relative_path:line_number"
    - The file path must be RELATIVE to the repository root: {actual_repo_path}
    - Example: if full path is /home/user/njs/src/njs_function.c, then relative path is src/njs_function.c
    - Format: src/njs_function.c:574 (NOT /home/user/njs/src/njs_function.c:574)
@@ -56,7 +56,7 @@ Respond in the following JSON format ONLY:
 {{
     "vuln_type": "the vulnerability type",
     "crash_function": "innermost function IN REPOSITORY CODE (not libc)",
-    "refined_vuln_location": "relative/path/file.c:line_number",
+    "crash_location": "relative/path/file.c:line_number",
     "entry_function": "main or other entry function",
     "entry_location": "relative/path/file.c:line_number",
     "call_trace": "full stack trace starting with #0..."
