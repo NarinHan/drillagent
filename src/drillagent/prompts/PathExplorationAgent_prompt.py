@@ -69,7 +69,7 @@ Generate the test case now and return it in a ```testcase code block.
 PEA_feedback_results_template = """
 EXECUTION FEEDBACK FROM PREVIOUS ITERATION:
 
-After executing the test case (from iteration {loop_progress}), the program output and coverage information are as follows.
+After executing previous test case (from iteration {loop_progress}), the program output and coverage information are as follows.
 
 {previous_feedback}
 

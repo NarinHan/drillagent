@@ -37,6 +37,14 @@ from typing import Optional, List, Dict, Any, Tuple, Callable, Iterator
 from pathlib import Path
 from dataclasses import dataclass, field
 
+# Import LLM logging utilities
+from drillagent.utils.logging import (
+    log_llm_interaction,
+    log_agent_loop_start,
+    log_agent_loop_end,
+    log_tool_results
+)
+
 
 # ==================== Custom Exceptions ====================
 
@@ -227,7 +235,8 @@ class LLMInterface:
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         api_key_file: Optional[str] = None,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        output_dir: Optional[str] = None
     ):
         """
         Initialize LLM interface.
@@ -238,9 +247,11 @@ class LLMInterface:
             api_key: API key string (takes precedence)
             api_key_file: Path to file containing API key
             logger: Optional logger instance
+            output_dir: Optional output directory for logging LLM interactions
         """
         self.provider = provider.lower()
         self.logger = logger or logging.getLogger(__name__)
+        self.output_dir = output_dir  # For LLM interaction logging
 
         # Set default model names
         if model_name is None:
@@ -414,6 +425,19 @@ class LLMInterface:
         old_stats = self.usage_stats
         self.usage_stats = UsageStats()
 
+        # Log agent loop start if output_dir is configured
+        if self.output_dir:
+            try:
+                log_agent_loop_start(
+                    output_dir=self.output_dir,
+                    task=task,
+                    system_prompt=system_prompt,
+                    provider=self.provider,
+                    model_name=self.model_name
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to log agent loop start: {e}")
+
         try:
             # Create conversation manager to handle history automatically
             conversation = ConversationManager(self.provider)
@@ -460,7 +484,7 @@ class LLMInterface:
                         retry_count += 1
                         if retry_count > max_retries:
                             self.logger.error(f"Rate limit exceeded after {max_retries} retries")
-                            return {
+                            result = {
                                 'success': False,
                                 'final_response': text_response,
                                 'iterations': iteration,
@@ -469,6 +493,20 @@ class LLMInterface:
                                 'error': f"Rate limit exceeded: {e}",
                                 'usage_stats': self.usage_stats.to_dict()
                             }
+                            # Log agent loop end
+                            if self.output_dir:
+                                try:
+                                    log_agent_loop_end(
+                                        output_dir=self.output_dir,
+                                        success=False,
+                                        final_response=text_response,
+                                        iterations=iteration,
+                                        stop_reason='rate_limit_error',
+                                        error=f"Rate limit exceeded: {e}"
+                                    )
+                                except Exception as log_err:
+                                    self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                            return result
 
                         # Exponential backoff
                         wait_time = min(2 ** retry_count, 60)  # Cap at 60 seconds
@@ -480,7 +518,7 @@ class LLMInterface:
                         retry_count += 1
                         if retry_count > max_retries:
                             self.logger.error(f"Timeout after {max_retries} retries")
-                            return {
+                            result = {
                                 'success': False,
                                 'final_response': text_response,
                                 'iterations': iteration,
@@ -489,6 +527,20 @@ class LLMInterface:
                                 'error': f"Request timed out: {e}",
                                 'usage_stats': self.usage_stats.to_dict()
                             }
+                            # Log agent loop end
+                            if self.output_dir:
+                                try:
+                                    log_agent_loop_end(
+                                        output_dir=self.output_dir,
+                                        success=False,
+                                        final_response=text_response,
+                                        iterations=iteration,
+                                        stop_reason='timeout_error',
+                                        error=f"Request timed out: {e}"
+                                    )
+                                except Exception as log_err:
+                                    self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                            return result
 
                         self.logger.warning(f"Request timed out, retrying {retry_count}/{max_retries}")
                         time.sleep(2 ** retry_count)  # Exponential backoff
@@ -497,7 +549,7 @@ class LLMInterface:
                     except LLMError as e:
                         # Fatal LLM error - don't retry
                         self.logger.error(f"LLM error at iteration {iteration}: {e}")
-                        return {
+                        result = {
                             'success': False,
                             'final_response': text_response,
                             'iterations': iteration,
@@ -506,11 +558,25 @@ class LLMInterface:
                             'error': str(e),
                             'usage_stats': self.usage_stats.to_dict()
                         }
+                        # Log agent loop end
+                        if self.output_dir:
+                            try:
+                                log_agent_loop_end(
+                                    output_dir=self.output_dir,
+                                    success=False,
+                                    final_response=text_response,
+                                    iterations=iteration,
+                                    stop_reason='llm_error',
+                                    error=str(e)
+                                )
+                            except Exception as log_err:
+                                self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                        return result
 
                     except Exception as e:
                         # Unexpected error - don't retry
                         self.logger.error(f"Unexpected error at iteration {iteration}: {e}", exc_info=True)
-                        return {
+                        result = {
                             'success': False,
                             'final_response': text_response,
                             'iterations': iteration,
@@ -519,6 +585,20 @@ class LLMInterface:
                             'error': str(e),
                             'usage_stats': self.usage_stats.to_dict()
                         }
+                        # Log agent loop end
+                        if self.output_dir:
+                            try:
+                                log_agent_loop_end(
+                                    output_dir=self.output_dir,
+                                    success=False,
+                                    final_response=text_response,
+                                    iterations=iteration,
+                                    stop_reason='unexpected_error',
+                                    error=str(e)
+                                )
+                            except Exception as log_err:
+                                self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                        return result
 
                 # Automatically add messages to history
                 conversation.add_user_message(current_prompt)
@@ -537,7 +617,7 @@ class LLMInterface:
                 if not tool_calls or len(tool_calls) == 0:
                     if stop_reason in ["end_turn", "stop"]:
                         # Genuine completion
-                        return {
+                        result = {
                             'success': True,
                             'final_response': text_response,
                             'iterations': iteration,
@@ -545,10 +625,23 @@ class LLMInterface:
                             'stop_reason': stop_reason,
                             'usage_stats': self.usage_stats.to_dict()
                         }
+                        # Log agent loop end
+                        if self.output_dir:
+                            try:
+                                log_agent_loop_end(
+                                    output_dir=self.output_dir,
+                                    success=True,
+                                    final_response=text_response,
+                                    iterations=iteration,
+                                    stop_reason=stop_reason
+                                )
+                            except Exception as log_err:
+                                self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                        return result
                     elif stop_reason in ["max_tokens", "length"]:
                         # Response was truncated but no tool calls
                         self.logger.warning(f"Response truncated without tool calls - treating as incomplete")
-                        return {
+                        result = {
                             'success': False,
                             'final_response': text_response,
                             'iterations': iteration,
@@ -557,9 +650,23 @@ class LLMInterface:
                             'error': "Response truncated (max_tokens reached)",
                             'usage_stats': self.usage_stats.to_dict()
                         }
+                        # Log agent loop end
+                        if self.output_dir:
+                            try:
+                                log_agent_loop_end(
+                                    output_dir=self.output_dir,
+                                    success=False,
+                                    final_response=text_response,
+                                    iterations=iteration,
+                                    stop_reason=stop_reason,
+                                    error="Response truncated (max_tokens reached)"
+                                )
+                            except Exception as log_err:
+                                self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                        return result
                     else:
                         # Unknown stop reason, assume complete
-                        return {
+                        result = {
                             'success': True,
                             'final_response': text_response,
                             'iterations': iteration,
@@ -567,6 +674,19 @@ class LLMInterface:
                             'stop_reason': stop_reason,
                             'usage_stats': self.usage_stats.to_dict()
                         }
+                        # Log agent loop end
+                        if self.output_dir:
+                            try:
+                                log_agent_loop_end(
+                                    output_dir=self.output_dir,
+                                    success=True,
+                                    final_response=text_response,
+                                    iterations=iteration,
+                                    stop_reason=stop_reason
+                                )
+                            except Exception as log_err:
+                                self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                        return result
 
                 # Execute tools with error handling
                 try:
@@ -582,6 +702,13 @@ class LLMInterface:
                     # Unexpected tool error - also not fatal
                     self.logger.error(f"Unexpected tool error: {e}", exc_info=True)
                     tool_results = [f"Unexpected error: {e}"] * len(tool_calls)
+
+                # Log tool results to update the last interaction
+                if self.output_dir:
+                    try:
+                        log_tool_results(self.output_dir, tool_results)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to log tool results: {e}")
 
                 # Automatically add tool results to history (handles provider differences)
                 conversation.add_tool_results(tool_calls, tool_results)
@@ -609,7 +736,7 @@ class LLMInterface:
                     current_prompt = continuation_prompt
 
             # Max iterations reached
-            return {
+            result = {
                 'success': False,
                 'final_response': text_response,
                 'iterations': max_iterations,
@@ -618,6 +745,20 @@ class LLMInterface:
                 'error': f"Max iterations ({max_iterations}) reached without completion",
                 'usage_stats': self.usage_stats.to_dict()
             }
+            # Log agent loop end
+            if self.output_dir:
+                try:
+                    log_agent_loop_end(
+                        output_dir=self.output_dir,
+                        success=False,
+                        final_response=text_response,
+                        iterations=max_iterations,
+                        stop_reason='max_iterations',
+                        error=f"Max iterations ({max_iterations}) reached without completion"
+                    )
+                except Exception as log_err:
+                    self.logger.warning(f"Failed to log agent loop end: {log_err}")
+            return result
 
         finally:
             # Restore and merge stats - accumulate usage from this call into the global stats
@@ -815,6 +956,25 @@ class LLMInterface:
             "content": content_blocks
         }
 
+        # Log the interaction if output_dir is configured
+        if self.output_dir:
+            try:
+                log_llm_interaction(
+                    output_dir=self.output_dir,
+                    interaction_data={
+                        "provider": self.provider,
+                        "model_name": self.model_name,
+                        "system_prompt": system_prompt,
+                        "user_prompt": prompt,
+                        "assistant_response": text_response,
+                        "tool_calls": tool_calls,
+                        "stop_reason": stop_reason,
+                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                    }
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to log LLM interaction: {e}")
+
         return text_response, tool_calls, assistant_message, stop_reason
 
     def _generate_with_tools_openai(
@@ -901,5 +1061,24 @@ class LLMInterface:
         }
         if tool_calls_for_api:
             assistant_message["tool_calls"] = tool_calls_for_api
+
+        # Log the interaction if output_dir is configured
+        if self.output_dir:
+            try:
+                log_llm_interaction(
+                    output_dir=self.output_dir,
+                    interaction_data={
+                        "provider": self.provider,
+                        "model_name": self.model_name,
+                        "system_prompt": system_prompt,
+                        "user_prompt": prompt,
+                        "assistant_response": text_response,
+                        "tool_calls": tool_calls,
+                        "stop_reason": stop_reason,
+                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                    }
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to log LLM interaction: {e}")
 
         return text_response, tool_calls, assistant_message, stop_reason

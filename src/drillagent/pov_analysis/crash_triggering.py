@@ -243,7 +243,7 @@ class CrashTriggerAgent:
             f.write(pov_content)
 
         self.logger.debug(f"  [CrashTriggerAgent] Saved PoV candidate content ({len(pov_content)} bytes) to {pov_path}")
-        self.logger.info(f"  [CrashTriggerAgent] Final PoV candidate generated at: {pov_path}")
+        self.logger.info(f"  [CrashTriggerAgent] PoV candidate generated at: {pov_path}")
         return pov_path
 
     def _execute_pov_candidate(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed

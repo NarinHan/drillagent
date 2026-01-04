@@ -60,7 +60,7 @@ class AgentConfig:
     work_dir: str = "./workspace" # Including: Intermidiate results in each round and cache dir.
     output_dir: str = "./output"  # Including: Final PoV inputs and analysis logs.
     verbose: bool = False
-    # TODO: logging level?
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
     # Used to process the parameters right after initialization
     def __post_init__(self):

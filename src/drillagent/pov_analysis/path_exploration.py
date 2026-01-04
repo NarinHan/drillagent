@@ -50,7 +50,7 @@ class PathExplorationAgent:
         ## crash_input_pov['saved_pov_path']: The path where the crash PoV is saved in output_dir.
 
     def run(self) -> None:
-        # Run the path exploration process to generate PoV candidates that can reach the vulnerable function.
+        # Run the path exploration process to generate test cases that can reach the vulnerable function.
         self.logger.info("  [PathExplorationAgent] Starting path exploration analysis...")
 
         # Clear all the previous roundN directories if exist
@@ -171,8 +171,8 @@ class PathExplorationAgent:
         else: # e.g., previous_feedback is None
             feedback_section = ""
 
-        # Format the unified prompt
-        prompt = PEA_testcase_generation_prompt.format(
+        # Format the unified task prompt. (now root cause is included in vuln_info_str)
+        user_prompt = PEA_testcase_generation_prompt.format(
             vulnerability_info=vuln_info_str,
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
@@ -182,13 +182,13 @@ class PathExplorationAgent:
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         result = self.drill_agent.basic_llm.run_agent_loop(
-            task=prompt,
+            task=user_prompt,
             tools=self.tools, # When generating test case, LLM is encouraged to use tools. 
             system_prompt=PEA_system_prompt,
             max_iterations=max_generation_turns,  # Allow up to 10 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
             max_tokens=8192,
-            continuation_prompt="Please continue exploring the repository and generate the final test case in a ```testcase code block."
+            continuation_prompt="Please continue exploring the repository and generate the final test case to reach or trigger the vulnerability in a ```testcase code block."
         )
 
         if not result['success']:
