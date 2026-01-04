@@ -15,6 +15,7 @@ from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
 from drillagent.utils.utils import *
 from drillagent.utils.tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool, FuncLineCovTool
+from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -64,7 +65,20 @@ class DrillAgent:
         self.crash_inputs = [] # Real PoV inputs that trigger the vulnerability
 
         ## Initialize logger and components
-        self.logger = self._setup_logger()
+        self.logger = setup_drillagent_logger(
+            output_dir=self.output_dir,
+            target_repo_path=self.config.target_repo_path,
+            cve_id=self.config.cve_id,
+            verbose=self.config.verbose
+        )
+
+        # Initialize LLM history log (clear any previous content)
+        try:
+            init_llm_history_log(self.output_dir)
+            self.logger.info(f"LLM history log initialized at {self.output_dir}/llm_history.json")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize LLM history log: {e}")
+
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
@@ -72,56 +86,6 @@ class DrillAgent:
         self.logger.info(f"Skip instrumentation:  {self.skip_code_instrumentation}")
         self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
         self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
-
-    def _setup_logger(self) -> logging.Logger:
-        # Setup logging for DrillAgent
-        # Determine log directory and filename
-        if self.output_dir == str(Path("./output").resolve()):
-            # User didn't set custom output_dir, use DrillAgent/logs
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent.parent  # Go up to DrillAgent root
-            log_dir = project_root / "logs"
-        else:
-            # User set custom output_dir, use it
-            log_dir = Path(self.output_dir)
-        
-        log_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Generate log filename with repo name and CVE ID
-        repo_name = Path(self.config.target_repo_path).name if self.config.target_repo_path else "unknown"
-        cve_id = self.config.cve_id.lower() if self.config.cve_id else "no-cve"
-        log_filename = f"drillagent_{repo_name}_{cve_id}.log"
-        log_path = log_dir / log_filename
-        
-        # Clean the log file if it already exists
-        if log_path.exists():
-            log_path.unlink()
-        
-        # Also ensure output_dir exists for other files
-        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
-        
-        # Configure root logger to INFO to avoid debug spam from third-party libs
-        logging.basicConfig(
-            level=logging.INFO,  # Always INFO for root logger
-            format='[%(asctime)s] %(levelname)s - %(message)s',
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler(str(log_path), mode='w')  # Use 'w' mode to overwrite
-            ]
-        )
-        
-        # Get DrillAgent logger and set its level based on verbose flag
-        logger = logging.getLogger("DrillAgent")
-        if self.config.verbose:
-            logger.setLevel(logging.DEBUG)
-        
-        # Suppress debug logs from noisy third-party libraries
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("anthropic").setLevel(logging.WARNING)
-        logging.getLogger("openai").setLevel(logging.WARNING)
-        
-        return logger
 
     def _init_components(self):
         # Initialize all required components (mainly LLM interfaces and tools)
@@ -164,7 +128,8 @@ class DrillAgent:
                 provider=self.config.model_provider,
                 model_name=self.config.model_name,
                 api_key=self.config.api_key,
-                logger=self.logger
+                logger=self.logger,
+                output_dir=self.output_dir
             )
             self.logger.info(f"✓ Basic LLM initialized: {self.basic_llm.provider}/{self.basic_llm.model_name}")
 
@@ -176,7 +141,8 @@ class DrillAgent:
                     provider=reasoning_provider,
                     model_name=reasoning_model,
                     api_key=self.config.api_key,
-                    logger=self.logger
+                    logger=self.logger,
+                    output_dir=self.output_dir
                 )
                 self.logger.info(f"✓ Reasoning LLM initialized: {self.reasoning_llm.provider}/{self.reasoning_llm.model_name}")
             else:
@@ -192,7 +158,8 @@ class DrillAgent:
                     provider=low_cost_provider,
                     model_name=low_cost_model,
                     api_key=self.config.api_key,
-                    logger=self.logger
+                    logger=self.logger,
+                    output_dir=self.output_dir
                 )
                 self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
             else:
@@ -207,7 +174,8 @@ class DrillAgent:
                     provider=self.config.model_provider,
                     model_name=low_cost_model,
                     api_key=self.config.api_key,
-                    logger=self.logger
+                    logger=self.logger,
+                    output_dir=self.output_dir
                 )
                 self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
         except Exception as e:
@@ -243,7 +211,7 @@ class DrillAgent:
             try:
                 binary_abs_path = os.path.join(
                     self.config.target_repo_path,
-                    self.vulnerability_info.binary_path
+                    self.vulnerability_info.binary_path # obtained from two phases ago
                 )
                 self.agent_cov_tools = [
                     FuncLineCovTool(self.config.target_repo_path, binary_abs_path)
@@ -276,6 +244,12 @@ class DrillAgent:
         self.logger.info("[Phase 1] Vulnerability Analysis")
         self.phase = "analyzing"
 
+        # Log phase separator
+        try:
+            log_phase_separator(self.output_dir, "VulnerabilityAnalysis")
+        except Exception as e:
+            self.logger.warning(f"Failed to log phase separator: {e}")
+
         # Use VulnAnalysisAgent for structured vulnerability analysis
         try:
             self.vuln_agent = VulnAnalysisAgent(self)
@@ -301,6 +275,12 @@ class DrillAgent:
         print("\n")
         self.logger.info("[Phase 2] Code Instrumentation")
         self.phase = "instrumentation"
+
+        # Log phase separator
+        try:
+            log_phase_separator(self.output_dir, "CodeInstrumentation")
+        except Exception as e:
+            self.logger.warning(f"Failed to log phase separator: {e}")
 
         target_repo_path = self.config.target_repo_path
         binary_relative_path = self.vulnerability_info.binary_path
@@ -358,6 +338,12 @@ class DrillAgent:
         self.logger.info("[Phase 3] Path Exploration")
         self.phase = "exploring"
 
+        # Log phase separator
+        try:
+            log_phase_separator(self.output_dir, "PathExploration")
+        except Exception as e:
+            self.logger.warning(f"Failed to log phase separator: {e}")
+
         # Utilize PathExplorationAgent to reach the vulnerable function
         try:
             self.path_agent = PathExplorationAgent(self)
@@ -382,6 +368,12 @@ class DrillAgent:
         print("\n")
         self.logger.info("[Phase 4] Crash Triggering and PoV Validation")
         self.phase = "triggering"
+
+        # Log phase separator
+        try:
+            log_phase_separator(self.output_dir, "CrashTrigger")
+        except Exception as e:
+            self.logger.warning(f"Failed to log phase separator: {e}")
 
         # Utilize CrashTriggerAgent to generate and validate final PoV
         try:

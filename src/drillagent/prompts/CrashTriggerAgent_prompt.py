@@ -6,7 +6,6 @@ When generating PoVs:
 - For buffer overflows: craft inputs that overflow buffers with calculated sizes
 - For Use-After-Free (UAF): construct inputs that trigger deallocation and subsequent use
 - For NULL Pointer Dereference (NPD): create inputs that cause NULL pointers to be dereferenced
-- For Integer Overflow/Underflow: design inputs that cause arithmetic operations to wrap around
 - For Out-of-Bounds (OOB) access: generate inputs that access memory beyond valid bounds (e.g., larger array indices)
 """
 # - Focus on reliability: ensure the PoV consistently triggers the crash
@@ -31,12 +30,11 @@ By executing this test case, we have obtained code coverage profile data stored 
 - profdata_path: `{profdata_path}`
 
 You are encouraged to use the `retrieve_function_line_coverage` tool to analyze code coverage of previous execution, and synthesize the insights into your final PoV.
-
 Example tool call:
 {{
-    "profdata_path": "{profdata_path}",
+    "profdata_path": "path/to/xxx.profdata",
     "function_name": "target_function_name",
-    "source_file_path": "src/file.c"  // optional, can be omitted to search all files
+    "source_file_path": "relative/path/to/file.c"  // optional, can be omitted to search all files
 }}
 
 Note: The binary path is already configured in the tool. You only need to provide profdata_path, function_name, and optionally source_file_path.

@@ -1040,7 +1040,7 @@ class FuncLineCovTool(AgentTool):
 
             cmd.extend([
                 f'-instr-profile={profdata_path}',
-                f'--name={function_name}'
+                f'--name-regex=^{function_name}$'
             ])
 
             # Execute command
@@ -1061,6 +1061,13 @@ class FuncLineCovTool(AgentTool):
 
             # Check if output is empty (function might not exist or not covered)
             output = result.stdout.strip()
+
+            # Limit output to first 300 lines
+            output_lines = output.split('\n')
+            if len(output_lines) > 300:
+                output = '\n'.join(output_lines[:300])
+                output += f'\n\n... (truncated, showing first 300 of {len(output_lines)} lines)'
+
             if not output:
                 file_info = f" in {resolved_file_path}" if resolved_file_path else ""
                 return {
@@ -1099,3 +1106,6 @@ class FuncLineCovTool(AgentTool):
                 "function_name": function_name,
                 "source_file_path": source_file_path
             }
+
+class FuncObjectCovTool(AgentTool):
+    pass

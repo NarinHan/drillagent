@@ -153,7 +153,7 @@ class CrashTriggerAgent:
         # Generate final PoV using LLM with vulnerability analysis and path exploration feedback
         # Returns path to the generated PoV file
         self.logger.info(f"  [CrashTriggerAgent] Generating final PoV using LLM...")
-        max_generation_turns = 10  # Allow LLM multiple turns to generate PoV
+        max_generation_turns = 20  # Allow LLM multiple turns to generate PoV
         round_dir = self._get_round_dir(self.current_trigger_iteration)
         os.makedirs(round_dir, exist_ok=True)
 
@@ -243,7 +243,7 @@ class CrashTriggerAgent:
             f.write(pov_content)
 
         self.logger.debug(f"  [CrashTriggerAgent] Saved PoV candidate content ({len(pov_content)} bytes) to {pov_path}")
-        self.logger.info(f"  [CrashTriggerAgent] Final PoV candidate generated at: {pov_path}")
+        self.logger.info(f"  [CrashTriggerAgent] PoV candidate generated at: {pov_path}")
         return pov_path
 
     def _execute_pov_candidate(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed
@@ -348,11 +348,9 @@ class CrashTriggerAgent:
         # Check for other interesting exit codes
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
             self.logger.warning(f"  [CrashTriggerAgent] Program aborted (exit code {exit_code})")
-            self.logger.debug  (f"  [CrashTriggerAgent] This may indicate assertion failure or abort() call")
-            # Check if this is a memory sanitizer error in the output
-            # if any(keyword in exec_output for keyword in ['AddressSanitizer', 'MemorySanitizer', 'heap-use-after-free', 'heap-buffer-overflow', 'stack-buffer-overflow']):
-            #     self.logger.info(f"  [CrashTriggerAgent] Memory sanitizer detected vulnerability!")
-            #     return True
+            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
+                self.logger.warning(f"  [CrashTriggerAgent]   Core dump also detected in execution output!")
+                return True
         
         elif exit_code == -9 or exit_code == 137:  # SIGKILL
             self.logger.warning(f"  [CrashTriggerAgent] Program killed (exit code {exit_code})")

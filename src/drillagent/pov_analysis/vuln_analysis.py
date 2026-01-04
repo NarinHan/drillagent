@@ -255,14 +255,14 @@ class VulnAnalysisAgent:
             # Store extracted information
             self.vuln_info.vuln_type = extracted_info.get('vuln_type', '')
             self.vuln_info.crash_function = extracted_info.get('crash_function', '')
-            self.vuln_info.refined_vuln_location = extracted_info.get('refined_vuln_location', '')
+            self.vuln_info.crash_location = extracted_info.get('crash_location', '')
             self.vuln_info.entry_function = extracted_info.get('entry_function', '')
             self.vuln_info.entry_location = extracted_info.get('entry_location', '')
             self.vuln_info.raw_call_trace = extracted_info.get('call_trace', '')
 
             self.logger.info(f"    ✓ Extracted vulnerability information:")
             self.logger.info(f"      Type: {self.vuln_info.vuln_type}")
-            self.logger.info(f"      Crash: {self.vuln_info.crash_function} @ {self.vuln_info.refined_vuln_location}")
+            self.logger.info(f"      Crash: {self.vuln_info.crash_function} @ {self.vuln_info.crash_location}")
             self.logger.info(f"      Entry: {self.vuln_info.entry_function} @ {self.vuln_info.entry_location}")
 
         except Exception as e:
@@ -298,7 +298,7 @@ class VulnAnalysisAgent:
             repo_path = self.config.target_repo_path
             entry_function, crash_function = self.vuln_info.entry_function, self.vuln_info.crash_function
 
-            # Step 1: Transform raw call trace to structured format
+            # Substep 1: Transform raw call trace to structured format
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to transform raw call trace...")
             response = self.drill_agent.basic_llm.generate(
                 prompt=VAA_call_trace_transform_prompt.format(
@@ -316,7 +316,7 @@ class VulnAnalysisAgent:
             if not parsed_data or 'call_trace' not in parsed_data:
                 raise ValueError("Could not extract call trace from LLM response")
 
-            # Step 2: Validate file paths and filter out invalid/external frames
+            # Substep 2: Validate file paths and filter out invalid/external frames
             validated_trace = []
             for entry in parsed_data['call_trace']:
                 if entry.get('is_external', False) or not entry.get('file_path'):
@@ -338,7 +338,7 @@ class VulnAnalysisAgent:
             validated_tmp_trace = '\n'.join(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}" for e in validated_trace)
             print(f"Vulnerable call trace before line number adjustment:\n{validated_tmp_trace}\n")
 
-            # Step 3: Refine line numbers using LLM with tools (frame-by-frame approach)
+            # Substep 3: Refine line numbers using LLM with tools (frame-by-frame approach)
             self.logger.info("  [VulnAnalysisAgent] Refining call trace line numbers frame by frame...")
             try:
                 # Process frames from outermost (entry_function) to innermost (crash_function)
@@ -406,7 +406,7 @@ class VulnAnalysisAgent:
                 print(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}")
             print("")
 
-            # Step 4: Trim trace from crash_function to entry_function
+            # Substep 4: Trim trace from crash_function to entry_function
             if not (validated_trace and entry_function and crash_function):
                 self.logger.debug("      No entry/crash function specified, keeping full trace")
                 trimmed_trace = validated_trace
@@ -431,9 +431,30 @@ class VulnAnalysisAgent:
                     self.logger.warning(f"      Neither entry '{entry_function}' nor crash '{crash_function}' found in trace, keeping full trace")
 
             if entry_function and crash_function:
-                self.logger.info(f"      Trimmed from entry '{entry_function}' to crash '{crash_function}'!")
-            self.logger.info(f"    ✓ Transformed call trace: {len(trimmed_trace)} frames (from {len(validated_trace)} valid, {len(parsed_data['call_trace'])} total)")
+                self.logger.info(f"      Successfully trimmed from entry '{entry_function}' to crash '{crash_function}'!")
 
+                # Update crash_location based on crash_function frame
+                crash_frame = next((f for f in trimmed_trace if f.get('function_name') == crash_function), None)
+                if crash_frame:
+                    crash_file = crash_frame.get('file_path', '')
+                    crash_line = crash_frame.get('line_number', 0)
+                    if crash_file and crash_line > 0:
+                        old_vuln_location = self.vuln_info.crash_location
+                        self.vuln_info.crash_location = f"{crash_file}:{crash_line}"
+                        self.logger.info(f"      Updated crash_location: {old_vuln_location} -> {self.vuln_info.crash_location}")
+
+                # Update entry_location based on entry_function frame
+                entry_frame = next((f for f in trimmed_trace if f.get('function_name') == entry_function), None)
+                if entry_frame:
+                    entry_file = entry_frame.get('file_path', '')
+                    entry_line = entry_frame.get('line_number', 0)
+                    if entry_file and entry_line > 0:
+                        old_entry_location = self.vuln_info.entry_location
+                        self.vuln_info.entry_location = f"{entry_file}:{entry_line}"
+                        self.logger.info(f"      Updated entry_location: {old_entry_location} -> {self.vuln_info.entry_location}")
+
+            
+            self.logger.info(f"    ✓ Transformed call trace: {len(trimmed_trace)} frames (from {len(validated_trace)} valid, {len(parsed_data['call_trace'])} total)")
             return trimmed_trace
 
         except Exception as e:
@@ -545,7 +566,7 @@ class VulnAnalysisAgent:
                 project_name=self.config.project_name,
                 actual_repo_path=self.config.target_repo_path,
                 vuln_type=self.vuln_info.vuln_type,
-                crash_location=self.vuln_info.refined_vuln_location,
+                crash_location=self.vuln_info.crash_location,
                 crash_function=self.vuln_info.crash_function,
                 entry_location=self.vuln_info.entry_location,
                 entry_function=self.vuln_info.entry_function,
@@ -676,8 +697,8 @@ class VulnAnalysisAgent:
 class VulnInfo:
     """Container for vulnerability analysis information"""
     # vuln details
-    # refined_vuln_location should be a relative path after the repo_name
-    refined_vuln_location: str = ""  # Refined vulnerability crash location (file:line)
+    # crash_location should be a relative path after the repo_name
+    crash_location: str = ""  # Refined vulnerability crash location (file:line)
     crash_function: str = ""  # Function in which the crash occurs (i.e., the caller of the sink point)
     entry_location: str = ""  # Entry location (file:line)
     entry_function: str = ""  # Entry function leading to the vulnerability (usually the main function of the project)
@@ -695,7 +716,7 @@ class VulnInfo:
     def to_dict(self) -> Dict[str, Any]:
         """Convert VulnInfo to dictionary"""
         return {
-            'refined_vuln_location': self.refined_vuln_location,
+            'crash_location': self.crash_location,
             'crash_function': self.crash_function,
             'entry_location': self.entry_location,
             'entry_function': self.entry_function,
@@ -712,7 +733,7 @@ class VulnInfo:
     def from_dict(cls, data: Dict[str, Any]) -> 'VulnInfo':
         """Create VulnInfo instance from dictionary"""
         return cls(
-            refined_vuln_location=data.get('refined_vuln_location', ''),
+            crash_location=data.get('crash_location', ''),
             crash_function=data.get('crash_function', ''),
             entry_location=data.get('entry_location', ''),
             entry_function=data.get('entry_function', ''),
@@ -733,7 +754,7 @@ class VulnInfo:
         # Section 1: Vulnerability Details
         lines.append("[VULNERABILITY DETAILS]")
         lines.append(f"  Vuln Type:              {self.vuln_type if self.vuln_type else 'N/A'}")
-        lines.append(f"  Crash Location:    {self.refined_vuln_location if self.refined_vuln_location else 'N/A'}")
+        lines.append(f"  Crash Location:    {self.crash_location if self.crash_location else 'N/A'}")
         lines.append(f"  Crash Function:    {self.crash_function if self.crash_function else 'N/A'}")
         lines.append(f"  Entry Location:    {self.entry_location if self.entry_location else 'N/A'}")
         lines.append(f"  Entry Function:    {self.entry_function if self.entry_function else 'N/A'}")
