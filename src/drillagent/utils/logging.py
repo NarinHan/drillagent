@@ -133,10 +133,10 @@ def log_tool_results(output_dir: str, tool_results: List[Any]) -> None:
     to the most recent llm_interaction entry.
 
     Args:
-        output_dir: Directory where llm_history.txt is stored
+        output_dir: Directory where llm_history.json is stored
         tool_results: List of tool execution results
     """
-    log_file = Path(output_dir) / "llm_history.txt"
+    log_file = Path(output_dir) / "llm_history.json"
 
     if not log_file.exists():
         return  # Nothing to update

@@ -179,9 +179,9 @@ class PathExplorationAgent:
             feedback_section=feedback_section # If this is empty, prompt will still work fine.
         )
 
-        # Step 2: Use LLMInterface for automatic tool calling and conversation management
+        # Step 2: Use LLMInterface for automatic tool calling and conversation management (use cheap model to save time and money)
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
-        result = self.drill_agent.basic_llm.run_agent_loop(
+        result = self.drill_agent.low_cost_llm.run_agent_loop(
             task=user_prompt,
             tools=self.tools, # When generating test case, LLM is encouraged to use tools. 
             system_prompt=PEA_system_prompt,

@@ -9,7 +9,7 @@ Target datasets:
 
 - [SEC-bench](https://github.com/SEC-bench/SEC-bench)
 - [Magma](https://github.com/HexHive/magma)
-- [PrimeVul](https://github.com/DLVulDet/PrimeVul)
+<!-- - [PrimeVul](https://github.com/DLVulDet/PrimeVul) -->
 
 ## Getting Started
 
@@ -30,7 +30,7 @@ python3 src/drillagent/entries/multiple_secb_task.py \
       --disable-path-exploration --disable-crash-analysis
 ```
 
-All the entry points should be included in `src/drillagent/scripts/`. You can also add your own python script here.
+All the entry points should be included in `src/drillagent/entries/`. You can also add your own python script here.
 
 ## Developing Tips
 

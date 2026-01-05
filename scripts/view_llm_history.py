@@ -3,8 +3,8 @@
 Script to view LLM interaction history in a readable Markdown-like format.
 
 Usage:
-    python scripts/view_llm_history.py <path_to_llm_history.json>
-    python scripts/view_llm_history.py  # Uses default path: output/*/llm_history.json
+    python3 scripts/view_llm_history.py <path_to_llm_history.json>
+    python3 scripts/view_llm_history.py  # Uses default path: output/*/llm_history.json
 """
 
 import sys
@@ -138,12 +138,26 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
             output.append(f"      Arguments: {args_str}")
 
     # Tool results
-    if tool_results:
-        output.append(f"\n### 📤 Tool Results: {len(tool_results)} results")
-        for i, result in enumerate(tool_results):
-            result_str = str(result)
-            # Truncate long results to avoid cluttering the output
-            output.append(f"  [{i+1}] {truncate_text(result_str, max_length=500)}")
+    if tool_results and tool_calls:
+        # Filter to only show results for retrieve_function_line_coverage
+        whilelist_tools = ["retrieve_function_line_coverage"]
+        coverage_results = []
+        for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
+            tool_name = tool_call.get("name", "unknown")
+            if tool_name in whilelist_tools:
+                coverage_results.append((i, result))
+
+        if coverage_results:
+            output.append(f"\n### 📤 Tool Results: {len(coverage_results)} results")
+            for i, result in coverage_results:
+                result_str = str(result)
+                # Don't truncate coverage results - show them in full
+                output.append(f"  [Call #{i+1}] {result_str}")
+        # else:
+        #     # Show summary for other tools
+        #     non_coverage_count = len([tc for tc in tool_calls if tc.get("name") != "retrieve_function_line_coverage"])
+        #     if non_coverage_count > 0:
+        #         output.append(f"\n### 📤 Tool Results: {non_coverage_count} other tool results (hidden)")
 
     # Stop reason and usage
     output.append(f"\n### ⏹️  Stop Reason: {stop_reason}")
