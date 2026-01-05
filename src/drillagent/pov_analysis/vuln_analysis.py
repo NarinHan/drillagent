@@ -16,7 +16,6 @@ from drillagent.prompts.VulnAnalysisAgent_prompt import (
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
     from drillagent.config import AgentConfig
-    from drillagent.models import LLM
     from drillagent.utils.tools import AgentTool
 
 class VulnAnalysisAgent:
@@ -363,8 +362,8 @@ class VulnAnalysisAgent:
                     self.logger.info(f"      Processing frame #{seq_num} ({func_name}) -> callee: {callee_func_name}")
                     current_frame_json = json.dumps(current_frame, indent=2)
 
-                    # Call LLM to refine this single frame's line number
-                    result = self.drill_agent.basic_llm.run_agent_loop(
+                    # Invoke low-cost LLM (faster) to refine this single frame's line number
+                    result = self.drill_agent.low_cost_llm.run_agent_loop(
                         task=VAA_call_trace_linenum_refine_prompt.format(
                             project_name=self.config.project_name,
                             actual_repo_path=repo_path,

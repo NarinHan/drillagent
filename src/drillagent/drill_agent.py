@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
-from drillagent.models import LLM, LLMInterface
+from drillagent.models import LLMInterface
 from drillagent.instrumentation import CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
@@ -42,7 +42,6 @@ class DrillAgent:
         self.errors = []
 
         # LLM interfaces (We use different LLMs for different sub-tasks to optimize cost and performance)
-        self.llm: LLM = None # Old LLM interface, kept for backward compatibility.
         self.basic_llm: LLMInterface     = None
         self.reasoning_llm: LLMInterface = None
         self.low_cost_llm:  LLMInterface = None
@@ -88,21 +87,7 @@ class DrillAgent:
         self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
 
     def _init_components(self):
-        # Initialize all required components (mainly LLM interfaces and tools)
         self.logger.info("Initializing components...")
-
-        # Initialize old LLM interface (backward compatibility)
-        try:
-            self.logger.info(f"Initializing {self.config.model_provider} LLM (legacy)...")
-            self.llm = LLM(
-                provider=self.config.model_provider,
-                model_name=self.config.basic_model,
-                api_key=self.config.api_key
-            )
-            self.logger.info(f"✓ Legacy LLM initialized: {self.llm.provider}/{self.llm.model_name}")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize legacy LLM: {e}")
-            self.llm = None
 
         # Initialize basic agent tools for LLM
         try:

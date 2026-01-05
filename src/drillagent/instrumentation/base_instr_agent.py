@@ -147,7 +147,7 @@ class BaseInstrAgent:
             self.record_error(error)
             
             # If we have more attempts and LLM is available, ask for help
-            if attempt < attempts and self.drill_agent.llm:
+            if attempt < attempts and self.drill_agent.basic_llm:
                 self.logger.info("Analyzing build error with LLM...")
                 fixed_commands = self._diagnose_and_fix_build_error(
                     error=error,
@@ -259,13 +259,14 @@ class BaseInstrAgent:
         )
 
         try:
-            response = self.drill_agent.llm.generate(
+            # Use LLMInterface.generate() for simple text generation
+            response = self.drill_agent.basic_llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.2,
                 max_tokens=2048
             )
-            
+
             # Clean up response - remove markdown code blocks if present
             response = self._clean_llm_script_response(response)
             

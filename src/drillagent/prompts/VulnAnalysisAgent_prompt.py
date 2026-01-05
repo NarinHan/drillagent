@@ -208,7 +208,7 @@ Your tasks:
 1. **Extract and infer the binary_path**: The path RELATIVE to the repository root
    - You can refer to the provided harness command to infer the path. Or read README doc to find the built binary program location.
    - Note that the repository path may not be compiled yet, so the binary may not exist currently. You can still infer the expected binary path based on harness command.
-   - Format example: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
+   - Format example: build/njs (NOT /home/ubuntu/PoV/Repos/njs/build/njs)
    - Must be relative to: {actual_repo_path}
    
 2. **Refine the command**: Create a command that can be run from any directory
@@ -232,11 +232,11 @@ Respond in the following JSON format ONLY:
 
 Example:
 If harness is: "/src/njs/build/njs /testcase/poc.js"
-And repo is: "/home/ubuntu/PoV/Repos/njs-cov"
+And repo is: "/home/ubuntu/PoV/Repos/njs"
 Then output should be:
 {{
     "binary_path": "build/njs",
-    "refined_harness_command": "/home/ubuntu/PoV/Repos/njs-cov/build/njs <path/to/testcase>"
+    "refined_harness_command": "/home/ubuntu/PoV/Repos/njs/build/njs <path/to/testcase>"
 }}
 
 """
@@ -249,7 +249,7 @@ binary_path_verify_prompt = """"
 #    - Use find_file or list_dir tools to locate the binary
 #    - Verify it exists and is executable
 # 2. **Extract binary_path**: The path RELATIVE to the repository root
-#    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs-cov/build/njs)
+#    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs/build/njs)
 #    - Must be relative to: {actual_repo_path}
 # Verify the program file exists in the repository using tools if needed!!
 # Be thorough. Verify paths exist before responding.
