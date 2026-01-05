@@ -577,7 +577,8 @@ class VulnAnalysisAgent:
             # Use LLMInterface for automatic tool calling and conversation management
             self.logger.info("    Using LLMInterface for root cause analysis...")
 
-            result = self.drill_agent.basic_llm.run_agent_loop(
+            # Run more powerful reasoning LLM than basic LLMs. 
+            result = self.drill_agent.reasoning_llm.run_agent_loop(
                 task=initial_prompt,
                 tools=self.tools,
                 system_prompt=VAA_system_prompt,

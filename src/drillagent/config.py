@@ -25,12 +25,12 @@ class AgentConfig:
     # 
     # LLM configuration
     # 
-    # General-purpose LLM model (may have latent reasoning capabilities).
     model_provider: str = "openai"  # claude or openai
-    model_name: str = "gpt-5.1-2025-11-13"
-    api_key: Optional[str] = None
-    # TODO: Provide more specific model configurations.
-    reasoning_model : tuple = ("", "")
+    api_key: Optional[str] = None   # Currently we only support models from the same provider.
+    # General-purpose LLM model (may have latent reasoning capabilities).
+    basic_model: str = "gpt-5.1-2025-11-13"
+    # More specific model configurations.
+    reasoning_model : tuple = ("", "") # (provider, model name)
     low_cost_model  : tuple = ("", "") # (provider, model name)
 
     # 
@@ -95,7 +95,7 @@ class AgentConfig:
 
         # print("\n[LLM Configuration]")
         # print(f"  Model Provider:     {self.model_provider}")
-        # print(f"  Model Name:         {self.model_name}")
+        # print(f"  Basic Model:        {self.basic_model}")
 
         print("\n[Ablation Options]")
         print(f"  Disable Vulnerability Analysis:        {self.disable_vulnerability_analysis}")

@@ -49,7 +49,7 @@ def load_api_key(args):
     provider = args.model_provider
     if not provider:
         # Infer provider from model name
-        model_lower = args.model_name.lower()
+        model_lower = args.basic_model.lower()
         if 'gpt' in model_lower or 'o1' in model_lower or 'o3' in model_lower:
             provider = 'openai'
         elif 'claude' in model_lower or 'sonnet' in model_lower or 'opus' in model_lower:
@@ -57,7 +57,7 @@ def load_api_key(args):
         elif 'gemini' in model_lower:
             provider = 'gemini'
         else:
-            print(f"✗ Error: Cannot infer model provider from model name '{args.model_name}'")
+            print(f"✗ Error: Cannot infer model provider from model name '{args.basic_model}'")
             print("   Please specify --model-provider or provide --api-key/--api-key-file")
             sys.exit(1)
 
@@ -153,18 +153,18 @@ Examples:
   # Run all tasks for a specific project
   python3 multiple_secb_task.py --project-name njs \\
       --repos-dir /home/ubuntu/PoV/Repos \\
-      --model-name gpt-5.1-2025-11-13
+      --basic-model gpt-5.1-2025-11-13
 
   # Run specific tasks
   python3 multiple_secb_task.py \\
       --instance-ids njs.cve-2023-27727,njs.cve-2024-12345 \\
       --repos-dir /home/ubuntu/PoV/Repos \\
-      --model-name claude-sonnet-4-5-20250929
+      --basic-model claude-sonnet-4-5-20250929
 
   # Run all tasks for a project with single repo path
   python3 multiple_secb_task.py --project-name njs \\
       --repo-path /home/ubuntu/PoV/Repos/njs-cov \\
-      --model-name gpt-5.1-2025-11-13
+      --basic-model gpt-5.1-2025-11-13
         """
     )
 
@@ -192,9 +192,9 @@ Examples:
 
     # Required arguments
     parser.add_argument(
-        '--model-name',
+        '--basic-model',
         required=True,
-        help='Model name (e.g., gpt-5.1-2025-11-13, claude-sonnet-4-5-20250929)'
+        help='Basic model name (e.g., gpt-5.1-2025-11-13, claude-sonnet-4-5-20250929)'
     )
 
     # API key options (mutually exclusive)
@@ -213,6 +213,16 @@ Examples:
         '--model-provider',
         choices=['openai', 'claude', 'gemini'],
         help='Model provider (auto-inferred from model name if not specified)'
+    )
+
+    # Additional model configurations
+    parser.add_argument(
+        '--reasoning-model',
+        help='Reasoning model in format "provider:model_name" (e.g., "openai:o1-2025-12-17")'
+    )
+    parser.add_argument(
+        '--low-cost-model',
+        help='Low-cost model in format "provider:model_name" (e.g., "openai:gpt-4.5-turbo-2025-04-09")'
     )
 
     # Dataset configuration
@@ -287,6 +297,34 @@ Examples:
     return parser.parse_args()
 
 
+def parse_model_spec(model_spec):
+    """
+    Parse model specification in format "provider:model_name".
+
+    Args:
+        model_spec: String in format "provider:model_name" or None
+
+    Returns:
+        Tuple of (provider, model_name) or ("", "") if None
+    """
+    if not model_spec:
+        return ("", "")
+
+    parts = model_spec.split(":", 1)
+    if len(parts) != 2:
+        print(f"✗ Error: Invalid model specification '{model_spec}'")
+        print("   Expected format: 'provider:model_name' (e.g., 'openai:o1-2025-12-17')")
+        sys.exit(1)
+
+    provider, model_name = parts
+    if provider not in ['openai', 'claude', 'gemini']:
+        print(f"✗ Error: Invalid model provider '{provider}'")
+        print("   Valid providers: openai, claude, gemini")
+        sys.exit(1)
+
+    return (provider, model_name)
+
+
 def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_provider: str) -> Dict[str, Any]:
     """
     Run DrillAgent on a single task.
@@ -307,10 +345,14 @@ def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_p
     print(f"Running Task: {instance_id}")
     print("=" * 70)
     print(f"Repository: {repo_path}")
-    print(f"Model: {args.model_name} ({model_provider})")
+    print(f"Model: {args.basic_model} ({model_provider})")
     print(f"Project: {task.project_name}")
     print(f"CVE: {task.cve_id}")
     print("=" * 70)
+
+    # Parse additional model configurations
+    reasoning_model = parse_model_spec(args.reasoning_model)
+    low_cost_model = parse_model_spec(args.low_cost_model)
 
     # Create configuration
     config = AgentConfig(
@@ -327,8 +369,10 @@ def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_p
 
         # LLM configuration
         model_provider=model_provider,
-        model_name=args.model_name,
+        basic_model=args.basic_model,
         api_key=api_key,
+        reasoning_model=reasoning_model,
+        low_cost_model=low_cost_model,
 
         # Ablation options
         disable_program_instrumentation=args.disable_instrumentation,
@@ -423,9 +467,9 @@ def main():
     if args.model_provider:
         model_provider = args.model_provider
     else:
-        model_provider = infer_model_provider(args.model_name)
+        model_provider = infer_model_provider(args.basic_model)
         if model_provider is None:
-            print(f"✗ Error: Cannot infer model provider from model name '{args.model_name}'")
+            print(f"✗ Error: Cannot infer model provider from model name '{args.basic_model}'")
             print("   Please specify --model-provider")
             sys.exit(1)
         print(f"✓ Inferred model provider: {model_provider}")
@@ -561,7 +605,7 @@ def main():
         summary_file.parent.mkdir(parents=True, exist_ok=True)
         summary_data = {
             'execution_time': datetime.now().isoformat(),
-            'model': args.model_name,
+            'model': args.basic_model,
             'model_provider': model_provider,
             'total_tasks': len(tasks),
             'successful': successful,

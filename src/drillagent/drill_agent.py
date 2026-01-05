@@ -96,7 +96,7 @@ class DrillAgent:
             self.logger.info(f"Initializing {self.config.model_provider} LLM (legacy)...")
             self.llm = LLM(
                 provider=self.config.model_provider,
-                model_name=self.config.model_name,
+                model_name=self.config.basic_model,
                 api_key=self.config.api_key
             )
             self.logger.info(f"✓ Legacy LLM initialized: {self.llm.provider}/{self.llm.model_name}")
@@ -104,7 +104,7 @@ class DrillAgent:
             self.logger.error(f"Failed to initialize legacy LLM: {e}")
             self.llm = None
 
-        # Initialize agent tools for LLM
+        # Initialize basic agent tools for LLM
         try:
             self.agent_tools = [
                 ReadFileTool(self.config.target_repo_path),
@@ -126,7 +126,7 @@ class DrillAgent:
             self.logger.info(f"Initializing basic LLM interface...")
             self.basic_llm = LLMInterface(
                 provider=self.config.model_provider,
-                model_name=self.config.model_name,
+                model_name=self.config.basic_model,
                 api_key=self.config.api_key,
                 logger=self.logger,
                 output_dir=self.output_dir
@@ -165,10 +165,9 @@ class DrillAgent:
             else:
                 # Default to cheaper models if not configured
                 if self.config.model_provider == "openai":
-                    low_cost_model = "gpt-4o-mini"
+                    low_cost_model = "gpt-5-mini-2025-08-07"
                 else:  # claude
-                    low_cost_model = "claude-3-5-haiku-20241022"
-
+                    low_cost_model = "claude-haiku-4-5-20251001"
                 self.logger.info(f"Initializing low-cost LLM with default cheaper model ({low_cost_model})...")
                 self.low_cost_llm = LLMInterface(
                     provider=self.config.model_provider,
@@ -178,6 +177,7 @@ class DrillAgent:
                     output_dir=self.output_dir
                 )
                 self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
+        
         except Exception as e:
             self.logger.error(f"Failed to initialize LLMInterface instances: {e}")
             # Fallback: keep them as None
