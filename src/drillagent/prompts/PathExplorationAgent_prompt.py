@@ -75,8 +75,18 @@ After executing previous test case (from iteration {loop_progress}), the program
 
 {previous_feedback}
 
-Based on the feedback above, your should analyze the actual execution behavior inside the program when running the previous test case. 
+Based on the feedback above, your should analyze the actual execution behavior inside the program when running the previous test case.
 Then, you should focus on the following tasks with the above observations and analysis results in mind.
+"""
+
+# Template for providing previous test case path to guide LLM
+PEA_previous_testcase_template = """
+**Previous Test Case:**
+The test case generated in the previous round (iteration {previous_iteration}) is located at:
+`{testcase_path}`
+
+Use the `read_file` tool to examine this test case and understand what approach was tried in the previous round.
+Learn from its structure and improve upon it based on the coverage feedback above.
 """
 
 

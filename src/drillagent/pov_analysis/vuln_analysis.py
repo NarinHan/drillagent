@@ -465,7 +465,7 @@ class VulnAnalysisAgent:
         # LLM: Using new LLMInterface with automatic agent loop
         try:
             # Prepare the prompt
-            prompt = VAA_harness_refine_prompt.format(
+            user_prompt = VAA_harness_refine_prompt.format(
                 project_name=project_name,
                 actual_repo_path=actual_repo_path,
                 harness_command=raw_harness_command if raw_harness_command else "Not provided"
@@ -475,7 +475,7 @@ class VulnAnalysisAgent:
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to refine harness command...")
 
             result = self.drill_agent.basic_llm.run_agent_loop(
-                task=prompt,
+                task=user_prompt,
                 tools=self.tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=3,  # Allow up to 3 rounds of tool usage
