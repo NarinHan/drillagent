@@ -8,6 +8,8 @@ When generating test cases:
 - Study the call trace to understand the execution path leading to the vulnerability
 - Consider edge cases and malicious input patterns that could trigger the vulnerability
 - Return the test case content directly in your response using a code block
+
+IMPORTANT: Sometimes the analysis can become overly complicated. When generating a PoV candidate, it is better to focus on the key points and start by constructing simple test cases, avoiding over-engineering.
 """
 
 
@@ -73,8 +75,18 @@ After executing previous test case (from iteration {loop_progress}), the program
 
 {previous_feedback}
 
-Based on the feedback above, your should analyze the actual execution behavior inside the program when running the previous test case. 
+Based on the feedback above, your should analyze the actual execution behavior inside the program when running the previous test case.
 Then, you should focus on the following tasks with the above observations and analysis results in mind.
+"""
+
+# Template for providing previous test case path to guide LLM
+PEA_previous_testcase_template = """
+**Previous Test Case:**
+The test case generated in the previous round (iteration {previous_iteration}) is located at:
+`{testcase_path}`
+
+Use the `read_file` tool to examine this test case and understand what approach was tried in the previous round.
+Learn from its structure and improve upon it based on the coverage feedback above.
 """
 
 

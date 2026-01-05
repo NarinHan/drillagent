@@ -16,7 +16,6 @@ from drillagent.prompts.VulnAnalysisAgent_prompt import (
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
     from drillagent.config import AgentConfig
-    from drillagent.models import LLM
     from drillagent.utils.tools import AgentTool
 
 class VulnAnalysisAgent:
@@ -363,8 +362,8 @@ class VulnAnalysisAgent:
                     self.logger.info(f"      Processing frame #{seq_num} ({func_name}) -> callee: {callee_func_name}")
                     current_frame_json = json.dumps(current_frame, indent=2)
 
-                    # Call LLM to refine this single frame's line number
-                    result = self.drill_agent.basic_llm.run_agent_loop(
+                    # Invoke low-cost LLM (faster) to refine this single frame's line number
+                    result = self.drill_agent.low_cost_llm.run_agent_loop(
                         task=VAA_call_trace_linenum_refine_prompt.format(
                             project_name=self.config.project_name,
                             actual_repo_path=repo_path,
@@ -466,7 +465,7 @@ class VulnAnalysisAgent:
         # LLM: Using new LLMInterface with automatic agent loop
         try:
             # Prepare the prompt
-            prompt = VAA_harness_refine_prompt.format(
+            user_prompt = VAA_harness_refine_prompt.format(
                 project_name=project_name,
                 actual_repo_path=actual_repo_path,
                 harness_command=raw_harness_command if raw_harness_command else "Not provided"
@@ -476,7 +475,7 @@ class VulnAnalysisAgent:
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to refine harness command...")
 
             result = self.drill_agent.basic_llm.run_agent_loop(
-                task=prompt,
+                task=user_prompt,
                 tools=self.tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=3,  # Allow up to 3 rounds of tool usage
@@ -577,7 +576,8 @@ class VulnAnalysisAgent:
             # Use LLMInterface for automatic tool calling and conversation management
             self.logger.info("    Using LLMInterface for root cause analysis...")
 
-            result = self.drill_agent.basic_llm.run_agent_loop(
+            # Run more powerful reasoning LLM than basic LLMs. 
+            result = self.drill_agent.reasoning_llm.run_agent_loop(
                 task=initial_prompt,
                 tools=self.tools,
                 system_prompt=VAA_system_prompt,

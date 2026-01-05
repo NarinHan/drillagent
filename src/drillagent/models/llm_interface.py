@@ -1,7 +1,7 @@
 """
 Enhanced LLM Interface for DrillAgent
 
-Key improvements over llm.py:
+Key features:
 1. Automatic agent loop - no manual conversation management needed
 2. Conversation manager - automatic handling of message history
 3. Provider abstraction - no provider-specific code in application layer

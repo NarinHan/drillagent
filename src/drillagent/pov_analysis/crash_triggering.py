@@ -208,7 +208,7 @@ class CrashTriggerAgent:
             system_prompt=CTA_system_prompt,
             max_iterations=max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation
-            max_tokens=8192,
+            max_tokens=16384,
             continuation_prompt="Please continue your analysis and generate the final PoV in a ```pov code block."
         )
 
@@ -305,7 +305,7 @@ class CrashTriggerAgent:
             self.logger.error(f"  [CrashTriggerAgent] Expected profraw file not found: {profraw_path}")
 
         self.logger.info (f"  [CrashTriggerAgent] Command exit code: {exit_code}")
-        self.logger.debug(f"  [CrashTriggerAgent] Command execution output:\n{exec_output[:500]}...")
+        self.logger.debug(f"  [CrashTriggerAgent] Command execution output:\n{exec_output[:500]}")
         return exit_code, exec_output
 
     def _validate_pov(self, pov_data: Dict) -> bool:

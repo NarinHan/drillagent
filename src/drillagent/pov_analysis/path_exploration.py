@@ -14,6 +14,7 @@ from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_system_prompt,
     PEA_testcase_generation_prompt,
     PEA_feedback_results_template,
+    PEA_previous_testcase_template,
     PEA_coverage_analysis_system_prompt,
     PEA_coverage_analysis_prompt,
 )
@@ -49,6 +50,9 @@ class PathExplorationAgent:
         self.crash_input_pov = None       # A dict initialized when triggering segmentation fault.
         ## crash_input_pov['saved_pov_path']: The path where the crash PoV is saved in output_dir.
 
+        # Mapping from iteration number to testcase path (similar to CrashTriggerAgent.generated_candidates)
+        self.generated_testcases = {}     # {iteration_num: testcase_path}
+
     def run(self) -> None:
         # Run the path exploration process to generate test cases that can reach the vulnerable function.
         self.logger.info("  [PathExplorationAgent] Starting path exploration analysis...")
@@ -81,6 +85,7 @@ class PathExplorationAgent:
             # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
             test_case_path = self._generate_test_case(previous_feedback)
             self.history_testcases.append(test_case_path)
+            self.generated_testcases[self.current_exp_iteration] = test_case_path  # Record for feedback in next iteration
 
             # Substep2: Execute test case dynamically (using actual repo path)
             # This will also generate a profraw/profdata file.
@@ -168,6 +173,16 @@ class PathExplorationAgent:
                 loop_progress=f"{self.current_exp_iteration - 1}/{self.max_exp_iterations}",
                 previous_feedback=refined_feedback
             )
+
+            # Add previous testcase path to guide LLM (similar to CrashTriggerAgent approach)
+            if self.current_exp_iteration > 1:
+                previous_testcase_path = self.generated_testcases.get(self.current_exp_iteration - 1)
+                if previous_testcase_path:
+                    self.logger.info(f"  [PathExplorationAgent] Adding previous testcase path to prompt: {previous_testcase_path}")
+                    feedback_section += "\n" + PEA_previous_testcase_template.format(
+                        previous_iteration=self.current_exp_iteration - 1,
+                        testcase_path=previous_testcase_path
+                    )
         else: # e.g., previous_feedback is None
             feedback_section = ""
 
@@ -179,9 +194,9 @@ class PathExplorationAgent:
             feedback_section=feedback_section # If this is empty, prompt will still work fine.
         )
 
-        # Step 2: Use LLMInterface for automatic tool calling and conversation management
+        # Step 2: Use LLMInterface for automatic tool calling and conversation management (use cheap model to save time and money)
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
-        result = self.drill_agent.basic_llm.run_agent_loop(
+        result = self.drill_agent.low_cost_llm.run_agent_loop(
             task=user_prompt,
             tools=self.tools, # When generating test case, LLM is encouraged to use tools. 
             system_prompt=PEA_system_prompt,

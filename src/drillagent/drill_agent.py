@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
-from drillagent.models import LLM, LLMInterface
+from drillagent.models import LLMInterface
 from drillagent.instrumentation import CoverageInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
@@ -42,7 +42,6 @@ class DrillAgent:
         self.errors = []
 
         # LLM interfaces (We use different LLMs for different sub-tasks to optimize cost and performance)
-        self.llm: LLM = None # Old LLM interface, kept for backward compatibility.
         self.basic_llm: LLMInterface     = None
         self.reasoning_llm: LLMInterface = None
         self.low_cost_llm:  LLMInterface = None
@@ -88,23 +87,9 @@ class DrillAgent:
         self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
 
     def _init_components(self):
-        # Initialize all required components (mainly LLM interfaces and tools)
         self.logger.info("Initializing components...")
 
-        # Initialize old LLM interface (backward compatibility)
-        try:
-            self.logger.info(f"Initializing {self.config.model_provider} LLM (legacy)...")
-            self.llm = LLM(
-                provider=self.config.model_provider,
-                model_name=self.config.model_name,
-                api_key=self.config.api_key
-            )
-            self.logger.info(f"✓ Legacy LLM initialized: {self.llm.provider}/{self.llm.model_name}")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize legacy LLM: {e}")
-            self.llm = None
-
-        # Initialize agent tools for LLM
+        # Initialize basic agent tools for LLM
         try:
             self.agent_tools = [
                 ReadFileTool(self.config.target_repo_path),
@@ -126,7 +111,7 @@ class DrillAgent:
             self.logger.info(f"Initializing basic LLM interface...")
             self.basic_llm = LLMInterface(
                 provider=self.config.model_provider,
-                model_name=self.config.model_name,
+                model_name=self.config.basic_model,
                 api_key=self.config.api_key,
                 logger=self.logger,
                 output_dir=self.output_dir
@@ -165,10 +150,9 @@ class DrillAgent:
             else:
                 # Default to cheaper models if not configured
                 if self.config.model_provider == "openai":
-                    low_cost_model = "gpt-4o-mini"
+                    low_cost_model = "gpt-5-mini-2025-08-07"
                 else:  # claude
-                    low_cost_model = "claude-3-5-haiku-20241022"
-
+                    low_cost_model = "claude-haiku-4-5-20251001"
                 self.logger.info(f"Initializing low-cost LLM with default cheaper model ({low_cost_model})...")
                 self.low_cost_llm = LLMInterface(
                     provider=self.config.model_provider,
@@ -178,6 +162,7 @@ class DrillAgent:
                     output_dir=self.output_dir
                 )
                 self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
+        
         except Exception as e:
             self.logger.error(f"Failed to initialize LLMInterface instances: {e}")
             # Fallback: keep them as None

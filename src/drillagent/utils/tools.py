@@ -378,7 +378,9 @@ class GrepTool(AgentTool):
     def _grep_with_ripgrep(self, pattern: str, file_extension: Optional[str],
                           case_sensitive: bool, max_results: int) -> Dict[str, Any]:
         """Use ripgrep for fast searching"""
-        cmd = ['rg', '-n', '--color', 'never', '--max-count', str(max_results)]
+        # Note: We don't use --max-count because it limits PER FILE, not globally.
+        # Global limiting is done in Python below (line ~421-422)
+        cmd = ['rg', '-n', '--color', 'never']
 
         # Case sensitivity
         if not case_sensitive:
