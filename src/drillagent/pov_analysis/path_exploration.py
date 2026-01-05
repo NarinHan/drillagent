@@ -174,7 +174,7 @@ class PathExplorationAgent:
                 previous_feedback=refined_feedback
             )
 
-            # Add previous testcase path to guide LLM (similar to CrashTriggerAgent approach)
+            # Fixed: Add previous testcase path to guide LLM (similar to CrashTriggerAgent approach)
             if self.current_exp_iteration > 1:
                 previous_testcase_path = self.generated_testcases.get(self.current_exp_iteration - 1)
                 if previous_testcase_path:

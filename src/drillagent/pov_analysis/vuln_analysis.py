@@ -16,7 +16,7 @@ from drillagent.prompts.VulnAnalysisAgent_prompt import (
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
     from drillagent.config import AgentConfig
-    from drillagent.utils.tools import AgentTool
+    from drillagent.tools.basic_tools import AgentTool
 
 class VulnAnalysisAgent:
     # Analyzes vulnerabilities using LLM with code exploration tools

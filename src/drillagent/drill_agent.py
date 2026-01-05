@@ -14,7 +14,8 @@ from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
 from drillagent.utils.utils import *
-from drillagent.utils.tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool, FuncLineCovTool
+from drillagent.tools.basic_tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool
+from drillagent.tools.cov_query_tools import FuncLineCovTool
 from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
 
 class DrillAgent:
