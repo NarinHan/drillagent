@@ -73,9 +73,34 @@ def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str
     except Exception:
         return False
 
+def check_saninstr_binary_exists(actual_repo_path: str, binary_relative_path: str) -> bool:
+    # Returns True if binary exists and contains __sanitizer symbols, False otherwise
+    binary_path = Path(actual_repo_path) / binary_relative_path
+
+    # Check if file exists
+    if not binary_path.exists():
+        print(f"Target binary does not exist: {binary_path}")
+        return False
+
+    # Check if binary contains LLVM coverage symbols
+    try:
+        result = subprocess.run(
+            f'strings "{binary_path}" | grep -q "__sanitizer"',
+            shell=True,
+            timeout=10
+        )
+        # grep -q returns 0 if pattern found, 1 if not found
+        if result.returncode == 0:
+            return True
+        else:
+            print(f"Target binary does not contain \"__sanitizer\" strings: {binary_path}")
+            return False
+    except Exception:
+        return False
+
 def compare_gitrepo_commit(actual_repo_path: str, base_commit: str) -> bool:
     # Check if the current commit in the repo matches the base_commit
-    # Returns True if current commit matches base_commit, False otherwise
+    # Returns True if current commit equals base_commit, False otherwise
     try:
         # Get the current HEAD commit hash (full SHA)
         current_result = subprocess.run(
@@ -125,11 +150,11 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
         check=True
     )
     print(f"✓ Successfully checked out commit: {base_commit[:12]}...")
-    if result.stdout:
-        print(f"Git checkout output: {result.stdout.strip()}")
+    # if result.stdout:
+    #     print(f"Git checkout output: {result.stdout.strip()}")
     
     # Update git submodules
-    print("Updating git submodules...")
+    # print("Updating git submodules...")
     result = subprocess.run(
         ['git', 'submodule', 'update', '--init', '--recursive'],
         cwd=actual_repo_path,
@@ -143,7 +168,6 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
 
 def clean_gitrepo(actual_repo_path: str):
     # Clean build artifacts (make clean or equivalent)
-    print("Cleaning build artifacts...")
     clean_result = subprocess.run(
         ['make', 'clean'],
         cwd=actual_repo_path,
@@ -157,7 +181,7 @@ def clean_gitrepo(actual_repo_path: str):
         print("make clean failed or not available (this is OK if no Makefile exists)")
     
     # Reset git repository state - discard all local changes
-    print("Resetting git repository state...")
+    # print("Resetting git repository state...")
     subprocess.run(
         ['git', 'reset', '--hard', 'HEAD'],
         cwd=actual_repo_path,

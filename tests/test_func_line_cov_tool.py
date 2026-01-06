@@ -16,7 +16,7 @@ from unittest import mock
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from drillagent.utils.tools import FuncLineCovTool
+from drillagent.tools.cov_query_tools import FuncLineCovTool
 
 
 def print_section(title: str):

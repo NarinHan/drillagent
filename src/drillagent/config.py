@@ -15,7 +15,10 @@ class AgentConfig:
     cve_id: Optional[str] = None            # CVE identifier, if applicable
     lang: Optional[str] = None              # Programming language of the project
 
-    target_repo_path: str = ""              # Actual path to the target source repository (with .git/) (should exactly exist in your local machine)
+    # Code bases (should exactly exist in your local machine)
+    target_repo_path: str = ""              # Actual path to the target source repository (with .git/), for llvm-cov instrumentation.
+    saninstr_repo_path: str = ""            # Another path to the same source code, but for ASAN/MSAN/UBSAN instrumentation.
+    # Vulnerability information
     vuln_location: str = ""                 # Location of the vulnerability in the source code (file:line)
     base_commit: str = ""                   # Necessary to checkout the correct commit.
     build_sh: Optional[str] = None          # If not provided, reasoning by ourselves.
@@ -76,6 +79,13 @@ class AgentConfig:
         self.target_repo_path = str(Path(self.target_repo_path).resolve())
         self.output_dir = str(Path(self.output_dir).resolve())
         self.work_dir = str(Path(self.work_dir).resolve())
+        if self.saninstr_repo_path:
+            self.saninstr_repo_path = str(Path(self.saninstr_repo_path).resolve())
+        else:
+            if "repos-llvm-cov" in self.target_repo_path: # TODO: This is a fallback handling for SEC-bench tasks.
+                self.saninstr_repo_path = self.target_repo_path.replace("repos-llvm-cov", "repos-sanitizer")
+            else:
+                raise ValueError("saninstr_repo_path is required!")
 
     def print_config(self):
         print("=" * 80)

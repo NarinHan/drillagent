@@ -116,8 +116,9 @@ clone_repo() {
         fi
     fi
     
+    # --depth 1 for shallow clone! Removed.
     log_info "Cloning $name from $url..."
-    if git clone --depth 1 "$url" "$dest" > /dev/null 2>&1; then
+    if git clone "$url" "$dest" > /dev/null 2>&1; then
         log_success "Successfully cloned: $name"
         return 0
     else

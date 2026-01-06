@@ -13,6 +13,7 @@ src/drillagent/scripts/lhy_*
 scripts/lhy_*
 default.profraw
 default.profdata
+gt_povs/
 
 # For instrumentation agents
 instrumented/
