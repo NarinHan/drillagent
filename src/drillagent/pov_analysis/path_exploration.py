@@ -663,7 +663,7 @@ class PathExplorationAgent:
             self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
             return True  # Crash input pov found
 
-        # Check for other interesting exit codes
+        # Check for other interesting exit codes (sanitizer crash usually returns SIGABRT or SIGKILL)
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
             self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code}).")
             if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
@@ -672,6 +672,9 @@ class PathExplorationAgent:
 
         elif exit_code == -9 or exit_code == 137:  # SIGKILL
             self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code}).")
+            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
+                self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
+                return True
         
         elif exit_code < 0 or exit_code > 128:  # Signal-based exit
             self.logger.debug(f"  [PathExplorationAgent] Program terminated with signal (exit code {exit_code}).")

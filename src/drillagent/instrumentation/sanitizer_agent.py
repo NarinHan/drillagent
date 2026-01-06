@@ -1,3 +1,9 @@
+"""
+Sanitizer Instrumentation Agent
+
+This module provides the SanitizerInstrumentAgent class for building target binaries
+with ASAN/MSAN/UBSAN instrumentation enabled.
+"""
 import os
 import re
 from pathlib import Path

@@ -236,6 +236,18 @@ class DrillAgent:
         except Exception as e:
             self.logger.warning(f"Failed to log phase separator: {e}")
 
+        # Fixed: Before analyzing, we should make sure the target repository is at the base commit!!
+        target_repo_path = self.config.target_repo_path
+        matched_commit = compare_gitrepo_commit(
+            actual_repo_path=target_repo_path,
+            base_commit=self.config.base_commit
+        )
+        if not matched_commit:
+            clean_gitrepo(target_repo_path)
+            self.logger.info("✓ Cleaned target repository!")
+            checkout_gitrepo_commit(target_repo_path, self.config.base_commit)
+            self.logger.info(f"✓ Checked out Base commit: {self.config.base_commit}")
+
         # Use VulnAnalysisAgent for structured vulnerability analysis
         try:
             self.vuln_agent = VulnAnalysisAgent(self)
