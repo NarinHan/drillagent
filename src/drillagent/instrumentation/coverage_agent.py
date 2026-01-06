@@ -96,7 +96,7 @@ class CoverageInstrumentAgent(BaseInstrAgent):
                     actual_repo_path=self.target_repo,
                     binary_relative_path=self.binary_path
                 ):
-                    self.logger.info(f"  Detected qualified instrumented binary!")
+                    self.logger.info(f"  Created qualified cov-instrumented binary!")
                     return {
                         'success': True,
                         'instrumented_binary': str(self.binary_path),
@@ -176,6 +176,7 @@ LDFLAGS="${{LDFLAGS:-}}"
         # Replace common compiler/flag patterns to include coverage flags
         # Use regex to avoid replacing ./configure in test conditions like [ -f ./configure ]
         
+        # TODO: These patterns still have a lot of issues.
         # Pattern 1: Configure scripts with --cc-opt and --ld-opt (like njs)
         if '--cc-opt' in modified:
             # Only replace ./configure when it's executed (not in tests)

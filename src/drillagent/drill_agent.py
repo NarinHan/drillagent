@@ -51,10 +51,11 @@ class DrillAgent:
         self.agent_cov_tools: List[Any] = []
 
         # Sub-agents: These can be used for inter-communication.
-        self.vuln_agent: VulnAnalysisAgent           = None
-        self.coverage_agent: CoverageInstrumentAgent = None
-        self.path_agent: PathExplorationAgent        = None
-        self.crash_agent: CrashTriggerAgent          = None
+        self.vuln_agent: VulnAnalysisAgent             = None
+        self.sanitizer_agent: SanitizerInstrumentAgent = None
+        self.coverage_agent: CoverageInstrumentAgent   = None
+        self.path_agent: PathExplorationAgent          = None
+        self.crash_agent: CrashTriggerAgent            = None
 
 
         # Intermediate analysis results
@@ -191,7 +192,10 @@ class DrillAgent:
 
             # Phase 2: Code Instrumentation
             if not self.skip_code_instrumentation:
-                self._phase_code_instrumentation()
+                res = self._phase_code_instrumentation()
+                if not res:
+                    self.logger.error("Instrumentation phase failed, cannot proceed further.")
+                    return self._generate_report()
 
             # Initialize coverage analysis tools now that we have binary_path
             try:
@@ -268,7 +272,7 @@ class DrillAgent:
             # Keep the VulnInfo instance but mark it with error in root_cause field
             self.vulnerability_info.root_cause = f"Analysis failed: {e}"
 
-    def _phase_code_instrumentation(self):
+    def _phase_code_instrumentation(self) -> bool:
         """Phase 2: Instrument the target binary with coverage and sanitizers"""
         print("\n")
         self.logger.info("[Phase 2] Code Instrumentation")
@@ -280,64 +284,71 @@ class DrillAgent:
         except Exception as e:
             self.logger.warning(f"Failed to log phase separator: {e}")
 
+        def _clean_and_checkout(repo_path: str):
+            # Before compiling, clean repository and checkout target commit.
+            self.logger.info("Cleaning repository...")
+            clean_gitrepo(repo_path)
+            self.logger.info("✓ Cleaning finished!")
+
+            self.logger.info(f"Checking out base commit: {self.config.base_commit}")
+            checkout_gitrepo_commit(repo_path, self.config.base_commit)
+            self.logger.info("✓ Checked out Base commit!")
+
         target_repo_path   = self.config.target_repo_path
         saninstr_repo_path = self.config.saninstr_repo_path
         binary_relative_path = self.vulnerability_info.binary_path
 
-        # Substep 1: check if instrumented binary already exists
-        existing_binary = check_llvmcov_binary_exists(
-            actual_repo_path=target_repo_path,
-            binary_relative_path=binary_relative_path
-        )
-        if existing_binary:
-            matched_commit = compare_gitrepo_commit(
-                actual_repo_path=target_repo_path,
-                base_commit=self.config.base_commit
-            )
-            if matched_commit:
-                tmp_path_str = f"{target_repo_path}/{binary_relative_path}"
-                self.logger.info(f"✓ Found existing coverage-instrumented binary at {tmp_path_str}, built from commit {self.config.base_commit}")
-                self.logger.info(f"    Binary relative path: {binary_relative_path}")
-                self.logger.info(f"✓ Skipping instrumentation phase...")
-                return
-            else:
-                self.logger.info("Existing qualified coverage-instrumented binary found, but built from a different commit. Proceeding with instrumentation")
+        # Substep 1: check if instrumented binary already exists (currently two types, llvm-cov and sanitizer)
+        early_ret = [False, False]
+        if check_llvmcov_binary_exists(target_repo_path, binary_relative_path) \
+              and compare_gitrepo_commit(target_repo_path, self.config.base_commit):
+            self.logger.info(f"✓ Found existing coverage-instrumented binary, built from commit {self.config.base_commit}")
+            self.logger.info(f"    Binary path: {f"{target_repo_path}/{binary_relative_path}"}")
+            early_ret[0] = True
         else:
-            self.logger.info("No existing qualified coverage-instrumented binary found. Proceeding with instrumentation")
-        
-        # Before compiling, clean repository and checkout target commit.
-        self.logger.info("Cleaning repository...")
-        clean_gitrepo(target_repo_path)
-        self.logger.info("✓ Cleaning finished!")
+            self.logger.info("No existing qualified coverage-instrumented binary found.")
+            _clean_and_checkout(target_repo_path)
 
-        self.logger.info(f"Checking out base commit: {self.config.base_commit}")
-        checkout_gitrepo_commit(target_repo_path, self.config.base_commit)
-        self.logger.info("✓ Checked out Base commit!")
+        if check_saninstr_binary_exists(saninstr_repo_path, binary_relative_path) \
+              and compare_gitrepo_commit(saninstr_repo_path, self.config.base_commit):
+            self.logger.info(f"✓ Found existing sanitizer-instrumented binary, built from commit {self.config.base_commit}")
+            self.logger.info(f"    Binary path: {f"{saninstr_repo_path}/{binary_relative_path}"}")
+            early_ret[1] = True
+        else:
+            self.logger.info("No existing qualified sanitizer-instrumented binary found.")
+            _clean_and_checkout(saninstr_repo_path)
+        
+        if early_ret[0] and early_ret[1]:
+            self.logger.info(f"✓ Skipping instrumentation phase...")
+            return True
 
         # Substep 2: Build source code with memory sanitizer instrumentation (TODO)
-        self.logger.info("  - Building with memory sanitizer instrumentation.")
+        self.logger.info("Building with memory sanitizer instrumentation...")
         self.sanitizer_agent = SanitizerInstrumentAgent(self, saninstr_repo_path, binary_relative_path)
         result_san = self.sanitizer_agent.run()
         if result_san['success']:
             self.logger.info(f"✓ \"{self.project_name}\" sanitizer instrumentation completed.")
-            self.logger.info(f"    Binary relative path: {saninstr_repo_path}/{result_san.get('instrumented_binary')}")
+            self.logger.info(f"    Binary path: {saninstr_repo_path}/{result_san.get('instrumented_binary')}")
         else:
             self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
             self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
+            return False
 
         # Substep 3: Build source code with coverage instrumentation
-        self.logger.info("  - Building with coverage instrumentation...")
+        print("")
+        self.logger.info("Building with coverage instrumentation...")
         self.coverage_agent = CoverageInstrumentAgent(self, target_repo_path, binary_relative_path)
         result = self.coverage_agent.run()
         if result['success']:
             self.logger.info(f"✓ \"{self.project_name}\" coverage instrumentation completed.")
-            self.logger.info(f"    Binary relative path: {target_repo_path}/{result.get('instrumented_binary')}")
+            self.logger.info(f"    Binary path: {target_repo_path}/{result.get('instrumented_binary')}")
         else:
             self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
             self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-            # exit(1) # Cannot proceed without coverage-instrumented binary
+            return False
 
         self.logger.info("✓ Instrumentation phase completed")
+        return True
 
     def _phase_path_exploration(self):
         """Phase 3: Coverage-guided path exploration"""
