@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
 from drillagent.models import LLMInterface
-from drillagent.instrumentation import CoverageInstrumentAgent
+from drillagent.instrumentation import CoverageInstrumentAgent, SanitizerInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
@@ -280,10 +280,11 @@ class DrillAgent:
         except Exception as e:
             self.logger.warning(f"Failed to log phase separator: {e}")
 
-        target_repo_path = self.config.target_repo_path
+        target_repo_path   = self.config.target_repo_path
+        saninstr_repo_path = self.config.saninstr_repo_path
         binary_relative_path = self.vulnerability_info.binary_path
 
-        # Substep 1: check if llvm-cov instrumented binary already exists
+        # Substep 1: check if instrumented binary already exists
         existing_binary = check_llvmcov_binary_exists(
             actual_repo_path=target_repo_path,
             binary_relative_path=binary_relative_path
@@ -314,7 +315,15 @@ class DrillAgent:
         self.logger.info("✓ Checked out Base commit!")
 
         # Substep 2: Build source code with memory sanitizer instrumentation (TODO)
-        self.logger.info("To be developed: Implement memory sanitizer instrumentation.")
+        self.logger.info("  - Building with memory sanitizer instrumentation.")
+        self.sanitizer_agent = SanitizerInstrumentAgent(self, saninstr_repo_path, binary_relative_path)
+        result_san = self.sanitizer_agent.run()
+        if result_san['success']:
+            self.logger.info(f"✓ \"{self.project_name}\" sanitizer instrumentation completed.")
+            self.logger.info(f"    Binary relative path: {saninstr_repo_path}/{result_san.get('instrumented_binary')}")
+        else:
+            self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
+            self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
 
         # Substep 3: Build source code with coverage instrumentation
         self.logger.info("  - Building with coverage instrumentation...")
@@ -322,7 +331,7 @@ class DrillAgent:
         result = self.coverage_agent.run()
         if result['success']:
             self.logger.info(f"✓ \"{self.project_name}\" coverage instrumentation completed.")
-            self.logger.info(f"    Binary relative path: {result.get('instrumented_binary')}")
+            self.logger.info(f"    Binary relative path: {target_repo_path}/{result.get('instrumented_binary')}")
         else:
             self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
             self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")

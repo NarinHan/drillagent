@@ -9,7 +9,7 @@ The `repo_prepare.sh` script automates the initialization of all 29 GitHub repos
 ### 1. Clone all repositories (default location)
 
 ```bash
-cd /home/ray/cs562/DrillAgent
+cd path/to/DrillAgent
 ./scripts/repo_prepare.sh
 ```
 

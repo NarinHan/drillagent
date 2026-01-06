@@ -4,6 +4,7 @@ Sanitizer Instrumentation Agent
 This module provides the SanitizerInstrumentAgent class for building target binaries
 with ASAN/MSAN/UBSAN instrumentation enabled.
 """
+
 import os
 import re
 from pathlib import Path
@@ -20,12 +21,16 @@ if TYPE_CHECKING:
 class SanitizerInstrumentAgent(BaseInstrAgent):
     # Sanitizer instrumentation agent based on ASAN, MSAN, UBSAN, etc.
 
-    def __init__(self, drill_agent: 'DrillAgent', target_repo_path: str, binary_relative_path: str):
+    def __init__(self, drill_agent: 'DrillAgent', saninstr_repo_path: str, binary_relative_path: str):
         # Initialize base instrumentation agent first
         super().__init__(drill_agent)
         
         # Basic attributes
-        self.target_repo = Path(target_repo_path)
+        self.target_repo = Path(saninstr_repo_path)
         self.binary_path = binary_relative_path
         self.work_dir    = drill_agent.work_dir
-        self.output_dir  = drill_agent.config.output_dir
+        self.output_dir  = drill_agent.output_dir
+    
+    def run(self):
+        pass
+        basic_build_cmds = self.drill_agent.config.build_sh

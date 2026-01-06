@@ -31,7 +31,7 @@ class CoverageInstrumentAgent(BaseInstrAgent):
         self.target_repo = Path(target_repo_path)
         self.binary_path = binary_relative_path
         self.work_dir    = drill_agent.work_dir
-        self.output_dir  = drill_agent.config.output_dir
+        self.output_dir  = drill_agent.output_dir
         
         # Coverage flags
         self.coverage_flags = [
