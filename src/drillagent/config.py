@@ -70,10 +70,8 @@ class AgentConfig:
         # Check necessary fields
         if not self.target_repo_path:
             raise ValueError("target_repo_path is required")
-        # if not self.vuln_location:
-        #     raise ValueError("vuln_location is required")
-        # if not self.base_commit:
-        #     raise ValueError("base_commit is required")
+        if not self.base_commit:
+            raise ValueError("base_commit is required")
 
         # Validate and normalize paths
         self.target_repo_path = str(Path(self.target_repo_path).resolve())

@@ -6,9 +6,9 @@ openai>=1.0.0      # For OpenAI
 pytest>=7.4.0
 
 # Utilities
-pyyaml
 python-dotenv
 pipenv
+pyyaml
 
 # php
 # sudo apt-get install -y build-essential bison re2c
