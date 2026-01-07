@@ -211,8 +211,10 @@ def set_memory_limit(): # For subprocesses.run
     # RLIMIT_AS limits the address space (total virtual memory)
     resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))
 
-def execute_command(command: str, env: dict = os.environ.copy()) -> Tuple[int, str]:
+def execute_command(command: str, env: dict = None) -> Tuple[int, str]:
     # Execute a shell command and return exit code and output (stdout + stderr)
+    if env is None:
+        env = os.environ.copy()
     try:
         result = subprocess.run(
             command,

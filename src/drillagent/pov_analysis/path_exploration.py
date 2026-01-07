@@ -203,9 +203,9 @@ class PathExplorationAgent:
             feedback_section=feedback_section # If this is empty, prompt will still work fine.
         )
 
-        # Step 2: Use LLMInterface for automatic tool calling and conversation management (use cheap model to save time and money)
+        # Step 2: Use LLMInterface for automatic tool calling and conversation management
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
-        result = self.drill_agent.low_cost_llm.run_agent_loop(
+        result = self.drill_agent.basic_llm.run_agent_loop(
             task=user_prompt,
             tools=self.tools, # When generating test case, LLM is encouraged to use tools. 
             system_prompt=PEA_system_prompt,
@@ -327,7 +327,7 @@ class PathExplorationAgent:
         assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!"
         if not self.vuln_call_trace or len(self.vuln_call_trace) == 0:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
-            return "ERROR: No vulnerability call trace available for coverage analysis"
+            raise ValueError("No vulnerability call trace available for coverage analysis") # We assume there should be vuln_call_trace.
 
         # Substep 1: Extract function information from vulnerable call trace
         # Build a list of (function_name, file_path) tuples for batch query

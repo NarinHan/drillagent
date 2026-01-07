@@ -325,7 +325,9 @@ class CrashTriggerAgent:
 
         # Execute the PoV using sanitizer-instrumented binary, and check if the sanitizer is triggered.
         self.logger.info(f"  [CrashTriggerAgent] Validation exec command: {command}")
-        exit_code, exec_output = execute_command(command)
+        env = os.environ.copy()
+        env['ASAN_OPTIONS'] = 'hard_rss_limit_mb=12000' # Option ref: https://github.com/google/sanitizers/wiki/SanitizerCommonFlags
+        exit_code, exec_output = execute_command(command, env)
         if detect_sanitizer_triggered(exec_output):
             # TODO: Compare here output and the original sanitizer report to see if they match (optional).
             self.logger.info(f"  [CrashTriggerAgent] PoV validation successful: Sanitizer error detected! Exit code: {exit_code}")
