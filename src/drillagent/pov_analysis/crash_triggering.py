@@ -1,8 +1,7 @@
 import os
+import re
 import subprocess
 import shutil
-import re
-import resource
 from datetime import datetime
 
 from typing import Tuple, Dict, Any, TYPE_CHECKING
@@ -17,8 +16,7 @@ from drillagent.prompts.CrashTriggerAgent_prompt import (
 )
 
 from drillagent.utils.llvm_cov import LLVMCovUtils
-from drillagent.utils.utils import set_memory_limit
-
+from drillagent.utils.utils import *
 class CrashTriggerAgent:
     # Responsible for triggering crashes based on analyzed paths
     def __init__(self, drill_agent: 'DrillAgent'):
@@ -62,7 +60,7 @@ class CrashTriggerAgent:
         if path_agent is not None:
             # Check if we already have a crash input
             if path_agent.crash_input_pov is not None:
-                is_validated = self._validate_pov(path_agent.crash_input_pov)
+                is_validated = self._validate_pov(path_agent.crash_input_pov, path_agent.crash_command)
                 if is_validated:
                     self.logger.info("  [CrashTriggerAgent] Valid crash input found from path exploration phase! Using it as final PoV.")
                     # Save the crash input as final PoV
@@ -103,28 +101,29 @@ class CrashTriggerAgent:
                     shutil.rmtree(item_path)
             self.logger.debug(f"  [CrashTriggerAgent] Created and cleared round directory: {round_dir}")
 
-            try:
+            try:# Main operations!
                 # Step 1: Generate final PoV.
                 pov_path = self._generate_final_pov()
                 self.generated_candidates[iteration]["testcase_path"] = pov_path
 
-                # Step 2: Execute PoV candidate.
-                exit_code, exec_output = self._execute_pov_candidate(pov_path)
-                # Check whether the execution triggered segmentation fault.
-                is_segfault = self._detect_stop_status(exit_code, exec_output)
-                if not is_segfault:
-                    self.logger.info(f"  [CrashTriggerAgent] PoV at iteration {iteration} did not trigger crash, continue attempting...")
-                    continue
+                # Step 2: Execute PoV candidate for cov-instr program (to collect coverage).
+                # Transform general harness command to executable command
+                harness_command = self.drill_agent.vulnerability_info.refined_harness_command
+                if not harness_command:
+                    raise ValueError("Refined harness command not found in vulnerability_info")
+                abs_test_case_path = os.path.abspath(pov_path)
+                command = harness_command.replace('<path/to/testcase>', abs_test_case_path) # the path is to cov-instr binary
+                exit_code, exec_output = self._execute_pov_candidate(command)
 
-                # Step 3: Validate PoV (only if we have abnormal exit_code==139/-11/...)
+                # Step 3: Validate PoV (using sanitizer-instrumented binary if available).
                 pov_data = {
-                    'testcase_path': pov_path,
+                    'testcase_path': abs_test_case_path,
                     'exit_code': exit_code,
                     'exec_output': exec_output,
                     'iteration': iteration,
                     'max_iterations': self.max_trigger_iterations
                 }
-                is_valid = self._validate_pov(pov_data)
+                is_valid = self._validate_pov(pov_data, command)
 
                 # If valid PoV found, save it and stop
                 if is_valid:
@@ -145,7 +144,7 @@ class CrashTriggerAgent:
         else:
             self.logger.info(f"  [CrashTriggerAgent] No valid PoV found after {self.current_trigger_iteration} iterations.")
 
-    def _get_round_dir(self, round_num: int) -> str:
+    def _get_round_dir(self, round_num: int) -> str: # usually relative path
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
         return os.path.join(self.drill_agent.work_dir, f"triggering", f"round{round_num}")
 
@@ -246,23 +245,10 @@ class CrashTriggerAgent:
         self.logger.info(f"  [CrashTriggerAgent] PoV candidate generated at: {pov_path}")
         return pov_path
 
-    def _execute_pov_candidate(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed
-        # Execute a PoV candidate and return exit code and execution output
-        # Similar to PathExplorationAgent._execute_test_case but without coverage collection
-        self.logger.info(f"  [CrashTriggerAgent] Executing PoV candidate: {test_case_path}")
+    def _execute_pov_candidate(self, command: str) -> Tuple[int, str]: # No LLM needed
+        # Execute the program with llvm-cov instrumentation, return exit code and output.
+        self.logger.info(f"  [CrashTriggerAgent] Executing PoV candidate...")
         round_dir = self._get_round_dir(self.current_trigger_iteration)
-
-        # Prepare the command
-        binary_path = self.drill_agent.vulnerability_info.binary_path
-        harness_command = self.drill_agent.vulnerability_info.refined_harness_command
-        if not binary_path:
-            raise ValueError("Binary path not found in vulnerability_info")
-        if not harness_command:
-            raise ValueError("Refined harness command not found in vulnerability_info")
-
-        # Transform general harness command to executable command
-        abs_test_case_path = os.path.abspath(test_case_path)
-        command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
 
         # Prepare environment for LLVM coverage data collection
         profraw_path = os.path.join(round_dir, f"test_{self.current_trigger_iteration}.profraw")
@@ -270,7 +256,7 @@ class CrashTriggerAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Execute the command
-        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} in {round_dir}")
+        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} (in {round_dir})")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
@@ -297,7 +283,7 @@ class CrashTriggerAgent:
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
-        # After execution finished, convert the profraw to profdata, and record the file path.
+        # After execution finished, convert the profraw to profdata, and update the file path.
         if os.path.exists(profraw_path):
             self.llvm_cov_utils.update_profile_data(profraw_path)
             self.generated_candidates[self.current_trigger_iteration]["profdata_path"] = self.llvm_cov_utils.profdata_path
@@ -308,7 +294,7 @@ class CrashTriggerAgent:
         self.logger.debug(f"  [CrashTriggerAgent] Command execution output:\n{exec_output[:500]}")
         return exit_code, exec_output
 
-    def _validate_pov(self, pov_data: Dict) -> bool:
+    def _validate_pov(self, pov_data: Dict, command: str) -> bool:
         # Validate the generated PoV by checking if it can violate the memory sanitizer as expected.
         # pov_data: dict containing 'testcase_path', 'exit_code', 'exec_output', etc.
         # Returns True if PoV is valid (triggers crash), False otherwise
@@ -318,50 +304,37 @@ class CrashTriggerAgent:
             return False
 
         # Extract information from pov_data
-        exit_code = pov_data.get('exit_code', 0)
-        exec_output = pov_data.get('exec_output', '')
-        testcase_path = pov_data.get('testcase_path', '')
-        self.logger.info(f"  [CrashTriggerAgent] Validating PoV: {testcase_path}")
-        self.logger.info(f"  [CrashTriggerAgent] Exit code: {exit_code}")
+        # exit_code = pov_data.get('exit_code', 0)
+        # exec_output = pov_data.get('exec_output', '')
+        # testcase_path = pov_data.get('testcase_path', '')
+        # self.logger.info(f"  [CrashTriggerAgent] Validating PoV: {testcase_path}")
+        # self.logger.info(f"  [CrashTriggerAgent] Exit code: {exit_code}")
 
-        # TODO: Now we simply assume all segmentation faults are valid PoVs and return True. 
-        # In future, we should use sanitizer-instrumented binaries to validate.
-        return True #tmp
-
-    def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
-        """The same function as in PathExplorationAgent."""
-        # Check for "command not found" - this is a fatal error
-        if exit_code == 127:
-            self.logger.error(f"  [CrashTriggerAgent] Command not found (exit code 127)")
-            self.logger.error(f"  [CrashTriggerAgent] Execution output:\n{exec_output}")
-            raise RuntimeError(
-                "Command not found during test case execution of CrashTriggerAgent (exit code 127). "
-                "Please check if the binary path and harness command are correct."
-            )
-
-        # Check for "segmentation fault" (crash) - this is our target!
-        # Exit code 139 = 128 + 11 (SIGSEGV signal) (-11 = SIGSEGV on some systems)
-        if exit_code == 139 or exit_code == -11:
-            self.logger.warning(f"  [CrashTriggerAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
-            return True  # Crash input pov found
-
-        # Check for other interesting exit codes (sanitizer crash usually returns SIGABRT or SIGKILL)
-        elif exit_code == -6 or exit_code == 134:  # SIGABRT
-            self.logger.warning(f"  [CrashTriggerAgent] Program aborted (exit code {exit_code})")
-            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
-                self.logger.warning(f"  [CrashTriggerAgent]   Core dump also detected in execution output!")
-                return True
+        # Use llvm-cov instrumented program cmds as basis, but replace repo path to sanitizer-instr repo path.
+        if command is None or command.strip() == "":
+            self.logger.error("  [CrashTriggerAgent] No harness command provided for PoV validation.")
+            return False
         
-        elif exit_code == -9 or exit_code == 137:  # SIGKILL
-            self.logger.warning(f"  [CrashTriggerAgent] Program killed (exit code {exit_code})")
-            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
-                self.logger.warning(f"  [CrashTriggerAgent]   Core dump also detected in execution output!")
-                return True
-        
-        elif exit_code < 0 or exit_code > 128:  # Signal-based exit
-            self.logger.debug(f"  [CrashTriggerAgent] Program terminated with signal (exit code {exit_code})")
+        llvm_cov_repo = self.drill_agent.config.target_repo_path
+        saninstr_repo = self.drill_agent.config.saninstr_repo_path
+        if llvm_cov_repo in command:
+            command = command.replace(llvm_cov_repo, saninstr_repo) # We want to execute the program in sanitizer-instr repo.
+        else:
+            self.logger.error("  [CrashTriggerAgent] TODO: Cannot map llvm-cov repo path to sanitizer-instr repo path in command.")
+            return False
 
-        return False  # No crash input pov found
+        # Execute the PoV using sanitizer-instrumented binary, and check if the sanitizer is triggered.
+        self.logger.info(f"  [CrashTriggerAgent] Validation exec command: {command}")
+        exit_code, exec_output = execute_command(command)
+        if detect_sanitizer_triggered(exec_output):
+            # TODO: Compare here output and the original sanitizer report to see if they match (optional).
+            self.logger.info(f"  [CrashTriggerAgent] PoV validation successful: Sanitizer error detected! Exit code: {exit_code}")
+            print(exec_output)
+            return True
+        else:
+            self.logger.info(f"  [CrashTriggerAgent] PoV validation: No sanitizer error detected. Exit code: {exit_code}")
+
+        return False
 
     def _record_final_pov(self, pov_data: Dict[str, Any], pov_path: str) -> str:
         """

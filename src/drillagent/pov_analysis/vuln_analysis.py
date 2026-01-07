@@ -352,17 +352,17 @@ class VulnAnalysisAgent:
 
                     # Skip the innermost frame (#0) - it's the crash point, no callee to verify
                     if idx == total_frames - 1:
-                        self.logger.info(f"      Processing frame #{seq_num} ({func_name}): Innermost frame, keeping original line number")
+                        self.logger.info(f"  Processing frame #{seq_num} ({func_name}): Innermost frame, keeping original line number")
                         refined_frames.append(current_frame)
                         continue
 
                     # Get callee frame (next frame in the sorted list, which has smaller sequence_num)
                     callee_frame = sorted_trace[idx + 1]
                     callee_func_name = callee_frame.get('function_name', '')
-                    self.logger.info(f"      Processing frame #{seq_num} ({func_name}) -> callee: {callee_func_name}")
+                    self.logger.info(f"  Processing frame #{seq_num} ({func_name}) -> callee: {callee_func_name}")
                     current_frame_json = json.dumps(current_frame, indent=2)
 
-                    # Invoke low-cost LLM (faster) to refine this single frame's line number
+                    # Invoke low-cost LLM (faster) to refine the line number of each stack frame
                     result = self.drill_agent.low_cost_llm.run_agent_loop(
                         task=VAA_call_trace_linenum_refine_prompt.format(
                             project_name=self.config.project_name,

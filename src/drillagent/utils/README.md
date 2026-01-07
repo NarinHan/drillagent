@@ -92,11 +92,8 @@ General utility functions for file operations, git operations, and process manag
 - `clean_gitrepo(repo_path)` - Clean git repository
 
 **Coverage/Binary Operations:**
-- `check_llvmcov_binary_exists(repo_path, binary_path)` - Verify coverage binary exists
-- `check_coverage_binary_exists(...)` - Check for instrumented binary
-- `check_existing_coverage_instrumentation(...)` - Verify coverage instrumentation
-- `locate_instrumented_binary(...)` - Find instrumented binary path
-- `is_libtool_wrapper(path)` - Check if path is libtool wrapper script
+- `check_llvmcov_binary_exists(repo_path, binary_path)`  - Verify coverage-instrumented binary exists
+- `check_saninstr_binary_exists(repo_path, binary_path)` - Verify sanitizer-instrumented binary exists
 
 **Process Management:**
 - `set_memory_limit()` - Set memory limits for subprocess execution

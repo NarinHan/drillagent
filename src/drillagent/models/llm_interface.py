@@ -808,6 +808,29 @@ class LLMInterface:
 
     # ==================== Private Implementation Methods ====================
 
+    def _is_temperature_unsupported_model(self) -> bool:
+        """
+        Check if the current model doesn't support temperature parameter.
+
+        Returns:
+            True if the model doesn't support temperature, False otherwise
+        """
+        # List of models that don't support temperature
+        unsupported_models = [
+            "gpt-5-mini",
+            "gpt-5-mini-2025-08-07",
+            "o3-2025-04-16",
+            "o4-mini-2025-04-16",
+            # Add more models here as needed
+        ]
+
+        # Check if the current model is in the unsupported list
+        for unsupported_model in unsupported_models:
+            if unsupported_model.lower() in self.model_name.lower():
+                return True
+
+        return False
+
     def _generate_claude(
         self,
         prompt: str,
@@ -855,12 +878,19 @@ class LLMInterface:
 
         messages.append({"role": "user", "content": prompt})
 
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=temperature,
-            max_completion_tokens=max_tokens,
-        )
+        # Build kwargs for API call
+        kwargs = {
+            "model": self.model_name,
+            "messages": messages,
+            "max_completion_tokens": max_tokens,
+        }
+
+        # Only add temperature if the model supports it
+        # gpt-5-mini and similar models don't support temperature
+        if not self._is_temperature_unsupported_model():
+            kwargs["temperature"] = temperature
+
+        response = self.client.chat.completions.create(**kwargs)
 
         # Track usage
         if hasattr(response, 'usage') and response.usage:
@@ -1001,16 +1031,23 @@ class LLMInterface:
 
         messages.append({"role": "user", "content": prompt})
 
+        # Build kwargs for API call
+        kwargs = {
+            "model": self.model_name,
+            "messages": messages,
+            "tools": tool_schemas,
+            "tool_choice": "auto",
+            "max_completion_tokens": max_tokens
+        }
+
+        # Only add temperature if the model supports it
+        # gpt-5-mini and similar models don't support temperature
+        if not self._is_temperature_unsupported_model():
+            kwargs["temperature"] = temperature
+
         # Call OpenAI API with tools
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                tools=tool_schemas,
-                tool_choice="auto",
-                temperature=temperature,
-                max_completion_tokens=max_tokens
-            )
+            response = self.client.chat.completions.create(**kwargs)
         except Exception as e:
             # Convert API errors to our custom exceptions
             error_msg = str(e).lower()
