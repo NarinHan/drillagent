@@ -193,7 +193,7 @@ class VulnAnalysisAgent:
                 system_prompt=VAA_system_prompt,
                 max_iterations=5,  # Allow up to 5 rounds of tool usage
                 temperature=0.1,  # Low temperature for precise extraction
-                max_tokens=4096,
+                max_tokens=8192,
                 continuation_prompt="Please continue extracting the vulnerability information and provide the final JSON output."
             )
 
@@ -583,7 +583,7 @@ class VulnAnalysisAgent:
                 system_prompt=VAA_system_prompt,
                 max_iterations=20,  # Allow up to 20 rounds of deep analysis
                 temperature=0.3,
-                max_tokens=16384, # Modern LLMs can handle larger contexts.
+                max_tokens=20480, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."
             )
 

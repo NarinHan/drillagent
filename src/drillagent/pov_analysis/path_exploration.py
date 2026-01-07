@@ -65,7 +65,7 @@ class PathExplorationAgent:
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
         previous_feedback = None # From coverage feedback analysis
         for iteration in range(1, self.max_exp_iterations + 1):
-            print("\n\n")
+            print("\n")
             self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
@@ -211,7 +211,7 @@ class PathExplorationAgent:
             system_prompt=PEA_system_prompt,
             max_iterations=max_generation_turns,  # Allow up to 10 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
-            max_tokens=8192,
+            max_tokens=20480,
             continuation_prompt="Please continue exploring the repository and generate the final test case to reach or trigger the vulnerability in a ```testcase code block."
         )
 

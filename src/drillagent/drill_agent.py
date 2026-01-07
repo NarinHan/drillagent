@@ -177,7 +177,7 @@ class DrillAgent:
     def run(self) -> Dict[str, Any]:
         # Main orchestration workflow
         # Returns: Dict containing analysis results and generated PoVs
-        print("")
+        # print("")
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
