@@ -222,14 +222,18 @@ class SecbTask:
 
 class RawSecbTaskLoader:
     # Responsible for loading security benchmark tasks from JSON files.
-    def __init__(self, dataset_path: str = "datasets/sec-bench/CVE-instances", instance_ids: Optional[List[str]] = None):
+    def __init__(self, dataset_path: str = "datasets/sec-bench/CVE-instances",
+                 instance_ids: Optional[List[str]] = None,
+                 project_names: Optional[List[str]] = None):
         """
         Args:
             dataset_path: Path to the SEC-bench CVE instances directory
             instance_ids: Optional list of specific instance IDs to load
+            project_names: Optional list of project names to filter tasks (e.g., ["openssl", "gpac"])
         """
         self.dataset_path = dataset_path  # datasets/sec-bench/CVE-instances/
         self.instance_ids = instance_ids or []  # optional
+        self.project_names = project_names or []  # optional
         assert os.path.exists(dataset_path), f"SEC-bench Data path {dataset_path} does not exist."
         self.cve_tasks: Dict[str, SecbTask] = {}  # instance_id -> SecbTask
 
@@ -287,6 +291,18 @@ class RawSecbTaskLoader:
             for json_file in json_files:
                 if not os.path.exists(json_file):
                     print(f"[!] Warning: {json_file} not found, skipping...")
+        elif len(self.project_names) > 0:
+            print(f"[+] Loading SEC-bench tasks from {self.dataset_path} for projects: {self.project_names}")
+            # Find all JSON files in the directory
+            all_json_files = glob.glob(os.path.join(self.dataset_path, "*.json"))
+            # Filter by project names (instance_id format: "project_name.cve-xxxx")
+            json_files = []
+            for json_file in all_json_files:
+                instance_id = Path(json_file).stem
+                project_name = instance_id.split('.')[0]
+                if project_name in self.project_names:
+                    json_files.append(json_file)
+            print(f"[+] Found {len(json_files)} tasks matching the specified projects")
         else:
             print(f"[+] Loading all SEC-bench tasks from {self.dataset_path}")
             # Find all JSON files in the directory
@@ -325,9 +341,25 @@ class RawSecbTaskLoader:
 
         return self.cve_tasks
 
-    # 
+    #
     # Various loaders to get different subsets of tasks
-    # 
+    #
+    def get_tasks_by_project(self, project_name: str) -> List[SecbTask]:
+        """
+        Get all tasks for a specific project.
+        Args:
+            project_name: The project name (e.g., "openssl", "gpac", "imagemagick")
+        Returns:
+            List of SecbTask objects for the specified project
+        """
+        returned_tasks = []
+        for instance_id, task in self.cve_tasks.items():
+            # instance_id format: "project_name.cve-xxxx"
+            proj_name = instance_id.split('.')[0]
+            if proj_name == project_name:
+                returned_tasks.append(task)
+        return returned_tasks
+
     def get_nonbinary_tasks(self) -> Dict[str, SecbTask]:
         returned_tasks = dict()
         target_projects = ["mruby", "njs", "php", "yaml", "md4c", "jq"]

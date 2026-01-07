@@ -1,9 +1,7 @@
 import os
+import re
 import subprocess
 import shutil
-import re
-import resource
-from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 
@@ -19,7 +17,7 @@ from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_coverage_analysis_prompt,
 )
 from drillagent.utils.llvm_cov import LLVMCovUtils
-from drillagent.utils.utils import set_memory_limit
+from drillagent.utils.utils import *
 
 # 
 # Currently we assume that the PathExplorationAgent **has** usable call trace. (LHY)
@@ -47,7 +45,8 @@ class PathExplorationAgent:
         # All of the intermediate PoV results should be stored, and can be passed to next agent easily.
         self.history_testcases = []       # List of file paths to all generated test cases.
         self.vfunc_reached_testcases = [] # List of file paths to test cases that reached the vulnerable function.
-        self.crash_input_pov = None       # A dict initialized when triggering segmentation fault.
+        self.crash_input_pov: Dict[str, Any] = None # A dict initialized when triggering segmentation fault.
+        self.crash_command: str = None              # The command that triggered the crash.
         ## crash_input_pov['saved_pov_path']: The path where the crash PoV is saved in output_dir.
 
         # Mapping from iteration number to testcase path (similar to CrashTriggerAgent.generated_candidates)
@@ -66,7 +65,7 @@ class PathExplorationAgent:
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
         previous_feedback = None # From coverage feedback analysis
         for iteration in range(1, self.max_exp_iterations + 1):
-            print("\n\n"+"=" * 80)
+            print("\n\n")
             self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
@@ -87,14 +86,24 @@ class PathExplorationAgent:
             self.history_testcases.append(test_case_path)
             self.generated_testcases[self.current_exp_iteration] = test_case_path  # Record for feedback in next iteration
 
-            # Substep2: Execute test case dynamically (using actual repo path)
+            # Substep2: Execute test case dynamically
             # This will also generate a profraw/profdata file.
-            exit_code, exec_output = self._execute_test_case(test_case_path)
+            repo_path = self.drill_agent.config.target_repo_path
+            binary_path = self.drill_agent.vulnerability_info.binary_path
+            binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path)) # Useful for LLVMCovUtils
+            # Transform general harness command to executable command in current round directory
+            ## Since we use "absolute path" in _refine_harness_command, here we just need to replace the testcase path.
+            harness_command = self.drill_agent.vulnerability_info.refined_harness_command
+            abs_test_case_path = os.path.abspath(test_case_path)
+            command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
+            # Exec!
+            exit_code, exec_output = self._execute_test_case(command, binary_abs_path)
 
-            ## Special A: Check segmentation fault early-stop after each execution
+            # Check segmentation fault to detect early-stop after each execution
+            ## TODO: Maybe here we can also run sanitizer-instrumented binary. (two processes synchronously will be good?)
             found_pov = self._detect_stop_status(exit_code, exec_output)
             if found_pov:
-                self._record_current_pov(test_case_path, exit_code, exec_output)
+                self._record_current_pov(test_case_path, command, exit_code, exec_output)
                 self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Triggered early stop.")
                 break
 
@@ -106,7 +115,7 @@ class PathExplorationAgent:
             with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
                 f.write(coverage_record)
 
-            ## Special B: Check vuln_func reached early-stop after inspecting coverage
+            ## Special: Check if there is already enough `vfunc_reached_testcases`.
             ## If we disable here's "break", the agent will continue to explore branch-level coverage.
             if first_uncovered_frame is None:
                 self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered. Stopping early.")
@@ -194,9 +203,9 @@ class PathExplorationAgent:
             feedback_section=feedback_section # If this is empty, prompt will still work fine.
         )
 
-        # Step 2: Use LLMInterface for automatic tool calling and conversation management (use cheap model to save time and money)
+        # Step 2: Use LLMInterface for automatic tool calling and conversation management
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
-        result = self.drill_agent.low_cost_llm.run_agent_loop(
+        result = self.drill_agent.basic_llm.run_agent_loop(
             task=user_prompt,
             tools=self.tools, # When generating test case, LLM is encouraged to use tools. 
             system_prompt=PEA_system_prompt,
@@ -240,32 +249,18 @@ class PathExplorationAgent:
         self.logger.info (f"  [PathExplorationAgent] Test case generated at: {test_case_path}")
         return test_case_path
 
-    def _execute_test_case(self, test_case_path: str) -> Tuple[int, str]: # No LLM needed
+    def _execute_test_case(self, command: str, binary_abs_path: str) -> Tuple[int, str]: # No LLM needed
+        # Execute the program with llvm-cov instrumentation, return exit code and output.
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
 
-        # Step 1: Prepare the command
-        repo_path = self.drill_agent.config.target_repo_path
-        binary_path = self.drill_agent.vulnerability_info.binary_path
-        binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path)) # Pass to LLVMCovUtils
-        harness_command = self.drill_agent.vulnerability_info.refined_harness_command
-        if not binary_path:
-            raise ValueError("Binary path not found in vulnerability_info")
-        if not harness_command:
-            raise ValueError("Refined harness command not found in vulnerability_info")
-
-        # Transform general harness command to executable command in current round directory
-        ## Since we use "absolute path" in _refine_harness_command, here we just need to replace the testcase path.
-        abs_test_case_path = os.path.abspath(test_case_path)
-        command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
-
-        # Step 2: Set environment variable to generate profraw file
+        # Step 1: Set environment variable to generate profraw file
         profraw_path = os.path.join(round_dir, f"test_{self.current_exp_iteration}.profraw")
         env = os.environ.copy()
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
-        # Step 3: Execute the command with memory limit
+        # Step 2: Execute the command with memory limit
         self.logger.info (f"  [PathExplorationAgent] Executing command: {command} in {round_dir}")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
@@ -294,7 +289,7 @@ class PathExplorationAgent:
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
-        # Step 4: After each execution, use LLVMCovUtils to transform profraw and store the coverage profile data.
+        # Step 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
         self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE: {profraw_path}")
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
             self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
@@ -332,7 +327,7 @@ class PathExplorationAgent:
         assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!"
         if not self.vuln_call_trace or len(self.vuln_call_trace) == 0:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
-            return "ERROR: No vulnerability call trace available for coverage analysis"
+            raise ValueError("No vulnerability call trace available for coverage analysis") # We assume there should be vuln_call_trace.
 
         # Substep 1: Extract function information from vulnerable call trace
         # Build a list of (function_name, file_path) tuples for batch query
@@ -663,7 +658,7 @@ class PathExplorationAgent:
             self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
             return True  # Crash input pov found
 
-        # Check for other interesting exit codes (sanitizer crash usually returns SIGABRT or SIGKILL)
+        # Check for other interesting exit codes
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
             self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code}).")
             if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
@@ -672,16 +667,13 @@ class PathExplorationAgent:
 
         elif exit_code == -9 or exit_code == 137:  # SIGKILL
             self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code}).")
-            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
-                self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
-                return True
         
         elif exit_code < 0 or exit_code > 128:  # Signal-based exit
             self.logger.debug(f"  [PathExplorationAgent] Program terminated with signal (exit code {exit_code}).")
 
         return False  # No crash input pov found
 
-    def _record_current_pov(self, test_case_path: str, exit_code: int, exec_output: str) -> None:
+    def _record_current_pov(self, test_case_path: str, command: str, exit_code: int, exec_output: str) -> None:
         # Record the current crash-triggering PoV.
         # This function handles all the storage and logging operations when a crash is detected.
         try:
@@ -696,6 +688,7 @@ class PathExplorationAgent:
                 'iteration': self.current_exp_iteration,
                 'max_iterations': self.max_exp_iterations
             }
+            self.crash_command = command
 
             # Copy the crash PoV to output directory with timestamped name
             timestamp = datetime.now().strftime("%y%m%d-%H%M")
