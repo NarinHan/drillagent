@@ -214,24 +214,49 @@ class AstGrepManager:
             - error: str (if failed)
         """
         # Construct function definition pattern based on language
-        # This pattern matches function definitions with various return types
         if language in ["c", "cpp"]:
-            # Pattern that matches: <return_type> function_name(<params>) { <body> }
-            # We use $$$ for wildcards to match variable parts
-            pattern = f"$RET {function_name}($$$) {{ $$$ }}"
+            # For C/C++, use TWO patterns to handle both pointer and non-pointer return types
+            # Pattern 1: Functions returning non-pointers (e.g., int func(), static void func())
+            # Pattern 2: Functions returning pointers (e.g., User *func(), static const char *func())
+            # $$$MODS matches: storage specifiers (static), type qualifiers (const), type names
+            patterns = [
+                f"$$$MODS {function_name}($$$PARAMS) {{ $$$BODY }}",  # non-pointer returns
+                f"$$$MODS *{function_name}($$$PARAMS) {{ $$$BODY }}", # pointer returns
+            ]
+
+            # Try both patterns and combine results
+            all_matches = []
+            for pattern in patterns:
+                result = self.search_pattern(pattern, path, language, context_lines=0)
+                if result["success"] and result.get("matches"):
+                    all_matches.extend(result["matches"])
+
+            # Remove duplicates based on line number (same function matched by both patterns)
+            seen_lines = set()
+            unique_matches = []
+            for match in all_matches:
+                line = match.get("line")
+                if line not in seen_lines:
+                    seen_lines.add(line)
+                    unique_matches.append(match)
+
+            result = {
+                "success": True,
+                "matches": unique_matches,
+                "count": len(unique_matches)
+            }
+
         elif language == "python":
             # Pattern that matches: def function_name(<params>)
             # Note: ast-grep handles the colon automatically for Python
             pattern = f"def {function_name}($$$)"
+            result = self.search_pattern(pattern, path, language, context_lines=0)
         else:
             return {
                 "success": False,
                 "matches": [],
                 "error": f"Unsupported language: {language}"
             }
-
-        # Call search_pattern
-        result = self.search_pattern(pattern, path, language, context_lines=0)
 
         if not result["success"]:
             return result
@@ -287,6 +312,14 @@ class AstGrepFunctionSearchTool(AgentTool):
 
     This tool provides quick syntax-based function search that doesn't
     require compilation or build configuration.
+
+    Supported languages:
+    - C: Full support for all function types (static, const, pointer returns, etc.)
+    - C++: Limited support (ast-grep has known issues with C++ function pattern matching)
+    - Python: Good support for basic function definitions
+
+    For C code, the tool uses a dual-pattern approach to handle both
+    pointer and non-pointer return types comprehensively.
     """
 
     def __init__(self, repo_path: str, ast_grep_path: str = "ast-grep"):
@@ -393,7 +426,7 @@ class AstGrepFunctionSearchTool(AgentTool):
             # Add line numbers
             numbered_lines = []
             for i, line in enumerate(display_lines):
-                line_num = start_line + i
+                line_num = start_line + i + 1 # LHY added this "+ 1"
                 numbered_lines.append(f"{line_num:4d} | {line}")
 
             formatted_snippet = "\n".join(numbered_lines)
@@ -423,9 +456,11 @@ class AstGrepFunctionSearchTool(AgentTool):
 
         # For debug
         print(f"[AstGrepFunctionSearchTool] Search Summary:")
-        print(f"  Function Name:    {function_name}")
-        print(f"  Matched Results:  {len(formatted_matches)} / {total_found}")
-        print(f"  Code lines (1st): {len(formatted_matches[0]['source_snippet'].splitlines()) if formatted_matches else 0}")
+        print(f"  Function Name:    {function_name}\n")
+        print(f"  Matched Results:  {len(formatted_matches)} / {total_found}\n")
+        print(f"  Code lines (1st): {len(formatted_matches[0]['source_snippet'].splitlines()) if formatted_matches else 0}\n")
+        if formatted_matches:
+            print(formatted_matches[0]['source_snippet'])
 
         return {
             "success": True,

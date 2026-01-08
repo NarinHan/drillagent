@@ -58,8 +58,8 @@ def print_result(result: dict):
 
 
 def test_manager(repo_path: Path):
-    """Test AstGrepManager"""
-    print_section("Test 1: AstGrepManager")
+    """Test AstGrepManager with C code"""
+    print_section("Test 1: AstGrepManager - C Code")
 
     try:
         manager = AstGrepManager(str(repo_path))
@@ -76,21 +76,33 @@ def test_manager(repo_path: Path):
         print("[ERROR] ast-grep is not available")
         return False
 
-    # Test 1.2: Search for function pattern in Python
-    print("\n1.2 Search for function definitions in Python")
+    # Test 1.2: Search for function pattern in C - non-pointer return
+    print("\n1.2 Search for C functions with non-pointer return types")
     result = manager.search_pattern(
-        pattern="def $FUNC($$$):",
-        path="src/drillagent/tools",
-        language="python"
+        pattern="$$$MODS $FUNC($$$PARAMS) { $$$BODY }",
+        path="tests/example.c",
+        language="c"
+    )
+    print(f"Found {result.get('count', 0)} functions")
+    if result.get('count', 0) > 0:
+        print("[OK] Pattern matching works for non-pointer functions")
+    print_result(result)
+
+    # Test 1.3: Search for specific function - pointer return type
+    print("\n1.3 Search for allocate_user function (returns pointer)")
+    result = manager.search_function(
+        function_name="allocate_user",
+        path="tests/example.c",
+        language="c"
     )
     print_result(result)
 
-    # Test 1.3: Search for specific function
-    print("\n1.3 Search for __init__ function in ast_grep_tools.py")
+    # Test 1.4: Search for main function
+    print("\n1.4 Search for main function")
     result = manager.search_function(
-        function_name="__init__",
-        path="src/drillagent/tools/ast_grep_tools.py",
-        language="python"
+        function_name="main",
+        path="tests/example.c",
+        language="c"
     )
     print_result(result)
 
@@ -98,94 +110,150 @@ def test_manager(repo_path: Path):
 
 
 def test_function_search_tool(repo_path: Path):
-    """Test AstGrepFunctionSearchTool"""
-    print_section("Test 2: AstGrepFunctionSearchTool")
+    """Test AstGrepFunctionSearchTool with C code"""
+    print_section("Test 2: AstGrepFunctionSearchTool - C Code")
 
     try:
         tool = AstGrepFunctionSearchTool(str(repo_path))
         print(f"[OK] Tool initialized: {tool.name()}")
-        print(f"Description: {tool.description()}")
+        print(f"Description: {tool.description()[:100]}...")
     except Exception as e:
         print(f"[ERROR] Failed to initialize tool: {e}")
         return False
 
-    # Test 2.1: Search for execute function in Python
-    print("\n2.1 Search for 'execute' function in tools directory")
+    # Test 2.1: Search for main function
+    print("\n2.1 Search for 'main' function in example.c")
     result = tool.execute(
-        function_name="execute",
-        search_path="src/drillagent/tools",
-        language="python"
+        function_name="main",
+        search_path="tests/example.c",
+        language="c"
+    )
+    if result.get("count", 0) == 1:
+        print("[OK] Found main function")
+    print_result(result)
+
+    # Test 2.2: Search for static function returning pointer
+    print("\n2.2 Search for 'allocate_user' (static, pointer return)")
+    result = tool.execute(
+        function_name="allocate_user",
+        search_path="tests/example.c",
+        language="c"
+    )
+    if result.get("count", 0) == 1:
+        print("[OK] Found allocate_user function")
+    print_result(result)
+
+    # Test 2.3: Search for static function returning const pointer
+    print("\n2.3 Search for 'role_to_string' (static const char *)")
+    result = tool.execute(
+        function_name="role_to_string",
+        search_path="tests/example.c",
+        language="c"
+    )
+    if result.get("count", 0) == 1:
+        print("[OK] Found role_to_string function")
+    print_result(result)
+
+    # Test 2.4: Search for static void function
+    print("\n2.4 Search for 'print_user' (static void)")
+    result = tool.execute(
+        function_name="print_user",
+        search_path="tests/example.c",
+        language="c"
+    )
+    if result.get("count", 0) == 1:
+        print("[OK] Found print_user function")
+    print_result(result)
+
+    # Test 2.5: Search for multiple occurrences
+    print("\n2.5 Search in entire tests directory")
+    result = tool.execute(
+        function_name="sum_array",
+        search_path="tests/",
+        language="c"
     )
     print_result(result)
 
-    # Test 2.2: Search for name function
-    print("\n2.2 Search for 'name' function")
+    # Test 2.6: Search for non-existent function
+    print("\n2.6 Search for non-existent function")
     result = tool.execute(
-        function_name="name",
-        search_path="src/drillagent/tools/ast_grep_tools.py",
-        language="python"
+        function_name="nonexistent_func_xyz123",
+        search_path="tests/example.c",
+        language="c"
     )
-    print_result(result)
-
-    # Test 2.3: Search for non-existent function
-    print("\n2.3 Search for non-existent function")
-    result = tool.execute(
-        function_name="this_function_does_not_exist_xyz123",
-        search_path="src/drillagent/tools",
-        language="python"
-    )
+    if result.get("count", 0) == 0:
+        print("[OK] Correctly returned zero matches")
     print_result(result)
 
     return True
 
 
 def test_pattern_search_tool(repo_path: Path):
-    """Test AstGrepPatternSearchTool"""
-    print_section("Test 3: AstGrepPatternSearchTool")
+    """Test AstGrepPatternSearchTool with C code"""
+    print_section("Test 3: AstGrepPatternSearchTool - C Code")
 
     try:
         tool = AstGrepPatternSearchTool(str(repo_path))
         print(f"[OK] Tool initialized: {tool.name()}")
-        print(f"Description: {tool.description()}")
+        print(f"Description: {tool.description()[:100]}...")
     except Exception as e:
         print(f"[ERROR] Failed to initialize tool: {e}")
         return False
 
-    # Test 3.1: Search for class definitions
-    print("\n3.1 Search for class definitions in Python")
+    # Test 3.1: Search for malloc calls
+    print("\n3.1 Search for malloc() calls")
     result = tool.execute(
-        pattern="class $CLASS:",
-        language="python",
-        search_path="src/drillagent/tools/ast_grep_tools.py"
+        pattern="malloc($SIZE)",
+        language="c",
+        search_path="tests/example.c"
     )
     print_result(result)
 
-    # Test 3.2: Search for return statements
-    print("\n3.2 Search for return statements")
+    # Test 3.2: Search for strcpy calls (unsafe pattern)
+    print("\n3.2 Search for strcpy() calls")
+    result = tool.execute(
+        pattern="strcpy($DEST, $SRC)",
+        language="c",
+        search_path="tests/example.c",
+        context_lines=2
+    )
+    print_result(result)
+
+    # Test 3.3: Search for return statements
+    print("\n3.3 Search for return statements")
     result = tool.execute(
         pattern="return $VALUE",
-        language="python",
-        search_path="src/drillagent/tools/ast_grep_tools.py",
-        context_lines=1
-    )
-    print_result(result)
-
-    # Test 3.3: Search for import statements
-    print("\n3.3 Search for import statements")
-    result = tool.execute(
-        pattern="import $MODULE",
-        language="python",
-        search_path="src/drillagent/tools",
+        language="c",
+        search_path="tests/example.c",
         context_lines=0
     )
     print_result(result)
 
-    # Test 3.4: Search for dictionary with specific key
-    print("\n3.4 Search for Dict type hints")
+    # Test 3.4: Search for typedef struct
+    print("\n3.4 Search for typedef struct definitions")
     result = tool.execute(
-        pattern="Dict[$KEY, $VALUE]",
-        language="python",
-        search_path="src/drillagent/tools/ast_grep_tools.py"
+        pattern="typedef struct { $$$FIELDS } $NAME",
+        language="c",
+        search_path="tests/example.c"
+    )
+    print_result(result)
+
+    # Test 3.5: Search for enum definitions
+    print("\n3.5 Search for enum definitions")
+    result = tool.execute(
+        pattern="typedef enum { $$$VALUES } $NAME",
+        language="c",
+        search_path="tests/example.c"
+    )
+    print_result(result)
+
+    # Test 3.6: Search for if statements
+    print("\n3.6 Search for if statements")
+    result = tool.execute(
+        pattern="if ($COND) { $$$BODY }",
+        language="c",
+        search_path="tests/example.c",
+        context_lines=1
     )
     print_result(result)
 
