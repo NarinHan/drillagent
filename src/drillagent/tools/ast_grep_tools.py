@@ -1,7 +1,7 @@
 """
 ast-grep based code search tools.
 
-This module provides fast structural code search using ast-grep (sg).
+This module provides fast structural code search using ast-grep (alisa: sg).
 Does not require compilation - works on source code directly.
 Useful as a fallback when clangd is unavailable or for quick searches.
 
@@ -16,6 +16,7 @@ Manager:
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import subprocess
+import json
 
 from .basic_tools import AgentTool
 
@@ -34,13 +35,13 @@ class AstGrepManager:
     Each operation is a fresh CLI invocation.
     """
 
-    def __init__(self, repo_path: str, ast_grep_path: str = "sg"):
+    def __init__(self, repo_path: str, ast_grep_path: str = "ast-grep"):
         """
         Initialize AstGrepManager.
 
         Args:
             repo_path: Absolute path to the repository root
-            ast_grep_path: Path to ast-grep executable (default: "sg")
+            ast_grep_path: Path to ast-grep executable (default: "ast-grep")
 
         Raises:
             ValueError: If repo_path is invalid
@@ -48,12 +49,21 @@ class AstGrepManager:
         self.repo_path = Path(repo_path).resolve()
         self.ast_grep_path = ast_grep_path
 
-        # TODO: Validate repo_path exists
-        # TODO: Validate ast-grep is installed
-        pass
+        # Validate repo_path exists
+        if not self.repo_path.exists():
+            raise ValueError(f"Repository path does not exist: {repo_path}")
+        if not self.repo_path.is_dir():
+            raise ValueError(f"Repository path is not a directory: {repo_path}")
+
+        # Validate ast-grep is installed
+        if not self.is_available():
+            raise RuntimeError(
+                f"ast-grep executable '{ast_grep_path}' not found or not working. "
+                f"Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            )
 
     def search_pattern(self, pattern: str, path: Optional[str] = None,
-                      language: str = "c", context_lines: int = 0) -> Dict[str, Any]:
+                      language: str = "cpp", context_lines: int = 0) -> Dict[str, Any]:
         """
         Search for a code pattern using ast-grep.
 
@@ -69,14 +79,123 @@ class AstGrepManager:
             - matches: List[Dict] with match information
             - error: str (if failed)
         """
-        # TODO: Build ast-grep command
-        # TODO: Execute subprocess
-        # TODO: Parse JSON output
-        # TODO: Return formatted results
-        pass
+        try:
+            # Build ast-grep command
+            cmd = [
+                self.ast_grep_path,
+                "run",
+                "--pattern", pattern,
+                "--lang", language,
+                "--json"
+            ]
+
+            # Add context lines if requested
+            if context_lines > 0:
+                cmd.extend(["--context", str(context_lines)])
+
+            # Determine search path
+            search_path = self.repo_path
+            search_is_file = False
+            if path:
+                search_path = self.repo_path / path
+                if not search_path.exists():
+                    return {
+                        "success": False,
+                        "matches": [],
+                        "error": f"Search path does not exist: {path}"
+                    }
+                # Check if it's a file or directory
+                if search_path.is_file():
+                    search_is_file = True
+
+            # Execute subprocess
+            # If searching a specific file, add it to command; otherwise use cwd
+            if search_is_file:
+                cmd.append(str(search_path))
+                result = subprocess.run(
+                    cmd,
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+            else:
+                result = subprocess.run(
+                    cmd,
+                    cwd=search_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+            if result.returncode != 0 and result.returncode != 1:
+                # Return code 1 means no matches found, which is valid
+                return {
+                    "success": False,
+                    "matches": [],
+                    "error": f"ast-grep failed: {result.stderr}"
+                }
+
+            # Parse JSON output
+            if not result.stdout.strip():
+                # No matches found
+                return {
+                    "success": True,
+                    "matches": [],
+                    "count": 0
+                }
+
+            matches_raw = json.loads(result.stdout)
+
+            # Format matches
+            matches = []
+            for match in matches_raw:
+                formatted_match = {
+                    "file": match["file"],
+                    "line": match["range"]["start"]["line"],
+                    "column": match["range"]["start"]["column"],
+                    "end_line": match["range"]["end"]["line"],
+                    "end_column": match["range"]["end"]["column"],
+                    "text": match["text"],
+                    "lines": match.get("lines", match["text"])
+                }
+
+                # Include captured metavariables if any
+                if "metaVariables" in match and match["metaVariables"].get("single"):
+                    formatted_match["captures"] = {
+                        name: var["text"]
+                        for name, var in match["metaVariables"]["single"].items()
+                    }
+
+                matches.append(formatted_match)
+
+            return {
+                "success": True,
+                "matches": matches,
+                "count": len(matches)
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "matches": [],
+                "error": "Search timed out after 30 seconds"
+            }
+        except json.JSONDecodeError as e:
+            return {
+                "success": False,
+                "matches": [],
+                "error": f"Failed to parse ast-grep output: {e}"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "matches": [],
+                "error": f"Unexpected error: {e}"
+            }
 
     def search_function(self, function_name: str, path: Optional[str] = None,
-                       language: str = "c") -> Dict[str, Any]:
+                       language: str = "cpp") -> Dict[str, Any]:
         """
         Search for function definitions by name.
 
@@ -94,22 +213,72 @@ class AstGrepManager:
             - matches: List[Dict] with function definitions
             - error: str (if failed)
         """
-        # TODO: Construct function definition pattern based on language
-        # TODO: Call search_pattern()
-        # TODO: Post-process to extract function signature and body
-        # TODO: Return formatted results
-        pass
+        # Construct function definition pattern based on language
+        # This pattern matches function definitions with various return types
+        if language in ["c", "cpp"]:
+            # Pattern that matches: <return_type> function_name(<params>) { <body> }
+            # We use $$$ for wildcards to match variable parts
+            pattern = f"$RET {function_name}($$$) {{ $$$ }}"
+        elif language == "python":
+            # Pattern that matches: def function_name(<params>)
+            # Note: ast-grep handles the colon automatically for Python
+            pattern = f"def {function_name}($$$)"
+        else:
+            return {
+                "success": False,
+                "matches": [],
+                "error": f"Unsupported language: {language}"
+            }
+
+        # Call search_pattern
+        result = self.search_pattern(pattern, path, language, context_lines=0)
+
+        if not result["success"]:
+            return result
+
+        # Post-process to extract function signature and body
+        for match in result.get("matches", []):
+            # Extract function signature from the matched text
+            text = match.get("text", "")
+            lines = text.split("\n")
+
+            # Find the first line with opening brace (C/C++) or colon (Python) to get signature
+            signature_lines = []
+            if language == "python":
+                # For Python, signature ends at the colon
+                for line in lines:
+                    signature_lines.append(line)
+                    if ":" in line:
+                        break
+            else:
+                # For C/C++, signature ends at the opening brace
+                for line in lines:
+                    signature_lines.append(line)
+                    if "{" in line:
+                        break
+
+            match["signature"] = "\n".join(signature_lines).strip()
+            match["function_name"] = function_name
+
+        return result
 
     def is_available(self) -> bool:
         """
-        Check if ast-grep (sg) is available.
+        Check if ast-grep is available.
 
         Returns:
             True if ast-grep is installed and executable, False otherwise
         """
-        # TODO: Try running 'sg --version'
-        # TODO: Return True if successful, False otherwise
-        pass
+        try:
+            result = subprocess.run(
+                [self.ast_grep_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError):
+            return False
 
 
 class AstGrepFunctionSearchTool(AgentTool):
@@ -120,7 +289,7 @@ class AstGrepFunctionSearchTool(AgentTool):
     require compilation or build configuration.
     """
 
-    def __init__(self, repo_path: str, ast_grep_path: str = "sg"):
+    def __init__(self, repo_path: str, ast_grep_path: str = "ast-grep"):
         """
         Initialize AstGrepFunctionSearchTool.
 
@@ -130,15 +299,16 @@ class AstGrepFunctionSearchTool(AgentTool):
         """
         self.repo_path = Path(repo_path).resolve()
         self.ast_grep_path = ast_grep_path
-        # TODO: Create or get AstGrepManager instance
-        pass
+        # Create AstGrepManager instance
+        self.manager = AstGrepManager(str(self.repo_path), ast_grep_path)
 
     def name(self) -> str:
         return "ast_grep_search_function"
 
     def description(self) -> str:
         return (
-            "Quickly search for C/C++ function definitions by name using ast-grep. "
+            "Quickly search for function definitions by name using ast-grep. "
+            "Supports C, C++, and Python. "
             "Fast syntax-based search that doesn't require compilation or compile_commands.json. "
             "Returns file paths, line numbers, and function signatures. "
             "Use this for quick exploration or when clangd-based tools are unavailable. "
@@ -164,33 +334,107 @@ class AstGrepFunctionSearchTool(AgentTool):
             },
             "language": {
                 "type": "string",
-                "description": "Programming language: 'c' or 'cpp'. Default: 'c'",
+                "description": "Programming language: 'c', 'cpp', or 'python'. Default: 'cpp'",
                 "required": False
             }
         }
 
     def execute(self, function_name: str, search_path: Optional[str] = None,
-                language: str = "c") -> Dict[str, Any]:
+                language: str = "cpp") -> Dict[str, Any]:
         """
         Execute function search.
 
         Args:
             function_name: Name of the function to find
             search_path: Optional path to narrow search
-            language: Programming language (c or cpp)
+            language: Programming language (c, cpp, or python)
 
         Returns:
             Dict containing:
             - success: bool
-            - matches: List[Dict] with 'file', 'line', 'column', 'signature', 'source_snippet'
-            - count: int (number of matches)
+            - summary: str (human-readable overview of matches, shows if results limited)
+            - matches: List[Dict] with (max 3 results):
+                - file: str (file path)
+                - line: int (start line number)
+                - column: int (start column)
+                - signature: str (function signature)
+                - source_snippet: str (formatted with line numbers, max 500 lines)
+                - total_lines: int (actual function length)
+            - count: int (number of matches returned, max 3)
+            - total_found: int (total number of matches found)
+            - function_name: str (the queried function name)
             - error: str (if failed)
         """
-        # TODO: Use AstGrepManager.search_function()
-        # TODO: Format results for LLM consumption
-        # TODO: Include source snippets
-        # TODO: Return formatted result
-        pass
+        # Use AstGrepManager.search_function()
+        result = self.manager.search_function(function_name, search_path, language)
+
+        if not result["success"]:
+            return result
+
+        # Limit to first 3 matches
+        all_matches = result.get("matches", [])
+        total_found = len(all_matches)
+        matches_to_process = all_matches[:3]
+
+        # Format results for LLM consumption
+        formatted_matches = []
+        summary_lines = []
+
+        for idx, match in enumerate(matches_to_process, 1):
+            # Format source snippet with line numbers (limit to first 500 lines)
+            source_text = match.get("text", "")
+            source_lines = source_text.split("\n")
+            start_line = match["line"]
+
+            # Limit to first 500 lines for readability
+            truncated = len(source_lines) > 500
+            display_lines = source_lines[:500]
+
+            # Add line numbers
+            numbered_lines = []
+            for i, line in enumerate(display_lines):
+                line_num = start_line + i
+                numbered_lines.append(f"{line_num:4d} | {line}")
+
+            formatted_snippet = "\n".join(numbered_lines)
+            if truncated:
+                formatted_snippet += f"\n... (truncated, {len(source_lines)} total lines)"
+
+            formatted_match = {
+                "file": match["file"],
+                "line": match["line"],
+                "column": match["column"],
+                "signature": match.get("signature", ""),
+                "source_snippet": formatted_snippet,
+                "total_lines": len(source_lines)
+            }
+            formatted_matches.append(formatted_match)
+
+            # Build summary
+            summary_lines.append(
+                f"  [{idx}] {match['file']}:{match['line']} - {match.get('signature', '')}"
+            )
+
+        # Create human-readable summary
+        summary = f"Found {total_found} definition(s) of '{function_name}'"
+        if total_found > 3:
+            summary += f" (showing first 3)"
+        summary += ":\n" + "\n".join(summary_lines)
+
+        # For debug
+        print(f"[AstGrepFunctionSearchTool] Search Summary:")
+        print(f"  Function Name:    {function_name}")
+        print(f"  Matched Results:  {len(formatted_matches)} / {total_found}")
+        print(f"  Code lines (1st): {len(formatted_matches[0]['source_snippet'].splitlines()) if formatted_matches else 0}")
+
+        return {
+            "success": True,
+            "summary": summary,
+            "matches": formatted_matches,
+            "count": len(formatted_matches),
+            "total_found": total_found,
+            "function_name": function_name
+        }
 
 
 class AstGrepPatternSearchTool(AgentTool):
@@ -201,7 +445,7 @@ class AstGrepPatternSearchTool(AgentTool):
     specific code constructs across the codebase.
     """
 
-    def __init__(self, repo_path: str, ast_grep_path: str = "sg"):
+    def __init__(self, repo_path: str, ast_grep_path: str = "ast-grep"):
         """
         Initialize AstGrepPatternSearchTool.
 
@@ -211,8 +455,8 @@ class AstGrepPatternSearchTool(AgentTool):
         """
         self.repo_path = Path(repo_path).resolve()
         self.ast_grep_path = ast_grep_path
-        # TODO: Create or get AstGrepManager instance
-        pass
+        # Create AstGrepManager instance
+        self.manager = AstGrepManager(str(self.repo_path), ast_grep_path)
 
     def name(self) -> str:
         return "ast_grep_pattern_search"
@@ -247,7 +491,7 @@ class AstGrepPatternSearchTool(AgentTool):
             },
             "language": {
                 "type": "string",
-                "description": "Programming language: 'c', 'cpp', etc. Default: 'c'",
+                "description": "Programming language: 'c', 'cpp', etc. Default: 'cpp'",
                 "required": False
             },
             "search_path": {
@@ -265,7 +509,7 @@ class AstGrepPatternSearchTool(AgentTool):
             }
         }
 
-    def execute(self, pattern: str, language: str = "c",
+    def execute(self, pattern: str, language: str = "cpp",
                 search_path: Optional[str] = None,
                 context_lines: int = 2) -> Dict[str, Any]:
         """
@@ -285,8 +529,44 @@ class AstGrepPatternSearchTool(AgentTool):
             - pattern_used: str (the pattern that was searched)
             - error: str (if failed)
         """
-        # TODO: Use AstGrepManager.search_pattern()
-        # TODO: Format results with context
-        # TODO: Limit number of results if too many (with warning)
-        # TODO: Return formatted result
-        pass
+        # Use AstGrepManager.search_pattern()
+        result = self.manager.search_pattern(pattern, search_path, language, context_lines)
+
+        if not result["success"]:
+            return result
+
+        # Format results with context
+        formatted_matches = []
+        max_results = 100  # Limit to prevent overwhelming output
+
+        matches = result.get("matches", [])
+        limited = len(matches) > max_results
+
+        for match in matches[:max_results]:
+            formatted_match = {
+                "file": match["file"],
+                "line": match["line"],
+                "column": match["column"],
+                "matched_code": match.get("text", ""),
+                "context": match.get("lines", match.get("text", ""))
+            }
+
+            # Include captured variables if any
+            if "captures" in match:
+                formatted_match["captures"] = match["captures"]
+
+            formatted_matches.append(formatted_match)
+
+        result_dict = {
+            "success": True,
+            "matches": formatted_matches,
+            "count": len(formatted_matches),
+            "total_matches": len(matches),
+            "pattern_used": pattern
+        }
+
+        # Add warning if results were limited
+        if limited:
+            result_dict["warning"] = f"Results limited to {max_results} out of {len(matches)} total matches"
+
+        return result_dict

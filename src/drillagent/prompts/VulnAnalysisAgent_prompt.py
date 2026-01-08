@@ -154,7 +154,7 @@ Line Number Verification Requirements:
 - Example: If this frame is `main @ tools/plistutil.c:137` and the callee function is `njs_function`, then tools/plistutil.c:137 should contain a function call site to `njs_function`.
 
 Verification Steps:
-1. You MUST use `read_file` to examine the source code at and around the provided line number.
+1. You MUST use provided code browsing tools to examine the source code at and around the provided line number.
 2. Check if the target line contains a call site to the callee function `{callee_function_name}`:
    - If YES and it's a **direct function call** (e.g., `njs_function(...);`), keep the original non-zero line number and set `"is_original_linenum": true` and `"is_verified": true`.
    - If YES and it's an **indirect function call** (e.g., `(*callback)(arg);` or `func_ptr();` or `handler->process();`), keep the original non-zero line number and set `"is_original_linenum": true` and `"is_verified": true`.
@@ -186,7 +186,7 @@ Note: Set `"is_original_linenum": true` when you keep the original line number b
 - You cannot find the correct call site line after thorough checking
 Also set `"is_verified": false` if you cannot find the correct line number after thorough checking.
 
-Make sure the line number has been verified and adjusted as needed using the read_file tool.
+Make sure the line number has been verified and adjusted as needed using the code browsing tools.
 Before finalizing your answer, re-verify that the line_number is > 0 (NEVER 0)!!!
 """
 
@@ -284,7 +284,7 @@ Your task is to explain the ROOT CAUSE of this vulnerability:
 2. Follow the above call trace to retrieve the source code around the corresponding locations, and analyze the data flow along the function calls, with particular attention to the call sites at each layer.
 3. Identify WHY the vulnerability occurs during analysis. (e.g., missing bounds check, use-after-free due to dangling pointer)
 
-Use the provided tools (mainly read_file) to examine relevant source files.
+Use the provided tools (mainly `ast_grep_search_function`, supplemented by `read_file`) to examine relevant source files.
 - All the relative file paths are based on the repository root: {actual_repo_path}
 - Some source file line numbers may be inaccurate (i.e., target code line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion. You may need to read a few lines above the provided line number, and use the callee function name in the next stack frame to pinpoint the correct call-site code snippet!!
 
@@ -322,7 +322,7 @@ IMPORTANT CONCEPTS:
 - **Non-critical steps**: Basic/common function calls that would be executed by almost any test case (e.g., initialization functions, basic parsing functions). These are less important for our further coverage tracking.
 
 Analysis Steps:
-1. Use the `read_file` tool to examine the source code for each function in the call trace.
+1. Use the code browsing tools to examine the source code for each function in the call trace.
 2. Identify which function calls implement key logic that leads to the vulnerability (e.g., specific branching conditions, data transformations, state changes).
 3. For each frame in the call trace, determine if it is "critical" based on:
    - Does it perform security-relevant operations (bounds checks, type checks, etc.)?
@@ -333,7 +333,7 @@ Analysis Steps:
 
 IMPORTANT:
 - All file paths are RELATIVE to repository root: {actual_repo_path}
-- You MUST use the read_file tool to examine the actual source code before making judgments
+- You MUST use the code browsing tools to examine the actual source code before making judgments
 - Be selective: typically only 20-40 percent of frames should be marked as critical
 
 Respond in the following JSON format ONLY:
@@ -358,5 +358,5 @@ Respond in the following JSON format ONLY:
     ]
 }}
 
-Be thorough. Use read_file to examine the code before making your assessment.
+Be thorough. Use provided tools to examine the code before making your assessment.
 """

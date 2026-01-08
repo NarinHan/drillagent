@@ -16,6 +16,7 @@ from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
 from drillagent.utils.utils import *
 from drillagent.tools.basic_tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool
 from drillagent.tools.cov_query_tools import FuncLineCovTool
+from drillagent.tools.ast_grep_tools import AstGrepFunctionSearchTool
 from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
 
 class DrillAgent:
@@ -49,6 +50,8 @@ class DrillAgent:
         # LLM agent tools
         self.agent_tools: List[Any] = []
         self.agent_cov_tools: List[Any] = []
+        self.ast_grep_tools:  List[Any] = []
+        self.clangd_tools:    List[Any] = []
 
         # Sub-agents: These can be used for inter-communication.
         self.vuln_agent: VulnAnalysisAgent             = None
@@ -100,11 +103,19 @@ class DrillAgent:
                 ListDirTool(self.config.target_repo_path),
                 TreeTool(self.config.target_repo_path)
             ]
-            self.logger.info(f"✓ Agent tools initialized: {len(self.agent_tools)} tools available")
-            # Note: agent_cov_tools will be initialized after vulnerability analysis
-            # when binary_path becomes available
+            self.logger.info(f"✓ Agent basic tools initialized: {len(self.agent_tools)} tools available")
+            # Note: agent_cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
         except Exception as e:
-            self.logger.error(f"Failed to initialize agent tools: {e}")
+            self.logger.error(f"Failed to initialize agent basic tools: {e}")
+
+        # Init ast-grep tools for LLM
+        try:
+            self.ast_grep_tools = [
+                AstGrepFunctionSearchTool(self.config.target_repo_path)
+            ]
+            self.logger.info(f"✓ ast-grep tools initialized: {len(self.ast_grep_tools)} tools available")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize ast-grep tools: {e}")
 
         # Initialize new LLMInterface instances
         # We use different models for different sub-tasks to optimize cost and performance

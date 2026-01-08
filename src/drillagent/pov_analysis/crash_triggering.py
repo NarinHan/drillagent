@@ -23,9 +23,6 @@ class CrashTriggerAgent:
         self.drill_agent = drill_agent
         self.config = drill_agent.config
         self.logger = drill_agent.logger
-        self.tools = []
-        self.tools.extend(drill_agent.agent_tools)
-        self.tools.extend(drill_agent.agent_cov_tools) # For crash triggering, we also provide coverage tools.
 
         # The outermost-loop counters.
         self.max_trigger_iterations = 8
@@ -200,10 +197,13 @@ class CrashTriggerAgent:
             previous_pov_gen_progress=previous_progress # 🤔
         )
 
+        # For crash triggering, we also provide ast-grep and coverage tools.
+        cur_tools = self.drill_agent.agent_tools + self.drill_agent.ast_grep_tools + self.drill_agent.agent_cov_tools
+
         self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=user_prompt,
-            tools=self.tools,  # Allow LLM to use tools for exploration (e.g., retrieve_function_line_coverage, read_file, etc.)
+            tools=cur_tools,  # Allow LLM to use tools for exploration
             system_prompt=CTA_system_prompt,
             max_iterations=max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation

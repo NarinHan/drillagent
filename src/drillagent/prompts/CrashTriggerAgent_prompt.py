@@ -42,6 +42,7 @@ Example tool call:
 Note: The binary path is already configured in the tool. You only need to provide profdata_path, function_name, and optionally source_file_path.
 """
 
+# Core prompt for this phase.
 # Use `previous_pov_gen_progress` to provide previous execution feedback.
 CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to reliably trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV possible.
 
@@ -100,6 +101,7 @@ IMPORTANT:
 - This is your final attempt - make it count by leveraging ALL available information
 - Do NOT include analysis text or comments inside the ```pov code block
 - Focus on crash reliability over exploration - we want a PoV that works consistently
+- You are encouraged to use `ast_grep_search_function` tool to read any function implementations before your generation.
 
 Generate the final PoV now and return it in a ```pov code block.
 """
