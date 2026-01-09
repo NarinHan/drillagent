@@ -295,16 +295,28 @@ class VulnAnalysisAgent:
 
             # Substep 1: Transform raw call trace to structured format
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to transform raw call trace...")
-            response = self.drill_agent.basic_llm.generate(
-                prompt=VAA_call_trace_transform_prompt.format(
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=VAA_call_trace_transform_prompt.format(
                     project_name=self.config.project_name,
                     actual_repo_path=repo_path,
                     raw_call_trace=raw_call_trace
                 ),
+                tools=self.basic_tools,  # Provide tools to locate files if needed
                 system_prompt=VAA_system_prompt,
+                max_iterations=5,  # Allow a few iterations for file location
                 temperature=0.1,
-                max_tokens=4096
+                max_tokens=4096,
+                continuation_prompt="Please continue transforming the call trace and provide the final JSON output."
             )
+
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.error(f"  [VulnAnalysisAgent] LLM agent loop failed: {error_msg}")
+                raise RuntimeError(f"Failed to transform call trace: {error_msg}")
+
+            response = result['final_response']
+            self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
+            self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
             self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
 
             parsed_data = extract_json_from_response(response)
@@ -328,6 +340,7 @@ class VulnAnalysisAgent:
                     validated_trace.append(entry)
                 else:
                     self.logger.warning(f"      ✗ File not found for frame #{entry.get('sequence_num')}: {abs_path}")
+            self.logger.info(f"Validated file paths in call trace: {len(validated_trace)} valid frames (from {len(parsed_data['call_trace'])} total)")
 
             # Print trace before line number adjustment (for debug)
             validated_tmp_trace = '\n'.join(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}" for e in validated_trace)

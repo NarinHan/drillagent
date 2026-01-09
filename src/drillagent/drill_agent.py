@@ -312,7 +312,7 @@ class DrillAgent:
         # Substep 1: check if instrumented binary already exists (currently two types, llvm-cov and sanitizer)
         if check_saninstr_binary_exists(saninstr_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(saninstr_repo_path, self.config.base_commit):
-            self.logger.info(f"✓ Found existing sanitizer-instrumented binary, built from commit {self.config.base_commit}")
+            self.logger.info(f"✓ Found qualified sanitizer-instrumented binary, built from commit {self.config.base_commit}")
             self.logger.info(f"    Binary path: {f"{saninstr_repo_path}/{binary_relative_path}"}")
             found_san_bin = True
         else:
@@ -323,7 +323,7 @@ class DrillAgent:
         print("")
         if check_llvmcov_binary_exists(target_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(target_repo_path, self.config.base_commit):
-            self.logger.info(f"✓ Found existing coverage-instrumented binary, built from commit {self.config.base_commit}")
+            self.logger.info(f"✓ Found qualified coverage-instrumented binary, built from commit {self.config.base_commit}")
             self.logger.info(f"    Binary path: {f"{target_repo_path}/{binary_relative_path}"}")
             found_cov_bin = True
         else:
@@ -336,6 +336,7 @@ class DrillAgent:
             return True
 
         # Substep 2: Build source code with memory sanitizer instrumentation
+        print("")
         if not found_san_bin:
             self.logger.info("Building with memory sanitizer instrumentation...")
             self.sanitizer_agent = SanitizerInstrumentAgent(self, saninstr_repo_path, binary_relative_path)

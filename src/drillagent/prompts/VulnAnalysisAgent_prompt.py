@@ -85,14 +85,18 @@ For each line starting with '#' in the call trace:
 1. Extract the sequence number (the number after #).
 2. Extract the function name (the text after "in" if present, otherwise use empty string).
 3. Extract the file path and convert it to a RELATIVE path based on the repository root: {actual_repo_path}.
-4. Extract the line number (the number after the colon in file:line format). 
+4. Extract the line number (the number after the colon in file:line format).
 
 IMPORTANT PATH CONVERSION RULES:
 - If the path contains the project name (e.g., "/home/b/asan/libplist/tools/plistutil.c"), extract the relative part (e.g., "tools/plistutil.c").
 - If the path is a system library (e.g., "/lib/i386-linux-gnu/libc.so.6" or contains libasan, libstdc++, libc), keep it as-is but mark it as external.
-- If there is only a file name without path, use provided tools to locate the file in the repository and get its relative path.
+- If there is only a file name without path (e.g., "main.c"), you MUST use the provided tools (find_file, list_dir) to locate the file in the repository and determine its correct relative path.
 - The relative path should start from the repository root.
 - Remove any absolute path prefix that includes the repository path.
+
+TOOL USAGE:
+- You have access to code browsing tools (find_file, list_dir, read_file) to help locate files when needed.
+- Use these tools when a file name appears without a full path to find its correct relative location.
 
 SKIP THE FOLLOWING:
 - Lines that are NOT actual stack frames (like allocation information, summary lines, etc.)

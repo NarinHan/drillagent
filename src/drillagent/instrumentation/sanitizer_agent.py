@@ -80,6 +80,8 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
 
             # Step 2: Prepare build environment
             build_env_vars = os.environ.copy()
+            if self.drill_agent.project_name.lower() == "mruby":
+                build_env_vars['ASAN_OPTIONS'] = 'use_sigaltstack=0'
             self.logger.info("Build environment prepared.")
 
             # Special: switch ruby version for mruby builds

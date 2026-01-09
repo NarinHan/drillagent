@@ -147,10 +147,10 @@ def compare_gitrepo_commit(actual_repo_path: str, base_commit: str) -> bool:
 
         # Compare the two full SHA hashes
         matches = current_commit == resolved_base_commit
-        if matches:
-            print(f"Current commit matches base_commit: {current_commit[:12]}")
-        else:
-            print(f"Current commit {current_commit[:12]} != base_commit {resolved_base_commit[:12]}")
+        # if matches:
+        #     print(f"Current commit matches base_commit: {current_commit[:12]}")
+        # else:
+        #     print(f"Current commit {current_commit[:12]} != base_commit {resolved_base_commit[:12]}")
 
         return matches
 
