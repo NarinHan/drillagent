@@ -45,7 +45,9 @@ Your task is to extract the following information from the sanitizer report:
    - If entry location is not clearly in the call trace, leave it empty
 
 6. **Call Trace**: Extract the full stack trace (all lines starting with #) 
-   - If there are multiple sets of call traces, only keep the first one and ignore the other sets of traces!!
+   - For heap-use-after-free or heap-buffer-overflow vulnerabilities, there might be multiple sets of call traces in the report (e.g., allocation trace, free trace, crash trace).
+   - ONLY keep the "crash" trace (usually caused by READ/WRITE/access) and ignore the other sets of traces.
+   - Most of the situations, the call trace contains more than 3 frames and one of them is the main function. Check this carefully!
 
 IMPORTANT PATH REQUIREMENTS:
 - ALL paths must be relative to repository root: {actual_repo_path}
@@ -59,7 +61,7 @@ Respond in the following JSON format ONLY:
     "crash_location": "relative/path/file.c:line_number",
     "entry_function": "main or other entry function",
     "entry_location": "relative/path/file.c:line_number",
-    "call_trace": "full stack trace starting with #0..."
+    "call_trace": "full stack trace starting with #0... #1... etc."
 }}
 
 Be precise. Extract information directly from the report.
@@ -78,7 +80,6 @@ Raw Call Trace:
 ```
 
 Your task is to parse this call trace and extract structured information for each frame.
-- Special note: If there are multiple sets of call traces in "Raw Call Trace", only keep the first one trace and ignore the other sets of traces!!
 
 For each line starting with '#' in the call trace:
 1. Extract the sequence number (the number after #).
@@ -89,6 +90,7 @@ For each line starting with '#' in the call trace:
 IMPORTANT PATH CONVERSION RULES:
 - If the path contains the project name (e.g., "/home/b/asan/libplist/tools/plistutil.c"), extract the relative part (e.g., "tools/plistutil.c").
 - If the path is a system library (e.g., "/lib/i386-linux-gnu/libc.so.6" or contains libasan, libstdc++, libc), keep it as-is but mark it as external.
+- If there is only a file name without path, use provided tools to locate the file in the repository and get its relative path.
 - The relative path should start from the repository root.
 - Remove any absolute path prefix that includes the repository path.
 

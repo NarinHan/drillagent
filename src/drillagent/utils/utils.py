@@ -55,7 +55,7 @@ def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str
 
     # Check if file exists
     if not binary_path.exists():
-        print(f"Target binary does not exist: {binary_path}")
+        # print(f"Target binary does not exist: {binary_path}")
         return False
 
     # Check if binary contains LLVM coverage symbols
@@ -80,7 +80,7 @@ def check_saninstr_binary_exists(actual_repo_path: str, binary_relative_path: st
 
     # Check if file exists
     if not binary_path.exists():
-        print(f"Target binary does not exist: {binary_path}")
+        # print(f"Target binary does not exist: {binary_path}")
         return False
 
     # Check if binary contains LLVM coverage symbols
@@ -98,6 +98,26 @@ def check_saninstr_binary_exists(actual_repo_path: str, binary_relative_path: st
             return False
     except Exception:
         return False
+
+def get_current_git_commit(actual_repo_path: str) -> str:
+    # Get the current commit hash (full SHA) of the git repository at actual_repo_path
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=actual_repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10
+        )
+        current_commit = result.stdout.strip()
+        return current_commit
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to get current git commit: {e}")
+        return ""
+    except Exception as e:
+        print(f"Unexpected error getting current git commit: {e}")
+        return ""
 
 def compare_gitrepo_commit(actual_repo_path: str, base_commit: str) -> bool:
     # Check if the current commit in the repo matches the base_commit
@@ -250,3 +270,46 @@ def detect_sanitizer_triggered(exec_output: str) -> bool:
         if indicator in exec_output:
             return True
     return False
+
+def switch_ruby_version(version: str = "3.0.6") -> Tuple[bool, str]:
+    # Switch the system Ruby version using rbenv and verify the change
+    # Returns (success, message) tuple
+    try:
+        # Run rbenv global to switch Ruby version
+        rbenv_result = subprocess.run(
+            ['rbenv', 'global', version],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if rbenv_result.returncode != 0:
+            error_msg = f"Failed to switch Ruby version: {rbenv_result.stderr.strip()}"
+            return False, error_msg
+
+        # Verify the Ruby version
+        ruby_result = subprocess.run(
+            ['ruby', '-v'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=os.environ.copy()
+        )
+
+        if ruby_result.returncode != 0:
+            error_msg = f"Failed to verify Ruby version: {ruby_result.stderr.strip()}"
+            return False, error_msg
+
+        ruby_version_output = ruby_result.stdout.strip()
+        success_msg = f"✓ Ruby version switched successfully\n{ruby_version_output}"
+        return True, success_msg
+
+    except FileNotFoundError as e:
+        error_msg = f"Command not found: {str(e)}. Make sure rbenv and ruby are installed."
+        return False, error_msg
+    except subprocess.TimeoutExpired:
+        error_msg = "Command execution timed out."
+        return False, error_msg
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        return False, error_msg

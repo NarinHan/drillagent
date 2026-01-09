@@ -455,12 +455,12 @@ class AstGrepFunctionSearchTool(AgentTool):
         summary += ":\n" + "\n".join(summary_lines)
 
         # For debug
-        print(f"[AstGrepFunctionSearchTool] Search Summary:")
-        print(f"  Function Name:    {function_name}\n")
-        print(f"  Matched Results:  {len(formatted_matches)} / {total_found}\n")
-        print(f"  Code lines (1st): {len(formatted_matches[0]['source_snippet'].splitlines()) if formatted_matches else 0}\n")
-        if formatted_matches:
-            print(formatted_matches[0]['source_snippet'])
+        # print(f"[AstGrepFunctionSearchTool] Search Summary:")
+        # print(f"  Function Name:    {function_name}")
+        # print(f"  Matched Results:  {len(formatted_matches)} / {total_found}")
+        # print(f"  Code lines (1st): {len(formatted_matches[0]['source_snippet'].splitlines()) if formatted_matches else 0}\n")
+        # if formatted_matches:
+        #     print(formatted_matches[0]['source_snippet'])
 
         return {
             "success": True,

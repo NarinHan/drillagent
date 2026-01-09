@@ -67,9 +67,11 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
             basic_build_cmds = self.drill_agent.config.build_sh
             if not basic_build_cmds:
                 raise ValueError("No build commands found in config")
+            # Replace "set -eu" with "set -e" (don't be that strict)
+            basic_build_cmds = re.sub(r'set\s+-eu', 'set -e', basic_build_cmds)
 
             # Step 1: Inject sanitizer flags into build commands
-            if "-fsanitize" not in basic_build_cmds:
+            if "-fsanitize=" not in basic_build_cmds:
                 modified_commands = self._inject_sanitizer_flags(basic_build_cmds)
                 self.logger.info(f"Sanitizer flags ({self.sanitizer_type}) injected into build commands.")
             else:
@@ -79,6 +81,20 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
             # Step 2: Prepare build environment
             build_env_vars = os.environ.copy()
             self.logger.info("Build environment prepared.")
+
+            # Special: switch ruby version for mruby builds
+            # ASAN_OPTIONS=use_sigaltstack=0 bin/mruby -e 'puts "Hello from mruby with ASAN!"'
+            if self.drill_agent.project_name.lower() == "mruby":
+                if self.drill_agent.config.base_commit in [ #mruby.cve-2018-xxx
+                    "fabc460880fbabd18369a7ef8715538c83ebffc9", "023070a6396233974785a8fd5735b9380a884f27",
+                    "1dddc2f712f774b22a8f65432299cebb3b26361b", "cfd0c93d7d9dad13e6677beb7b7bd822a7572f8d",
+                    "ff0a4f78674308b7643db1da9b9dc591f25c21d0", "55edae0226409de25e59922807cb09acb45731a2",
+                ]:
+                    res, msg = switch_ruby_version("2.7.8")
+                    self.logger.info("Switch mruby to 2.7.8: " + msg)
+                else:
+                    res, msg = switch_ruby_version("3.0.6")
+                    self.logger.info("Switch mruby to 3.0.6: " + msg)
 
             # Step 3: Execute build with retries using base class method
             success, self.build_log = self.execute_build_with_retries(

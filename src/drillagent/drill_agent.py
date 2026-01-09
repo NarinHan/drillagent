@@ -320,6 +320,7 @@ class DrillAgent:
             found_san_bin = False
             _clean_and_checkout(saninstr_repo_path)
         
+        print("")
         if check_llvmcov_binary_exists(target_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(target_repo_path, self.config.base_commit):
             self.logger.info(f"✓ Found existing coverage-instrumented binary, built from commit {self.config.base_commit}")
@@ -345,6 +346,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
                 self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
+                # exit(1) # For debug
                 return False
 
         # Substep 3: Build source code with coverage instrumentation
@@ -359,6 +361,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
+                # exit(2) # For debug
                 return False
 
         self.logger.info("✓ Instrumentation phase completed")

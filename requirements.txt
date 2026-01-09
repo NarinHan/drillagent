@@ -13,6 +13,17 @@ pyyaml
 # For ast-grep
 # npm install --global @ast-grep/cli
 
+# For mruby
+# git clone https://github.com/rbenv/rbenv.git ~/.rbenv
+# vim ~/.bashrc or ~/.zshrc to add rbenv to PATH
+## rbenv (zsh)
+## export PATH="$HOME/.rbenv/bin:$PATH"
+## eval "$(rbenv init - zsh)"
+# git clone https://github.com/rbenv/ruby-build.git ~/.rbenv/plugins/ruby-build
+# rbenv install 2.7.8
+# rbenv install 3.0.6
+# cd path/to/mruby && rbenv global 2.7.8
+
 # php
 # sudo apt-get install -y build-essential bison re2c
 # libsndfile
