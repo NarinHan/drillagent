@@ -13,7 +13,7 @@ class AgentConfig:
     # 
     project_name: Optional[str] = None
     cve_id: Optional[str] = None            # CVE identifier, if applicable
-    lang: Optional[str] = None              # Programming language of the project
+    lang: Optional[str] = None              # Programming language of the project (e,g., c, cpp)
 
     # Code bases (should exactly exist in your local machine)
     target_repo_path: str = ""              # Actual path to the target source repository (with .git/), for llvm-cov instrumentation.
@@ -70,10 +70,8 @@ class AgentConfig:
         # Check necessary fields
         if not self.target_repo_path:
             raise ValueError("target_repo_path is required")
-        # if not self.vuln_location:
-        #     raise ValueError("vuln_location is required")
-        # if not self.base_commit:
-        #     raise ValueError("base_commit is required")
+        if not self.base_commit:
+            raise ValueError("base_commit is required")
 
         # Validate and normalize paths
         self.target_repo_path = str(Path(self.target_repo_path).resolve())
@@ -95,7 +93,7 @@ class AgentConfig:
         print("[PoV Task Information]")
         print(f"  Project Name:       {self.project_name}")
         print(f"  CVE ID:             {self.cve_id}")
-        # print(f"  Language:           {self.lang}")
+        print(f"  Language:           {self.lang}")
         print(f"  Target Repo Path:   {self.target_repo_path}")
         print(f"  Vuln Locatio   (raw):    {self.vuln_location}")
         print(f"  Harness Command(raw):    {self.harness_command}")

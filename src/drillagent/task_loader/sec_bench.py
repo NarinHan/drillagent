@@ -319,9 +319,8 @@ class RawSecbTaskLoader:
 
                 # Extract instance_id from the data
                 instance_id = task_data.get('instance_id')
-                if not instance_id: # TODO: Fallback: extract from filename
-                    instance_id = Path(json_file).stem
-                    task_data['instance_id'] = instance_id
+                if not instance_id: # All SEC-bench tasks must have instance_id!
+                    raise ValueError(f"instance_id missing in {json_file}!")
 
                 # Create SecbTask from the data (filtering is done in from_dict)
                 task = SecbTask.from_dict(task_data) # This line may raise exceptions!!!!!
@@ -356,6 +355,8 @@ class RawSecbTaskLoader:
         for instance_id, task in self.cve_tasks.items():
             # instance_id format: "project_name.cve-xxxx"
             proj_name = instance_id.split('.')[0]
+            if self.is_labelled_blacklist(instance_id): # here we skip blacklisted tasks
+                continue
             if proj_name == project_name:
                 returned_tasks.append(task)
         return returned_tasks

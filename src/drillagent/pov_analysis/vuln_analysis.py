@@ -25,7 +25,8 @@ class VulnAnalysisAgent:
         self.drill_agent: 'DrillAgent' = drill_agent
         self.config: 'AgentConfig' = drill_agent.config
         self.logger: logging.Logger = drill_agent.logger
-        self.tools: List['AgentTool'] = drill_agent.agent_tools
+        self.basic_tools: List['AgentTool']    = drill_agent.agent_tools
+        self.enhanced_tools: List['AgentTool'] = drill_agent.agent_cov_tools + drill_agent.ast_grep_tools
 
         # Vulnerability information container!!!!! 
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
@@ -116,11 +117,6 @@ class VulnAnalysisAgent:
     def run(self) -> 'VulnInfo':
         # Run vulnerability analysis with a VulnInfo object returned.
         self.logger.info("  [VulnAnalysisAgent] Starting vulnerability analysis...")
-
-        # Check if basic_llm (LLMInterface) is available
-        if not (hasattr(self.drill_agent, 'basic_llm') and self.drill_agent.basic_llm) or not self.tools:
-            self.logger.warning("  [VulnAnalysisAgent] LLMInterface or tools not available! Return with nothing.")
-            return self.vuln_info
         
         # The analysis is based on the following basic information.
         project_name     = self.config.project_name
@@ -189,11 +185,11 @@ class VulnAnalysisAgent:
                     actual_repo_path=actual_repo_path,
                     sanitizer_report=sanitizer_report
                 ),
-                tools=self.tools,
+                tools=self.basic_tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=5,  # Allow up to 5 rounds of tool usage
                 temperature=0.1,  # Low temperature for precise extraction
-                max_tokens=4096,
+                max_tokens=8192,
                 continuation_prompt="Please continue extracting the vulnerability information and provide the final JSON output."
             )
 
@@ -299,16 +295,28 @@ class VulnAnalysisAgent:
 
             # Substep 1: Transform raw call trace to structured format
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to transform raw call trace...")
-            response = self.drill_agent.basic_llm.generate(
-                prompt=VAA_call_trace_transform_prompt.format(
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=VAA_call_trace_transform_prompt.format(
                     project_name=self.config.project_name,
                     actual_repo_path=repo_path,
                     raw_call_trace=raw_call_trace
                 ),
+                tools=self.basic_tools,  # Provide tools to locate files if needed
                 system_prompt=VAA_system_prompt,
+                max_iterations=5,  # Allow a few iterations for file location
                 temperature=0.1,
-                max_tokens=4096
+                max_tokens=4096,
+                continuation_prompt="Please continue transforming the call trace and provide the final JSON output."
             )
+
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.error(f"  [VulnAnalysisAgent] LLM agent loop failed: {error_msg}")
+                raise RuntimeError(f"Failed to transform call trace: {error_msg}")
+
+            response = result['final_response']
+            self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
+            self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
             self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
 
             parsed_data = extract_json_from_response(response)
@@ -332,6 +340,7 @@ class VulnAnalysisAgent:
                     validated_trace.append(entry)
                 else:
                     self.logger.warning(f"      ✗ File not found for frame #{entry.get('sequence_num')}: {abs_path}")
+            self.logger.info(f"Validated file paths in call trace: {len(validated_trace)} valid frames (from {len(parsed_data['call_trace'])} total)")
 
             # Print trace before line number adjustment (for debug)
             validated_tmp_trace = '\n'.join(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}" for e in validated_trace)
@@ -370,12 +379,12 @@ class VulnAnalysisAgent:
                             current_frame_json=current_frame_json,
                             callee_function_name=callee_func_name
                         ),
-                        tools=self.tools,
+                        tools=self.enhanced_tools, # Allow the usage of ast-grep
                         system_prompt=VAA_system_prompt,
                         max_iterations=3,
                         temperature=0.1,
                         max_tokens=4096,
-                        continuation_prompt="Please continue verifying the line number using read_file and provide the final JSON output."
+                        continuation_prompt="Please continue verifying the line number using the code browsing tools and provide the final JSON output."
                     )
 
                     if result['success']:
@@ -476,7 +485,7 @@ class VulnAnalysisAgent:
 
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,
-                tools=self.tools,
+                tools=self.basic_tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=3,  # Allow up to 3 rounds of tool usage
                 temperature=0.2,
@@ -561,7 +570,7 @@ class VulnAnalysisAgent:
         # LLM: Using new LLMInterface with automatic agent loop
         try:
             # Prepare the initial prompt
-            initial_prompt = VAA_root_cause_analysis_prompt.format(
+            user_prompt = VAA_root_cause_analysis_prompt.format(
                 project_name=self.config.project_name,
                 actual_repo_path=self.config.target_repo_path,
                 vuln_type=self.vuln_info.vuln_type,
@@ -578,12 +587,12 @@ class VulnAnalysisAgent:
 
             # Run more powerful reasoning LLM than basic LLMs. 
             result = self.drill_agent.reasoning_llm.run_agent_loop(
-                task=initial_prompt,
-                tools=self.tools,
+                task=user_prompt,
+                tools=self.enhanced_tools,  # Allow usage of enhanced code browsing tools for code exploration
                 system_prompt=VAA_system_prompt,
                 max_iterations=20,  # Allow up to 20 rounds of deep analysis
                 temperature=0.3,
-                max_tokens=16384, # Modern LLMs can handle larger contexts.
+                max_tokens=20480, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."
             )
 
@@ -626,7 +635,7 @@ class VulnAnalysisAgent:
             self.logger.info("    Using LLMInterface to identify critical steps...")
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=initial_prompt,
-                tools=self.tools,
+                tools=self.enhanced_tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=10,  # To be adjusted...
                 temperature=0.2,

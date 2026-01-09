@@ -215,5 +215,6 @@ class FuncLineCovTool(AgentTool):
                 "source_file_path": source_file_path
             }
 
-class FuncObjectCovTool(AgentTool):
+class FunctionCovTool(AgentTool):
+    # More coarse-grained function coverage tool
     pass

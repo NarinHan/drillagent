@@ -861,7 +861,30 @@ class LLMInterface:
                 'total_tokens': response.usage.input_tokens + response.usage.output_tokens
             })
 
-        return response.content[0].text
+        # Get response text and stop reason
+        text_response = response.content[0].text
+        stop_reason = response.stop_reason if hasattr(response, 'stop_reason') else "unknown"
+
+        # Log the interaction if output_dir is configured
+        if self.output_dir:
+            try:
+                log_llm_interaction(
+                    output_dir=self.output_dir,
+                    interaction_data={
+                        "provider": self.provider,
+                        "model_name": self.model_name,
+                        "system_prompt": system_prompt,
+                        "user_prompt": prompt,
+                        "assistant_response": text_response,
+                        "tool_calls": [],  # No tool calls for simple generation
+                        "stop_reason": stop_reason,
+                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                    }
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to log LLM interaction: {e}")
+
+        return text_response
 
     def _generate_openai(
         self,
@@ -900,7 +923,30 @@ class LLMInterface:
                 'total_tokens': response.usage.total_tokens
             })
 
-        return response.choices[0].message.content
+        # Get response text and stop reason
+        text_response = response.choices[0].message.content
+        stop_reason = response.choices[0].finish_reason if response.choices else "unknown"
+
+        # Log the interaction if output_dir is configured
+        if self.output_dir:
+            try:
+                log_llm_interaction(
+                    output_dir=self.output_dir,
+                    interaction_data={
+                        "provider": self.provider,
+                        "model_name": self.model_name,
+                        "system_prompt": system_prompt,
+                        "user_prompt": prompt,
+                        "assistant_response": text_response,
+                        "tool_calls": [],  # No tool calls for simple generation
+                        "stop_reason": stop_reason,
+                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                    }
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to log LLM interaction: {e}")
+
+        return text_response
 
     def _generate_with_tools_claude(
         self,

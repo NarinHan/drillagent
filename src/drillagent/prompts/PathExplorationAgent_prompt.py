@@ -57,7 +57,8 @@ YOUR TASK:
 
 IMPORTANT:
 - You should use provided tools to read related source code if needed, and then generate the test case.
-  - When using read_file tools, you are encouraged to read more than one line.
+  - Mainly use `ast_grep_search_function` tool to read function implementations that are relevant to the vulnerability and call trace.
+  - You can also use `read_file` tool to read code if there is no function name. (you are encouraged to read more than one line)
 - If it is already the final turn, ensure you respond with a test case in this turn!!!
 - The test case should be pure input data (not a script or code)
 - Do NOT include any analysis text or comments inside the ```testcase code block
@@ -104,7 +105,7 @@ When analyzing coverage feedback:
 PEA_coverage_analysis_prompt = """Analyze the following code coverage feedback of certain program execution and provide suggestions for improving test case to reach deeper into the vulnerable call trace.
 
 File path of the executed test case: {test_case_path}
-- You can read this file using the read_file tool if needed.
+- You can read this test case file using the read_file tool if needed.
 
 The organized information of current execution:
 
@@ -115,7 +116,7 @@ YOUR TASK:
 1. **Analyze Coverage Stagnation**:
    - Review the function-level frame-by-frame coverage information
    - Identify if there is a "FIRST UNCOVERED CALLSITE" where execution stopped
-   - **IMPORTANT: Use the read_file tool to examine the source code at the uncovered callsite**
+   - **IMPORTANT: Use `ast_grep_search_function` and `read_file` tools to examine the source code at the uncovered callsite**
      - Read the function implementation to understand why it wasn't executed
      - Identify the calling context and conditional checks that prevented the call
      - Look for input validation logic, magic value checks, state requirements, etc.

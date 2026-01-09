@@ -30,7 +30,6 @@ class PathExplorationAgent:
         self.drill_agent = drill_agent
         self.config = drill_agent.config
         self.logger = drill_agent.logger
-        self.tools = drill_agent.agent_tools
 
         # In each exploration, the agent will generate a PoV test case, execute it, and collect coverage feedback.
         # The outermost-loop counters:
@@ -65,7 +64,7 @@ class PathExplorationAgent:
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
         previous_feedback = None # From coverage feedback analysis
         for iteration in range(1, self.max_exp_iterations + 1):
-            print("\n\n")
+            print("\n")
             self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
@@ -204,14 +203,16 @@ class PathExplorationAgent:
         )
 
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
+        cur_tools = self.drill_agent.agent_tools + self.drill_agent.ast_grep_tools
+        
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=user_prompt,
-            tools=self.tools, # When generating test case, LLM is encouraged to use tools. 
+            tools=cur_tools, # When generating test case, LLM is encouraged to use tools. 
             system_prompt=PEA_system_prompt,
             max_iterations=max_generation_turns,  # Allow up to 10 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
-            max_tokens=8192,
+            max_tokens=20480,
             continuation_prompt="Please continue exploring the repository and generate the final test case to reach or trigger the vulnerability in a ```testcase code block."
         )
 
@@ -575,7 +576,7 @@ class PathExplorationAgent:
             )
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=analysis_prompt,
-                tools=self.tools,   # Allow tool usage if needed
+                tools=self.drill_agent.agent_tools,   # Allow tool usage if needed
                 system_prompt=PEA_coverage_analysis_system_prompt,
                 max_iterations=5,
                 temperature=0.5,

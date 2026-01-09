@@ -1,13 +1,5 @@
 """
-Tools Module
-
 This module contains LLM agent tools for code repository exploration and analysis.
-
-Submodules:
-- basic_tools: Core repository exploration tools (read files, grep, find, list, tree)
-- cov_query_tools: Coverage query tools for analyzing code coverage data
-- code_index_tools: Code indexing and analysis tools (planned)
-- python_tools: Python-specific analysis tools (planned)
 
 All tools inherit from AgentTool base class and support both Claude and OpenAI schemas.
 """
@@ -23,7 +15,21 @@ from .basic_tools import (
 
 from .cov_query_tools import (
     FuncLineCovTool,
-    FuncObjectCovTool
+    FunctionCovTool
+)
+
+from .clangd_index_tools import (
+    ClangdManager,
+    FindFunctionDefTool,
+    FindReferencesTool,
+    GetCallHierarchyTool,
+    GetHoverInfoTool
+)
+
+from .ast_grep_tools import (
+    AstGrepManager,
+    AstGrepFunctionSearchTool,
+    AstGrepPatternSearchTool
 )
 
 __all__ = [
@@ -39,5 +45,17 @@ __all__ = [
 
     # Coverage query tools
     "FuncLineCovTool",
-    "FuncObjectCovTool",
+    "FunctionCovTool",
+
+    # Clangd-based code intelligence tools
+    "ClangdManager",
+    "FindFunctionDefTool",
+    "FindReferencesTool",
+    "GetCallHierarchyTool",
+    "GetHoverInfoTool",
+
+    # ast-grep based search tools
+    "AstGrepManager",
+    "AstGrepFunctionSearchTool",
+    "AstGrepPatternSearchTool",
 ]

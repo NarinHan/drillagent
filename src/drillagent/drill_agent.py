@@ -16,6 +16,7 @@ from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
 from drillagent.utils.utils import *
 from drillagent.tools.basic_tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool
 from drillagent.tools.cov_query_tools import FuncLineCovTool
+from drillagent.tools.ast_grep_tools import AstGrepFunctionSearchTool
 from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
 
 class DrillAgent:
@@ -49,6 +50,8 @@ class DrillAgent:
         # LLM agent tools
         self.agent_tools: List[Any] = []
         self.agent_cov_tools: List[Any] = []
+        self.ast_grep_tools:  List[Any] = []
+        self.clangd_tools:    List[Any] = []
 
         # Sub-agents: These can be used for inter-communication.
         self.vuln_agent: VulnAnalysisAgent             = None
@@ -100,11 +103,19 @@ class DrillAgent:
                 ListDirTool(self.config.target_repo_path),
                 TreeTool(self.config.target_repo_path)
             ]
-            self.logger.info(f"✓ Agent tools initialized: {len(self.agent_tools)} tools available")
-            # Note: agent_cov_tools will be initialized after vulnerability analysis
-            # when binary_path becomes available
+            self.logger.info(f"✓ Agent basic tools initialized: {len(self.agent_tools)} tools available")
+            # Note: agent_cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
         except Exception as e:
-            self.logger.error(f"Failed to initialize agent tools: {e}")
+            self.logger.error(f"Failed to initialize agent basic tools: {e}")
+
+        # Init ast-grep tools for LLM
+        try:
+            self.ast_grep_tools = [
+                AstGrepFunctionSearchTool(self.config.target_repo_path)
+            ]
+            self.logger.info(f"✓ ast-grep tools initialized: {len(self.ast_grep_tools)} tools available")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize ast-grep tools: {e}")
 
         # Initialize new LLMInterface instances
         # We use different models for different sub-tasks to optimize cost and performance
@@ -177,7 +188,7 @@ class DrillAgent:
     def run(self) -> Dict[str, Any]:
         # Main orchestration workflow
         # Returns: Dict containing analysis results and generated PoVs
-        print("")
+        # print("")
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
@@ -301,7 +312,7 @@ class DrillAgent:
         # Substep 1: check if instrumented binary already exists (currently two types, llvm-cov and sanitizer)
         if check_saninstr_binary_exists(saninstr_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(saninstr_repo_path, self.config.base_commit):
-            self.logger.info(f"✓ Found existing sanitizer-instrumented binary, built from commit {self.config.base_commit}")
+            self.logger.info(f"✓ Found qualified sanitizer-instrumented binary, built from commit {self.config.base_commit}")
             self.logger.info(f"    Binary path: {f"{saninstr_repo_path}/{binary_relative_path}"}")
             found_san_bin = True
         else:
@@ -309,9 +320,10 @@ class DrillAgent:
             found_san_bin = False
             _clean_and_checkout(saninstr_repo_path)
         
+        print("")
         if check_llvmcov_binary_exists(target_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(target_repo_path, self.config.base_commit):
-            self.logger.info(f"✓ Found existing coverage-instrumented binary, built from commit {self.config.base_commit}")
+            self.logger.info(f"✓ Found qualified coverage-instrumented binary, built from commit {self.config.base_commit}")
             self.logger.info(f"    Binary path: {f"{target_repo_path}/{binary_relative_path}"}")
             found_cov_bin = True
         else:
@@ -324,6 +336,7 @@ class DrillAgent:
             return True
 
         # Substep 2: Build source code with memory sanitizer instrumentation
+        print("")
         if not found_san_bin:
             self.logger.info("Building with memory sanitizer instrumentation...")
             self.sanitizer_agent = SanitizerInstrumentAgent(self, saninstr_repo_path, binary_relative_path)
@@ -334,6 +347,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
                 self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
+                # exit(1) # For debug
                 return False
 
         # Substep 3: Build source code with coverage instrumentation
@@ -348,6 +362,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
+                # exit(2) # For debug
                 return False
 
         self.logger.info("✓ Instrumentation phase completed")
