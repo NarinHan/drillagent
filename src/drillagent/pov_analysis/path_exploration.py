@@ -291,7 +291,7 @@ class PathExplorationAgent:
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
         # Step 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
-        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE: {profraw_path}")
+        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE = {profraw_path}")
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
             self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
             self.logger.warning(f"  [PathExplorationAgent] This might indicate the binary was not instrumented or the execution failed early!")

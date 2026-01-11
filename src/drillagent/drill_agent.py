@@ -18,6 +18,7 @@ from drillagent.tools.basic_tools import ReadFileTool, GrepTool, FindFileTool, L
 from drillagent.tools.cov_query_tools import FuncLineCovTool
 from drillagent.tools.ast_grep_tools import AstGrepFunctionSearchTool
 from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
+from drillagent.utils.log_converter import convert_llm_history_to_text
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -461,6 +462,14 @@ class DrillAgent:
                 self.logger.warning(f"  - {error}")
 
         self.logger.info("=" * 60)
+
+        # Convert LLM history JSON to text format for easier review
+        try:
+            self.logger.info("\nConverting LLM history to text format...")
+            convert_llm_history_to_text(self.output_dir)
+            self.logger.info(f"✓ LLM history text log saved to {self.output_dir}/llm_history.txt")
+        except Exception as e:
+            self.logger.warning(f"Failed to convert LLM history to text: {e}")
 
         return report
 

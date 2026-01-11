@@ -101,7 +101,7 @@ YOUR TASK:
    - Why should this PoV successfully trigger the crash?
 
 IMPORTANT:
-- Use provided tools to read source code at critical points if needed to refine your PoV
+- Use provided tools (e.g., `ast_grep_search_function`) to read source code at critical points if needed to refine your PoV
 - This is your final attempt - make it count by leveraging ALL available information
 - Do NOT include analysis text or comments inside the ```pov code block
 - Focus on reproducing the crash over code path exploration. 
