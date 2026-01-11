@@ -610,6 +610,7 @@ class LLMInterface:
 
                 # Check stop_reason for proper completion
                 if stop_reason in ["max_tokens", "length"]:
+                    # TODO: Figure out how the max_tokens is enforced 🤔
                     self.logger.warning(f"Response truncated at iteration {iteration} (stop_reason: {stop_reason})")
                     # Continue to next iteration with warning, might still succeed
 

@@ -233,7 +233,7 @@ class CrashTriggerAgent:
         if not match:
             raise ValueError(f"No PoV code block found in LLM response after {result['iterations']} iterations")
         pov_content = match.group(1)
-        self.logger.info(f"  [CrashTriggerAgent] PoV extracted successfully!")
+        self.logger.info(f"  [CrashTriggerAgent] PoV candidate extracted!")
 
         # Substep 4: Save PoV candidate to file
         pov_filename = f"testcase-round{self.current_trigger_iteration}" # "testcase-roundN"
@@ -323,10 +323,29 @@ class CrashTriggerAgent:
             self.logger.error("  [CrashTriggerAgent] TODO: Cannot map llvm-cov repo path to sanitizer-instr repo path in command.")
             return False
 
+        # Disable the use of alternate signal stack (only for mruby?) and limit memory usage for ASAN.
+        env = os.environ.copy()
+        env['ASAN_OPTIONS'] = 'use_sigaltstack=0:hard_rss_limit_mb=12000' # Options ref: https://github.com/google/sanitizers/wiki/SanitizerCommonFlags
+        if "ASAN_OPTIONS=" in command:
+            prefix = env['ASAN_OPTIONS'].rstrip(':')
+            if "ASAN_OPTIONS=" in command:
+                if 'ASAN_OPTIONS="' in command: # Handle double quotation marks
+                    command = re.sub(
+                        r'ASAN_OPTIONS="([^"]*)"',
+                        r'ASAN_OPTIONS="' + prefix + r':\1"',
+                        command,
+                        count=1
+                    )
+                else:
+                    command = re.sub(
+                        r'ASAN_OPTIONS=([^\s]+)',
+                        r'ASAN_OPTIONS=' + prefix + r':\1',
+                        command,
+                        count=1
+                    )
+
         # Execute the PoV using sanitizer-instrumented binary, and check if the sanitizer is triggered.
         self.logger.info(f"  [CrashTriggerAgent] Validation exec command: {command}")
-        env = os.environ.copy()
-        env['ASAN_OPTIONS'] = 'hard_rss_limit_mb=12000' # Option ref: https://github.com/google/sanitizers/wiki/SanitizerCommonFlags
         exit_code, exec_output = execute_command(command, env)
         if detect_sanitizer_triggered(exec_output):
             # TODO: Compare here output and the original sanitizer report to see if they match (optional).
@@ -351,7 +370,7 @@ class CrashTriggerAgent:
         """
         # Generate timestamp and filename for the final PoV
         timestamp = datetime.now().strftime("%y%m%d-%H%M")
-        final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA"
+        final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"
         final_pov_path = os.path.join(self.drill_agent.output_dir, final_pov_filename)
 
         # Create output directory if it doesn't exist

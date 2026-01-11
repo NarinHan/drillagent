@@ -393,7 +393,10 @@ class VulnAnalysisAgent:
                             old_linenum = current_frame['line_number']
                             # Merge refined data back to current frame
                             current_frame.update(refined_frame)
-                            self.logger.info(f"        ✓ Frame #{seq_num}: Line number refined from {old_linenum} to {current_frame['line_number']}")
+                            new_linenum = current_frame['line_number']
+                            original = current_frame.get('is_original_linenum', True)
+                            verified = current_frame.get('is_verified', False)
+                            self.logger.info   (f"        ✓ Frame #{seq_num}: Linenum refined from {old_linenum} to {new_linenum} (original: {original}, verified: {verified})")
                         else:
                             self.logger.warning(f"        ✗ Frame #{seq_num}: Could not extract valid line number, keeping original")
                     else:

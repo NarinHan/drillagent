@@ -256,6 +256,14 @@ def execute_command(command: str, env: dict = None) -> Tuple[int, str]:
         return -1, f"[ERROR] Command execution failed: {str(e)}"
 
 def detect_sanitizer_triggered(exec_output: str) -> bool:
+    if "AddressSanitizer failed to allocate" in exec_output:
+        # Memory allocation failure - likely due to memory limit, not a sanitizer error
+        print("  [Utils] Detected AddressSanitizer failed to allocate message.")
+        return False
+    if "AddressSanitizer: hard rss limit exhausted" in exec_output:
+        # Memory limit exceeded - likely due to memory limit, not a sanitizer error
+        print("  [Utils] Detected hard rss limit exhausted message - likely due to memory limit.")
+        return False
     # Detect if sanitizer errors are present in the execution output
     sanitizer_indicators = [
         "AddressSanitizer",

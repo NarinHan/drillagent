@@ -69,6 +69,8 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
                 raise ValueError("No build commands found in config")
             # Replace "set -eu" with "set -e" (don't be that strict)
             basic_build_cmds = re.sub(r'set\s+-eu', 'set -e', basic_build_cmds)
+            # Replace "cd /src/mruby" with ""
+            basic_build_cmds = re.sub(r'cd\s+/src/\S+', '', basic_build_cmds)
 
             # Step 1: Inject sanitizer flags into build commands
             if "-fsanitize=" not in basic_build_cmds:

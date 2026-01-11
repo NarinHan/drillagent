@@ -238,7 +238,7 @@ class PathExplorationAgent:
         if not match:
             raise ValueError(f"No testcase code block found in LLM response after {result['iterations']} iterations")
         testcase_content = match.group(1)
-        self.logger.info(f"  [PathExplorationAgent] Testcase extracted successfully!")
+        self.logger.info(f"  [PathExplorationAgent] Test case extracted!")
 
         # Save test case to fixed filename: testcase-round{N}
         test_case_filename = f"testcase-round{self.current_exp_iteration}"
@@ -392,12 +392,17 @@ class PathExplorationAgent:
                     'callsite_line_execution_count' : line_cov['execution_count'],
                 })
             else:
-                pass
+                updated_frame.update({
+                    'failed_query_line_cov'         : True,
+                    'callsite_line_executed'        : False,
+                    'callsite_line_execution_count' : 0,
+                })
             
             cov_frames.append(updated_frame)
 
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
         sorted_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
+        # print(repr(sorted_frames)) # For debug
 
         # Substep 3: Identify the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
         first_uncovered_frame  = None
@@ -419,8 +424,13 @@ class PathExplorationAgent:
                 # Compromise: Couldn't verify callsite line, treat as covered and continue
                 continue
 
+            if frame.get('failed_query_line_cov', False):
+                # Compromise: Couldn't get line coverage info - skip line-level check
+                self.logger.warning(f"  [PathExplorationAgent] Could not get line coverage for verified frame #{frame['sequence_num']} - treating as covered")
+                continue
+
             # Check if callsite line was executed
-            if frame.get('is_verified', False) and not frame.get('callsite_line_executed', False):
+            if not frame.get('callsite_line_executed', False):
                 # Callsite line not executed - this is the first uncovered critical callsite
                 first_uncovered_frame = frame
                 self.logger.info(f"  [PathExplorationAgent] Found first uncovered callsite (line-level): {frame['function_name']} at {frame['file_path']}:{frame['line_number']}")
@@ -481,7 +491,6 @@ class PathExplorationAgent:
 
         # Add detailed frame-by-frame coverage information
         output_lines.append("Function-Level Frame-by-Frame Coverage (from caller to callee):") #####
-        output_lines.append("")
 
         for i, frame in enumerate(sorted_cov_frames, 1):
             seq_num = frame['sequence_num']
@@ -662,9 +671,10 @@ class PathExplorationAgent:
         # Check for other interesting exit codes
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
             self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code}).")
-            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
-                self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
-                return True
+            # Update: Since we have sanitizer-instrumented binaries, we don't treat aborts as crashes for now.
+            # if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
+            #     self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
+            #     return True
 
         elif exit_code == -9 or exit_code == 137:  # SIGKILL
             self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code}).")
@@ -692,8 +702,9 @@ class PathExplorationAgent:
             self.crash_command = command
 
             # Copy the crash PoV to output directory with timestamped name
+            # As long as exit code is 139, we should consider it a crash PoV.
             timestamp = datetime.now().strftime("%y%m%d-%H%M")
-            pov_filename = f"pov-{self.drill_agent.project_name}-{timestamp}-PEA"
+            pov_filename = f"pov-{self.drill_agent.project_name}-{timestamp}-PEA-round{self.current_exp_iteration}"
             pov_output_path = os.path.join(self.drill_agent.output_dir, pov_filename)
             os.makedirs(self.drill_agent.output_dir, exist_ok=True)
             shutil.copy(test_case_path, pov_output_path)

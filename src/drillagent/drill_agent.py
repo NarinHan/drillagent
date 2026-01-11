@@ -313,7 +313,7 @@ class DrillAgent:
         if check_saninstr_binary_exists(saninstr_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(saninstr_repo_path, self.config.base_commit):
             self.logger.info(f"✓ Found qualified sanitizer-instrumented binary, built from commit {self.config.base_commit}")
-            self.logger.info(f"    Binary path: {f"{saninstr_repo_path}/{binary_relative_path}"}")
+            self.logger.info(f"    Binary path: {saninstr_repo_path}/{binary_relative_path}")
             found_san_bin = True
         else:
             self.logger.info("No existing qualified sanitizer-instrumented binary found.")
@@ -324,7 +324,7 @@ class DrillAgent:
         if check_llvmcov_binary_exists(target_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(target_repo_path, self.config.base_commit):
             self.logger.info(f"✓ Found qualified coverage-instrumented binary, built from commit {self.config.base_commit}")
-            self.logger.info(f"    Binary path: {f"{target_repo_path}/{binary_relative_path}"}")
+            self.logger.info(f"    Binary path: {target_repo_path}/{binary_relative_path}")
             found_cov_bin = True
         else:
             self.logger.info("No existing qualified coverage-instrumented binary found.")
@@ -347,7 +347,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
                 self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
-                # exit(1) # For debug
+                exit(1) # For debug
                 return False
 
         # Substep 3: Build source code with coverage instrumentation
@@ -362,7 +362,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-                # exit(2) # For debug
+                exit(2) # For debug
                 return False
 
         self.logger.info("✓ Instrumentation phase completed")
