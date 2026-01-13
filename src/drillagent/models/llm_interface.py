@@ -33,7 +33,7 @@ import os
 import json
 import logging
 import time
-from typing import Optional, List, Dict, Any, Tuple, Callable, Iterator
+from typing import Optional, List, Dict, Any, Tuple, Callable
 from pathlib import Path
 from dataclasses import dataclass, field
 

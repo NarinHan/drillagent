@@ -374,15 +374,6 @@ class RawSecbTaskLoader:
             returned_tasks[instance_id] = task
         return returned_tasks
 
-    def get_solved_nonbinary_tasks(self) -> Dict[str, SecbTask]:
-        instances_ids = [
-            "njs.cve-2022-27007",
-            "mruby.cve-2022-0631",
-            # "mruby.cve-2018-14337", # Call trace is in bug_report!
-        ]
-        return {instance_id:task for instance_id, task in self.cve_tasks.items()
-                if instance_id in instances_ids}
-
     # Get a subset of tasks from SEC-bench
     def get_openhands_solved_tasks(self) -> Dict[str, SecbTask]:
         assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
@@ -426,8 +417,13 @@ class RawSecbTaskLoader:
             "wabt.cve-2022-43282",
         ]
         # Filter the loaded tasks to only include oh_sonnet instances
-        return {instance_id: task for instance_id, task in self.cve_tasks.items()
-                if instance_id in oh_sonnet_instances}
+        res = dict()
+        for instance_id, task in self.cve_tasks.items():
+            if self.is_labelled_blacklist(instance_id):
+                continue
+            if instance_id in oh_sonnet_instances:
+                res[instance_id] = task
+        return res
 
     def get_swea_solved_tasks(self) -> Dict[str, SecbTask]:
         assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
@@ -460,8 +456,13 @@ class RawSecbTaskLoader:
             "openjpeg.cve-2017-14041",
         ]
         # Filter the loaded tasks to only include swea_sonnet instances
-        return {instance_id: task for instance_id, task in self.cve_tasks.items()
-                if instance_id in swea_sonnet_instances}
+        res = dict()
+        for instance_id, task in self.cve_tasks.items():
+            if self.is_labelled_blacklist(instance_id):
+                continue
+            if instance_id in swea_sonnet_instances:
+                res[instance_id] = task
+        return res
 
     def get_overlapping_solved_tasks(self) -> Dict[str, SecbTask]:
         assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
@@ -483,47 +484,14 @@ class RawSecbTaskLoader:
             "openjpeg.cve-2017-14041",
         ]
         # Filter the loaded tasks to only include overlapping instances
-        return {instance_id: task for instance_id, task in self.cve_tasks.items()
-                if instance_id in overlapping_instances}
+        res = dict()
+        for instance_id, task in self.cve_tasks.items():
+            if self.is_labelled_blacklist(instance_id):
+                continue
+            if instance_id in overlapping_instances:
+                res[instance_id] = task
+        return res
 
-    # 
-    # Below are 4 useful getters.
-    # 
-    def get_base_commit(self, instance_id: str) -> Optional[str]:
-        """
-        Get the base commit hash for a specific task.
-        Returns:
-            Base commit hash or None if not found
-        """
-        task = self.get_task(instance_id)
-        return task.base_commit if task else None
-
-    def get_build_sh(self, instance_id: str) -> Optional[str]:
-        """
-        Get the build script for a specific task.
-        Returns:
-            Build script content or None if not found
-        """
-        task = self.get_task(instance_id)
-        return task.build_sh if task else None
-
-    def get_secb_sh(self, instance_id: str) -> Optional[str]:
-        """
-        Get the SEC-bench script for a specific task.
-        Returns:
-            SEC-bench script content or None if not found
-        """
-        task = self.get_task(instance_id)
-        return task.secb_sh if task else None
-
-    def get_sanitizer_report(self, instance_id: str) -> Optional[str]:
-        """
-        Get the sanitizer report for a specific task.
-        Returns:
-            Sanitizer report content or None if not found
-        """
-        task = self.get_task(instance_id)
-        return task.sanitizer_report if task else None
 
     def print_task_summary(self, instance_id: str):
         """
