@@ -216,7 +216,7 @@ class CrashTriggerAgent:
             system_prompt=CTA_system_prompt,
             max_iterations=max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation
-            max_tokens=40960,
+            max_tokens=30720,
             continuation_prompt="Please continue your analysis and use write_file tool to write the final PoV to the target file path."
         )
 

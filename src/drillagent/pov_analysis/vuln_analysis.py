@@ -478,18 +478,14 @@ class VulnAnalysisAgent:
         # LLM: Using new LLMInterface with automatic agent loop
         # TODO: We also need to extract the filename suffix instead of merely <path/to/testcase>.
         try:
-            # Prepare the prompt
-            user_prompt = VAA_harness_refine_prompt.format(
-                project_name=project_name,
-                actual_repo_path=actual_repo_path,
-                harness_command=raw_harness_command if raw_harness_command else "Not provided"
-            )
-
             # Use LLMInterface for automatic tool calling and conversation management
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to refine harness command...")
-
             result = self.drill_agent.basic_llm.run_agent_loop(
-                task=user_prompt,
+                task=VAA_harness_refine_prompt.format(
+                    project_name=project_name,
+                    actual_repo_path=actual_repo_path,
+                    harness_command=raw_harness_command if raw_harness_command else "Not provided"
+                ),
                 tools=self.basic_tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=3,  # Allow up to 3 rounds of tool usage
@@ -600,7 +596,7 @@ class VulnAnalysisAgent:
                 system_prompt=VAA_system_prompt,
                 max_iterations=20,  # Allow up to 20 rounds of deep analysis
                 temperature=0.3,
-                max_tokens=40960, # Modern LLMs can handle larger contexts.
+                max_tokens=30720, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."
             )
 

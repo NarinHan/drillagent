@@ -216,13 +216,13 @@ class PathExplorationAgent:
         cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools
 
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
-        result = self.drill_agent.basic_llm.run_agent_loop(
+        result = self.drill_agent.low_cost_llm.run_agent_loop(
             task=user_prompt,
             tools=cur_tools,  # When generating test case, LLM is encouraged to use tools, including write_file
             system_prompt=PEA_system_prompt,
             max_iterations=max_generation_turns,  # Allow up to 20 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
-            max_tokens=40960,
+            max_tokens=30720,
             continuation_prompt="Please continue exploring the repository and use write_file tool to write the final test case to the target file path."
         )
 
