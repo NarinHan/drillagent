@@ -37,6 +37,8 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
         report = self.drill_agent.config.sanitizer_report
         if "AddressSanitizer" in report:
             self.sanitizer_type = "address"
+        elif "LeakSanitizer" in report:
+            self.sanitizer_type = "address"  # LSAN is part of ASAN. Can be turned off with ASAN_OPTIONS=detect_leaks=0
         elif "UndefinedBehaviorSanitizer" in report:
             self.sanitizer_type = "undefined"
         elif "MemorySanitizer" in report:

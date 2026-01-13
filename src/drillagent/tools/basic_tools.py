@@ -140,10 +140,19 @@ class ReadFileTool(AgentTool):
 
     def description(self) -> str:
         return (
-            "Read the contents of a source code file with line numbers. "
-            "Use this when you need to examine specific code mentioned in error messages, "
-            "call traces, or to understand implementation details. "
-            "Returns file content with line numbers for easy reference to specific lines."
+            "Read file contents in text mode (with line numbers) or hex mode (binary dump). "
+            "\n\n"
+            "TEXT MODE (default): Reads as UTF-8 text with line numbers. "
+            "Use this for source code files mentioned in error messages, call traces, etc. "
+            "Non-UTF-8 bytes are replaced with � (U+FFFD) to indicate binary content. "
+            "\n\n"
+            "HEX MODE (hex_mode=true): Reads as raw binary and returns hexadecimal dump. "
+            "Use this for binary files, executables, or when you suspect binary data. "
+            "Output format (16 bytes per line):\n"
+            "00000000: 7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00  .ELF............\n"
+            "00000010: 02 00 3e 00 01 00 00 00 50 10 40 00 00 00 00 00  ..>.....P.@.....\n"
+            "\n"
+            "Use start_offset and read_length to examine specific byte ranges in hex mode."
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -161,7 +170,8 @@ class ReadFileTool(AgentTool):
                 "description": (
                     "Starting line number (1-indexed, inclusive). "
                     "If not specified, reads from the beginning. "
-                    "Use this to focus on specific sections mentioned in traces."
+                    "Use this to focus on specific sections mentioned in traces. "
+                    "Ignored if hex_mode is true."
                 ),
                 "required": False
             },
@@ -170,20 +180,51 @@ class ReadFileTool(AgentTool):
                 "description": (
                     "Ending line number (1-indexed, inclusive). "
                     "If not specified, reads up to 50 lines from start_line, "
-                    "or entire file if start_line is also not specified."
+                    "or entire file if start_line is also not specified. "
+                    "Ignored if hex_mode is true."
+                ),
+                "required": False
+            },
+            "hex_mode": {
+                "type": "boolean",
+                "description": (
+                    "If true, read file in binary mode and return hexadecimal dump. "
+                    "Useful for examining binary files or detecting binary content. "
+                    "When enabled, start_line/end_line are ignored; use start_offset/read_length instead."
+                ),
+                "required": False
+            },
+            "start_offset": {
+                "type": "integer",
+                "description": (
+                    "Byte offset to start reading from (0-indexed). "
+                    "Only used when hex_mode is true. Default: 0"
+                ),
+                "required": False
+            },
+            "read_length": {
+                "type": "integer",
+                "description": (
+                    "Number of bytes to read. "
+                    "Only used when hex_mode is true. "
+                    "If not specified, reads up to 1024 bytes from start_offset."
                 ),
                 "required": False
             }
         }
 
     def execute(self, file_path: str, start_line: Optional[int] = None,
-                end_line: Optional[int] = None) -> Dict[str, Any]:
+                end_line: Optional[int] = None, hex_mode: bool = False,
+                start_offset: Optional[int] = None, read_length: Optional[int] = None) -> Dict[str, Any]:
         """
-        Read file contents with optional line range.
+        Read file contents with optional line range or hex dump.
         Args:
             file_path: Relative path to file
             start_line: Optional starting line (1-indexed)
             end_line: Optional ending line (1-indexed, inclusive)
+            hex_mode: If true, read in binary mode and return hex dump
+            start_offset: Byte offset for hex mode (0-indexed)
+            read_length: Number of bytes to read in hex mode
         Returns:
             Dict with success status, file content, and metadata
         """
@@ -206,8 +247,12 @@ class ReadFileTool(AgentTool):
                     "file_path": file_path
                 }
 
-            # Read file
-            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Handle hex mode
+            if hex_mode:
+                return self._read_as_hex(full_path, file_path, start_offset, read_length)
+
+            # Read file in text mode
+            with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                 lines = f.readlines()
 
             total_lines = len(lines)
@@ -273,6 +318,92 @@ class ReadFileTool(AgentTool):
                 "error": f"Failed to read file: {str(e)}",
                 "file_path": file_path
             }
+
+    def _read_as_hex(self, full_path: Path, file_path: str,
+                     start_offset: Optional[int], read_length: Optional[int]) -> Dict[str, Any]:
+        """
+        Read file in binary mode and return hex dump.
+        Args:
+            full_path: Absolute path to file
+            file_path: Relative path for display
+            start_offset: Byte offset to start from
+            read_length: Number of bytes to read
+        Returns:
+            Dict with success status and hex dump content
+        """
+        try:
+            # Default values
+            offset = start_offset if start_offset is not None else 0
+            length = read_length if read_length is not None else 1024
+
+            # Get file size
+            file_size = full_path.stat().st_size
+
+            # Validate offset
+            if offset < 0:
+                return {
+                    "success": False,
+                    "error": f"Invalid start_offset: {offset} (must be >= 0)",
+                    "file_path": file_path
+                }
+
+            if offset >= file_size:
+                return {
+                    "success": False,
+                    "error": f"start_offset {offset} exceeds file size {file_size}",
+                    "file_path": file_path
+                }
+
+            # Read binary data
+            with open(full_path, 'rb') as f:
+                f.seek(offset)
+                data = f.read(length)
+
+            actual_length = len(data)
+
+            # Generate hex dump
+            hex_lines = []
+            for i in range(0, len(data), 16):
+                chunk = data[i:i+16]
+                addr = offset + i
+
+                # Hex representation
+                hex_part = ' '.join(f'{b:02x}' for b in chunk)
+                # Pad to maintain alignment
+                hex_part = hex_part.ljust(48)  # 16 bytes * 3 chars - 1 space
+
+                # ASCII representation
+                ascii_part = ''.join(
+                    chr(b) if 32 <= b < 127 else '.'
+                    for b in chunk
+                )
+
+                hex_lines.append(f"{addr:08x}: {hex_part}  {ascii_part}")
+
+            hex_dump = '\n'.join(hex_lines)
+
+            return {
+                "success": True,
+                "file_path": file_path,
+                "content": hex_dump,
+                "mode": "hex",
+                "file_size": file_size,
+                "start_offset": offset,
+                "bytes_read": actual_length,
+                "read_range": f"0x{offset:x}-0x{offset + actual_length - 1:x}",
+                "message": f"Read {actual_length} bytes from offset {offset} (file size: {file_size} bytes)"
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to read file in hex mode: {str(e)}",
+                "file_path": file_path
+            }
+
+
+class WriteFileTool(AgentTool):
+    pass
 
 
 class GrepTool(AgentTool):

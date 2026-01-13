@@ -271,6 +271,7 @@ class RawSecbTaskLoader:
         blacklist += [
             "mruby.cve-2022-1201",  # The stack frames are all in one line.
             "mruby.cve-2018-14337", # The call trace is in other fields...
+            "php.cve-2018-12882",   # Cannot be compiled...
             "liblouis.cve-2023-26768", # Cannot find the harness binary.
             "gpac.cve-2022-2454",
             "gpac.cve-2023-42298",
