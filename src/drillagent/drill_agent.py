@@ -121,9 +121,9 @@ class DrillAgent:
 
         # Initialize new LLMInterface instances
         # We use different models for different sub-tasks to optimize cost and performance
+        self.logger.info(f"Initializing LLM interface...")
         try:
             # 1. Basic LLM - uses config's default model for general tasks
-            self.logger.info(f"Initializing basic LLM interface...")
             self.basic_llm = LLMInterface(
                 provider=self.config.model_provider,
                 model_name=self.config.basic_model,
@@ -136,7 +136,6 @@ class DrillAgent:
             # 2. Reasoning LLM - uses reasoning_model if configured, otherwise same as basic
             if self.config.reasoning_model and self.config.reasoning_model[0]:
                 reasoning_provider, reasoning_model = self.config.reasoning_model
-                self.logger.info(f"Initializing reasoning LLM interface ({reasoning_provider}/{reasoning_model})...")
                 self.reasoning_llm = LLMInterface(
                     provider=reasoning_provider,
                     model_name=reasoning_model,
@@ -148,12 +147,11 @@ class DrillAgent:
             else:
                 # Use same as basic_llm if not configured
                 self.reasoning_llm = self.basic_llm
-                self.logger.info(f"✓ Reasoning LLM using basic LLM configuration")
+                self.logger.info(f"✓ Reasoning LLM initialized: re-using basic LLM configuration")
 
             # 3. Low-cost LLM - uses low_cost_model if configured, otherwise use cheaper default
             if self.config.low_cost_model and self.config.low_cost_model[0]:
                 low_cost_provider, low_cost_model = self.config.low_cost_model
-                self.logger.info(f"Initializing low-cost LLM interface ({low_cost_provider}/{low_cost_model})...")
                 self.low_cost_llm = LLMInterface(
                     provider=low_cost_provider,
                     model_name=low_cost_model,

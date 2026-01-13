@@ -7,10 +7,6 @@ from typing import Tuple
 # 
 # Basic file utility functions
 # 
-def get_file_size(file_path: str) -> int:
-    # Get the size of a file in bytes.
-    return os.path.getsize(file_path)
-
 def is_text_file(file_path: str) -> bool:
     # Check if a file is a text file using the file command.
     # Returns True if the file is a text file, False otherwise

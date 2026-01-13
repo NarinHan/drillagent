@@ -149,7 +149,6 @@ class PathExplorationAgent:
         # By default, work_dir is a relative path (./workspace). So round_dir is also relative.
         return os.path.join(self.drill_agent.work_dir, f"round{round_num}") 
 
-    # TODO: Support generating separate binary-encoded test case files in the future.
     def _generate_test_case(self, previous_feedback: Tuple = None) -> str:
         # Generate test case using LLMInterface with automatic agent loop
         # 1. Get vulnerability information. If previous_feedback is provided, include it in the prompt to guide the LLM with coverage information.
@@ -194,26 +193,32 @@ class PathExplorationAgent:
         else: # e.g., previous_feedback is None
             feedback_section = ""
 
+        # Prepare the target test case path
+        test_case_filename = f"testcase-round{self.current_exp_iteration}"
+        test_case_path = os.path.join(round_dir, test_case_filename)
+        abs_test_case_path = os.path.abspath(test_case_path)
+
         # Format the unified task prompt. (now root cause is included in vuln_info_str)
         user_prompt = PEA_testcase_generation_prompt.format(
             vulnerability_info=vuln_info_str,
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
+            target_testcase_path=abs_test_case_path,  # Add target path for LLM to write to
             feedback_section=feedback_section # If this is empty, prompt will still work fine.
         )
 
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
         cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools
-        
+
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=user_prompt,
-            tools=cur_tools, # When generating test case, LLM is encouraged to use tools. 
+            tools=cur_tools,  # When generating test case, LLM is encouraged to use tools, including write_file
             system_prompt=PEA_system_prompt,
-            max_iterations=max_generation_turns,  # Allow up to 10 rounds of tool usage
+            max_iterations=max_generation_turns,  # Allow up to 20 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
-            max_tokens=20480,
-            continuation_prompt="Please continue exploring the repository and generate the final test case to reach or trigger the vulnerability in a ```testcase code block."
+            max_tokens=40960,
+            continuation_prompt="Please continue exploring the repository and use write_file tool to write the final test case to the target file path."
         )
 
         if not result['success']:
@@ -223,31 +228,18 @@ class PathExplorationAgent:
 
         response = result['final_response']
         self.logger.info(f"  [PathExplorationAgent] LLM completed in {result['iterations']} iteration(s)")
-        # self.logger.info(f"  [PathExplorationAgent] Stop reason: {result['stop_reason']}")
         self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
 
-        # Step 3: Extract testcase content from response and save to file
-        # testcase_pattern = r'```testcase\s*\n(.*?)\n```'
-        testcase_pattern = r'```testcase\s*\n([\s\S]*?)```'
-        match = re.search(testcase_pattern, response, re.DOTALL)
-        if not match:
-            # Fallback: try to find any code block
-            self.logger.warning("  [PathExplorationAgent] No ```testcase block found, trying generic code block...")
-            fallback_pattern = r'```(?:\w+)?\s*\n(.*?)\n```'
-            match = re.search(fallback_pattern, response, re.DOTALL)
-        if not match:
-            raise ValueError(f"No testcase code block found in LLM response after {result['iterations']} iterations")
-        testcase_content = match.group(1)
-        self.logger.info(f"  [PathExplorationAgent] Test case extracted!")
+        # Step 3: Verify that the test case file was written and is non-empty
+        if not os.path.exists(test_case_path):
+            raise RuntimeError(f"Test case file was not created at {test_case_path}. LLM may have failed to use write_file tool.")
 
-        # Save test case to fixed filename: testcase-round{N}
-        test_case_filename = f"testcase-round{self.current_exp_iteration}"
-        test_case_path = os.path.join(round_dir, test_case_filename)
-        with open(test_case_path, 'w') as f:
-            f.write(testcase_content)
+        file_size = os.path.getsize(test_case_path)
+        if file_size == 0:
+            raise RuntimeError(f"Test case file at {test_case_path} is empty. LLM may have failed to write content.")
 
-        self.logger.debug(f"  [PathExplorationAgent] Saved testcase content ({len(testcase_content)} bytes) to {test_case_path}!")
-        self.logger.info (f"  [PathExplorationAgent] Test case generated at: {test_case_path}")
+        self.logger.info(f"  [PathExplorationAgent] Test case successfully written to: {test_case_path}")
+        self.logger.debug(f"  [PathExplorationAgent] Test case file size: {file_size} bytes")
         return test_case_path
 
     def _execute_test_case(self, command: str, binary_abs_path: str) -> Tuple[int, str]: # No LLM needed
