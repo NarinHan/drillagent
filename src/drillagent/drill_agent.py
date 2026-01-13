@@ -14,7 +14,7 @@ from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
 from drillagent.utils.utils import *
-from drillagent.tools.basic_tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool
+from drillagent.tools.basic_tools import *
 from drillagent.tools.cov_query_tools import FuncLineCovTool
 from drillagent.tools.ast_grep_tools import AstGrepFunctionSearchTool
 from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
@@ -49,8 +49,8 @@ class DrillAgent:
         self.reasoning_llm: LLMInterface = None
         self.low_cost_llm:  LLMInterface = None
         # LLM agent tools
-        self.agent_tools: List[Any] = []
-        self.agent_cov_tools: List[Any] = []
+        self.basic_tools: List[Any] = []
+        self.cov_tools:   List[Any] = []
         self.ast_grep_tools:  List[Any] = []
         self.clangd_tools:    List[Any] = []
 
@@ -97,15 +97,16 @@ class DrillAgent:
 
         # Initialize basic agent tools for LLM
         try:
-            self.agent_tools = [
+            self.basic_tools = [
                 ReadFileTool(self.config.target_repo_path),
+                WriteFileTool(self.config.target_repo_path),
                 GrepTool(self.config.target_repo_path),
                 FindFileTool(self.config.target_repo_path),
                 ListDirTool(self.config.target_repo_path),
                 TreeTool(self.config.target_repo_path)
             ]
-            self.logger.info(f"✓ Agent basic tools initialized: {len(self.agent_tools)} tools available")
-            # Note: agent_cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
+            self.logger.info(f"✓ Agent basic tools initialized: {len(self.basic_tools)} tools available")
+            # Note: cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
         except Exception as e:
             self.logger.error(f"Failed to initialize agent basic tools: {e}")
 
@@ -215,13 +216,13 @@ class DrillAgent:
                     self.config.target_repo_path,
                     self.vulnerability_info.binary_path # obtained from two phases ago
                 )
-                self.agent_cov_tools = [
+                self.cov_tools = [
                     FuncLineCovTool(self.config.target_repo_path, binary_abs_path)
                 ]
-                self.logger.info(f"✓ Coverage agent tools initialized: {len(self.agent_cov_tools)} tools available")
+                self.logger.info(f"✓ Coverage agent tools initialized: {len(self.cov_tools)} tools available")
             except Exception as e:
                 self.logger.warning(f"Failed to initialize coverage agent tools: {e}")
-                self.agent_cov_tools = []  # Keep empty list to avoid errors
+                self.cov_tools = []  # Keep empty list to avoid errors
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:

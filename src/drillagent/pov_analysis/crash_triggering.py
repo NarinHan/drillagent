@@ -198,7 +198,7 @@ class CrashTriggerAgent:
         )
 
         # For crash triggering, we also provide ast-grep and coverage tools.
-        cur_tools = self.drill_agent.agent_tools + self.drill_agent.ast_grep_tools + self.drill_agent.agent_cov_tools
+        cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools + self.drill_agent.cov_tools
 
         self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
         result = self.drill_agent.basic_llm.run_agent_loop(

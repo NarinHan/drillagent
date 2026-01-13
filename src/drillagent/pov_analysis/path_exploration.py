@@ -203,7 +203,7 @@ class PathExplorationAgent:
         )
 
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
-        cur_tools = self.drill_agent.agent_tools + self.drill_agent.ast_grep_tools
+        cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools
         
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         result = self.drill_agent.basic_llm.run_agent_loop(
@@ -585,7 +585,7 @@ class PathExplorationAgent:
             )
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=analysis_prompt,
-                tools=self.drill_agent.agent_tools,   # Allow tool usage if needed
+                tools=self.drill_agent.basic_tools,   # Allow tool usage if needed
                 system_prompt=PEA_coverage_analysis_system_prompt,
                 max_iterations=5,
                 temperature=0.5,
