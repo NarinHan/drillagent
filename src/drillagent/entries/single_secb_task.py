@@ -370,7 +370,7 @@ def main():
 
         # Exit with appropriate code
         if result['final_phase'] == 'completed':
-            print("\n✓ SUCCESS: PoVs generated successfully!")
+            print("\n✓ Finished: Completed PoVs generation attempts!")
             sys.exit(0)
         else:
             print("\n⚠ WARNING: Completed but no PoVs generated or incomplete execution")

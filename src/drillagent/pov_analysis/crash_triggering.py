@@ -1,7 +1,8 @@
 import os
 import re
-import subprocess
+import glob
 import shutil
+import subprocess
 from datetime import datetime
 
 from typing import Tuple, Dict, Any, TYPE_CHECKING
@@ -120,10 +121,8 @@ class CrashTriggerAgent:
                     'iteration': iteration,
                     'max_iterations': self.max_trigger_iterations
                 }
-                is_valid = self._validate_pov(pov_data, command)
-
                 # If valid PoV found, save it and stop
-                if is_valid:
+                if self._validate_pov(pov_data, command):
                     self.logger.info(f"  [CrashTriggerAgent] *** Valid PoV found at iteration {iteration}! ***")
                     # Save the final PoV to output directory
                     self._record_final_pov(pov_data, pov_path)
@@ -187,28 +186,38 @@ class CrashTriggerAgent:
                 profdata_path=last_profdata_path
             )
 
+        # Prepare the target PoV file path
+        # Add file suffix if available from vulnerability info
+        file_suffix = getattr(self.drill_agent.vulnerability_info, 'input_file_suffix', '') or ''
+        pov_filename = f"testcase-round{self.current_trigger_iteration}{file_suffix}"
+        pov_path = os.path.join(round_dir, pov_filename)
+        abs_pov_path = os.path.abspath(pov_path)
+        if file_suffix:
+            self.logger.debug(f"  [CrashTriggerAgent] Using file suffix from vulnerability info: {file_suffix}")
+
         # Substep 2: Use LLMInterface to generate the final PoV
         # Format the user prompt for PoV generation
         user_prompt = CTA_final_pov_generation_prompt.format(
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
+            target_pov_path=abs_pov_path,  # Add target path for LLM to write to
             vulnerability_info=vuln_info_str,   # Including vuln type, call trace, etc.
             root_cause_analysis=root_cause_str, # Markdown format content
             previous_pov_gen_progress=previous_progress # 🤔
         )
 
         # For crash triggering, we also provide ast-grep and coverage tools.
-        cur_tools = self.drill_agent.agent_tools + self.drill_agent.ast_grep_tools + self.drill_agent.agent_cov_tools
+        cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools + self.drill_agent.cov_tools
 
         self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=user_prompt,
-            tools=cur_tools,  # Allow LLM to use tools for exploration
+            tools=cur_tools,  # Allow LLM to use tools for exploration, including write_file
             system_prompt=CTA_system_prompt,
             max_iterations=max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation
-            max_tokens=20480,
-            continuation_prompt="Please continue your analysis and generate the final PoV in a ```pov code block."
+            max_tokens=30720,
+            continuation_prompt="Please continue your analysis and use write_file tool to write the final PoV to the target file path."
         )
 
         if not result['success']:
@@ -217,32 +226,32 @@ class CrashTriggerAgent:
             raise RuntimeError(f"Failed to generate final PoV: {error_msg}")
 
         response = result['final_response']
-        self.logger.info (f"  [CrashTriggerAgent] LLM completed in {result['iterations']} iteration(s)")
-        self.logger.info (f"  [CrashTriggerAgent] Stop reason: {result['stop_reason']}")
+        self.logger.info(f"  [CrashTriggerAgent] LLM completed in {result['iterations']} iteration(s)")
+        self.logger.info(f"  [CrashTriggerAgent] Stop reason: {result['stop_reason']}")
         self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
 
-        # Substep 3: Extract PoV content from response
-        # pov_pattern = r'```pov\s*\n(.*?)\n```'
-        pov_pattern = r'```pov\s*\n([\s\S]*?)```' # more general and robust
-        match = re.search(pov_pattern, response, re.DOTALL)
-        if not match:
-            # Fallback: try to find any code block
-            self.logger.warning("  [CrashTriggerAgent] No ```pov block found, trying generic code block...")
-            fallback_pattern = r'```(?:\w+)?\s*\n(.*?)\n```'
-            match = re.search(fallback_pattern, response, re.DOTALL)
-        if not match:
-            raise ValueError(f"No PoV code block found in LLM response after {result['iterations']} iterations")
-        pov_content = match.group(1)
-        self.logger.info(f"  [CrashTriggerAgent] PoV extracted successfully!")
+        # Substep 3: Verify that the PoV file was written and is non-empty
+        # Check if the exact path exists first
+        if not os.path.exists(pov_path):
+            # If not found, search for files matching the pattern (with potential extensions)
+            self.logger.debug(f"  [CrashTriggerAgent] Exact path {pov_path} not found, searching for pattern...")
+            search_pattern = f"{pov_path}*"
+            matching_files = glob.glob(search_pattern)
+            if not matching_files:
+                raise RuntimeError(
+                    f"PoV file was not created. Expected: {pov_path} or {pov_path}.* "
+                    f"LLM may have failed to use write_file tool."
+                )
+            # Update the path using the first matching file (should only be one)
+            pov_path = matching_files[0]
+            self.logger.info(f"  [CrashTriggerAgent] Found PoV with extension: {pov_path}")
 
-        # Substep 4: Save PoV candidate to file
-        pov_filename = f"testcase-round{self.current_trigger_iteration}" # "testcase-roundN"
-        pov_path = os.path.join(round_dir, pov_filename)
-        with open(pov_path, 'w') as f:
-            f.write(pov_content)
+        file_size = os.path.getsize(pov_path)
+        if file_size == 0:
+            raise RuntimeError(f"PoV file at {pov_path} is empty. LLM may have failed to write content.")
 
-        self.logger.debug(f"  [CrashTriggerAgent] Saved PoV candidate content ({len(pov_content)} bytes) to {pov_path}")
-        self.logger.info(f"  [CrashTriggerAgent] PoV candidate generated at: {pov_path}")
+        self.logger.info(f"  [CrashTriggerAgent] PoV candidate successfully written to: {pov_path}")
+        self.logger.debug(f"  [CrashTriggerAgent] PoV file size: {file_size} bytes")
         return pov_path
 
     def _execute_pov_candidate(self, command: str) -> Tuple[int, str]: # No LLM needed
@@ -323,10 +332,29 @@ class CrashTriggerAgent:
             self.logger.error("  [CrashTriggerAgent] TODO: Cannot map llvm-cov repo path to sanitizer-instr repo path in command.")
             return False
 
+        # Disable the use of alternate signal stack (only for mruby?) and limit memory usage for ASAN.
+        env = os.environ.copy()
+        env['ASAN_OPTIONS'] = 'use_sigaltstack=0:hard_rss_limit_mb=12000' # Options ref: https://github.com/google/sanitizers/wiki/SanitizerCommonFlags
+        if "ASAN_OPTIONS=" in command:
+            prefix = env['ASAN_OPTIONS'].rstrip(':')
+            if "ASAN_OPTIONS=" in command:
+                if 'ASAN_OPTIONS="' in command: # Handle double quotation marks
+                    command = re.sub(
+                        r'ASAN_OPTIONS="([^"]*)"',
+                        r'ASAN_OPTIONS="' + prefix + r':\1"',
+                        command,
+                        count=1
+                    )
+                else:
+                    command = re.sub(
+                        r'ASAN_OPTIONS=([^\s]+)',
+                        r'ASAN_OPTIONS=' + prefix + r':\1',
+                        command,
+                        count=1
+                    )
+
         # Execute the PoV using sanitizer-instrumented binary, and check if the sanitizer is triggered.
         self.logger.info(f"  [CrashTriggerAgent] Validation exec command: {command}")
-        env = os.environ.copy()
-        env['ASAN_OPTIONS'] = 'hard_rss_limit_mb=12000' # Option ref: https://github.com/google/sanitizers/wiki/SanitizerCommonFlags
         exit_code, exec_output = execute_command(command, env)
         if detect_sanitizer_triggered(exec_output):
             # TODO: Compare here output and the original sanitizer report to see if they match (optional).
@@ -351,7 +379,7 @@ class CrashTriggerAgent:
         """
         # Generate timestamp and filename for the final PoV
         timestamp = datetime.now().strftime("%y%m%d-%H%M")
-        final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA"
+        final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"
         final_pov_path = os.path.join(self.drill_agent.output_dir, final_pov_filename)
 
         # Create output directory if it doesn't exist

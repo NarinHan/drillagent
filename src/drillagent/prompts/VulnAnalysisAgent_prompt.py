@@ -216,12 +216,21 @@ Your tasks:
    - Note that the repository path may not be compiled yet, so the binary may not exist currently. You can still infer the expected binary path based on harness command.
    - Format example: build/njs (NOT /home/ubuntu/PoV/Repos/njs/build/njs)
    - Must be relative to: {actual_repo_path}
-   
+
 2. **Refine the command**: Create a command that can be run from any directory
    - The command should be executable when run from arbitrary directories, so try to construct absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
    - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
    - Example: /absolute/path/to/build/njs <path/to/testcase>
+
+3. **Extract input file suffix (if any)**: Identify if the program expects a specific file extension for input files
+   - Examine the harness command to see if the input file has an extension (e.g., .js, .xml, .rb, .json, .pattern)
+   - If the input file in the harness command has an extension, extract it (e.g., ".js", ".xml")
+   - If no specific extension is present or required, leave it as an empty string ""
+   - Examples:
+     * If harness has "/path/to/njs input.js" → input_file_suffix: ".js"
+     * If harness has "/path/to/xmlparser poc.xml" → input_file_suffix: ".xml"
+     * If harness has "/path/to/program poc" → input_file_suffix: ""
 
 IMPORTANT PATH REQUIREMENTS:
 - binary_path must be RELATIVE to repository root: {actual_repo_path}
@@ -233,16 +242,28 @@ Use the available tools (find_file, list_dir) to explore the repository structur
 Respond in the following JSON format ONLY:
 {{
     "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "/absolute/path/to/binary [flags] [<path/to/testcase>]"
+    "refined_harness_command": "/absolute/path/to/binary [flags] [<path/to/testcase>]",
+    "input_file_suffix": ".ext or empty string"
 }}
 
-Example:
+Example 1 (with file suffix):
 If harness is: "/src/njs/build/njs /testcase/poc.js"
 And repo is: "/home/ubuntu/PoV/Repos/njs"
 Then output should be:
 {{
     "binary_path": "build/njs",
-    "refined_harness_command": "/home/ubuntu/PoV/Repos/njs/build/njs <path/to/testcase>"
+    "refined_harness_command": "/home/ubuntu/PoV/Repos/njs/build/njs <path/to/testcase>",
+    "input_file_suffix": ".js"
+}}
+
+Example 2 (without file suffix):
+If harness is: "/src/program/bin/parser /testcase/input"
+And repo is: "/home/ubuntu/PoV/Repos/program"
+Then output should be:
+{{
+    "binary_path": "bin/parser",
+    "refined_harness_command": "/home/ubuntu/PoV/Repos/program/bin/parser <path/to/testcase>",
+    "input_file_suffix": ""
 }}
 
 """

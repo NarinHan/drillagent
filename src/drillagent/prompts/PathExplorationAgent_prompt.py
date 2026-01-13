@@ -7,7 +7,7 @@ When generating test cases:
 - Analyze the vulnerability type and understand what input patterns can trigger it
 - Study the call trace to understand the execution path leading to the vulnerability
 - Consider edge cases and malicious input patterns that could trigger the vulnerability
-- Return the test case content directly in your response using a code block
+- Use the write_file tool to write the test case to the specified file path
 
 IMPORTANT: Sometimes the analysis can become overly complicated. When generating a PoV candidate, it is better to focus on the key points and start by constructing simple test cases, avoiding over-engineering.
 """
@@ -17,6 +17,8 @@ PEA_testcase_generation_prompt = """You are generating a test case to trigger a 
 
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
+
+**TARGET TEST CASE FILE PATH**: {target_testcase_path}
 
 VULNERABILITY INFORMATION:
 
@@ -37,21 +39,16 @@ YOUR TASK:
    - For buffer overflows: generate inputs that exceed buffer boundaries
 	- For Use-After-Free (UAF): generate inputs that trigger object deallocation followed by subsequent access or reuse of the freed memory
 	- For NULL Pointer Dereference (NPD): generate inputs that cause pointers to remain NULL and be dereferenced during execution
-   - For Integer Overflow (IO): generate inputs that cause arithmetic operations to exceed the maximum or minimum representable integer bounds
 	- For Out-of-Bounds (OOB): generate inputs that lead to memory accesses beyond the valid bounds of arrays or buffers
-	- For Use-Before-Initialization (UBI): generate inputs that cause variables or data structures to be accessed before they are properly initialized
 
-3. **Return the test case in your response**:
-   - Include the test case content in a code block marked with ```testcase
-   - The code block should contain ONLY the test input data (no analysis, no comments in the test case itself)
-   - For text inputs: return as plain text
-   - For binary-like inputs that can be represented as text: return as text (e.g., hex strings, escape sequences)
-   - Example format:
-     ```testcase
-     [Your test case content here]
-     ```
+3. **Write the test case using write_file tool**:
+   - Use the `write_file` tool to write the test case content to the target file path specified above
+   - For text-based test cases: use the `content` parameter with the test data as a string
+   - For binary test cases: use the `hex_content` parameter with the test data as a hex string
+   - The file should contain ONLY the test input data (no analysis, no comments)
+   - Example: write_file(file_path="/path/to/testcase-roundN[with optional suffix]", content="your test data here")
 
-4. **Explain your approach** (briefly, outside the code block):
+4. **Explain your approach** (briefly):
    - What input pattern did you generate and why?
    - How does it aim to reach/trigger the vulnerability?
 
@@ -59,14 +56,13 @@ IMPORTANT:
 - You should use provided tools to read related source code if needed, and then generate the test case.
   - Mainly use `ast_grep_search_function` tool to read function implementations that are relevant to the vulnerability and call trace.
   - You can also use `read_file` tool to read code if there is no function name. (you are encouraged to read more than one line)
-- If it is already the final turn, ensure you respond with a test case in this turn!!!
+- **CRITICAL**: You MUST use the `write_file` tool to write the test case to the target file path before your final response!
+- If it is already the final turn, ensure you write the test case file in this turn!!!
 - The test case should be pure input data (not a script or code)
-- Do NOT include any analysis text or comments inside the ```testcase code block
 - Focus on generating input that reaches the vulnerable code path first
 - You can refine the input in subsequent rounds based on coverage feedback
-- Since we assume text/code-based test cases (not binary), ensure your test case can be represented as text
 
-Generate the test case now and return it in a ```testcase code block.
+Generate the test case now and write it to the target file path using the write_file tool.
 """
 
 PEA_feedback_results_template = """

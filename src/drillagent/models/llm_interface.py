@@ -404,7 +404,7 @@ class LLMInterface:
             system_prompt: Optional system instruction
             max_iterations: Maximum number of iterations
             temperature: Sampling temperature
-            max_tokens: Max tokens per generation
+            max_tokens: Max tokens **per LLM generation**
             tool_executor: Optional custom tool executor function(tool_calls, tools) -> List[results]
                           If None, uses default executor that calls tool.execute()
             continuation_prompt: Prompt to send after tool results
@@ -663,6 +663,7 @@ class LLMInterface:
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
+                        # TODO: Do we make use of the incomplete response? Could be useful 🤔
                         return result
                     else:
                         # Unknown stop reason, assume complete

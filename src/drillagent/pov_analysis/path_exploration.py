@@ -1,7 +1,8 @@
 import os
 import re
-import subprocess
+import glob
 import shutil
+import subprocess
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 
@@ -149,7 +150,6 @@ class PathExplorationAgent:
         # By default, work_dir is a relative path (./workspace). So round_dir is also relative.
         return os.path.join(self.drill_agent.work_dir, f"round{round_num}") 
 
-    # TODO: Support generating separate binary-encoded test case files in the future.
     def _generate_test_case(self, previous_feedback: Tuple = None) -> str:
         # Generate test case using LLMInterface with automatic agent loop
         # 1. Get vulnerability information. If previous_feedback is provided, include it in the prompt to guide the LLM with coverage information.
@@ -194,26 +194,36 @@ class PathExplorationAgent:
         else: # e.g., previous_feedback is None
             feedback_section = ""
 
+        # Prepare the target test case path
+        # Add file suffix if available from vulnerability info
+        file_suffix = getattr(self.drill_agent.vulnerability_info, 'input_file_suffix', '') or ''
+        test_case_filename = f"testcase-round{self.current_exp_iteration}{file_suffix}"
+        test_case_path = os.path.join(round_dir, test_case_filename)
+        abs_test_case_path = os.path.abspath(test_case_path)
+        if file_suffix:
+            self.logger.debug(f"  [PathExplorationAgent] Using file suffix from vulnerability info: {file_suffix}")
+
         # Format the unified task prompt. (now root cause is included in vuln_info_str)
         user_prompt = PEA_testcase_generation_prompt.format(
             vulnerability_info=vuln_info_str,
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
+            target_testcase_path=abs_test_case_path,  # Add target path for LLM to write to
             feedback_section=feedback_section # If this is empty, prompt will still work fine.
         )
 
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
-        cur_tools = self.drill_agent.agent_tools + self.drill_agent.ast_grep_tools
-        
+        cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools
+
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
-        result = self.drill_agent.basic_llm.run_agent_loop(
+        result = self.drill_agent.low_cost_llm.run_agent_loop(
             task=user_prompt,
-            tools=cur_tools, # When generating test case, LLM is encouraged to use tools. 
+            tools=cur_tools,  # When generating test case, LLM is encouraged to use tools, including write_file
             system_prompt=PEA_system_prompt,
-            max_iterations=max_generation_turns,  # Allow up to 10 rounds of tool usage
+            max_iterations=max_generation_turns,  # Allow up to 20 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
-            max_tokens=20480,
-            continuation_prompt="Please continue exploring the repository and generate the final test case to reach or trigger the vulnerability in a ```testcase code block."
+            max_tokens=30720,
+            continuation_prompt="Please continue exploring the repository and use write_file tool to write the final test case to the target file path."
         )
 
         if not result['success']:
@@ -223,31 +233,30 @@ class PathExplorationAgent:
 
         response = result['final_response']
         self.logger.info(f"  [PathExplorationAgent] LLM completed in {result['iterations']} iteration(s)")
-        # self.logger.info(f"  [PathExplorationAgent] Stop reason: {result['stop_reason']}")
         self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
 
-        # Step 3: Extract testcase content from response and save to file
-        # testcase_pattern = r'```testcase\s*\n(.*?)\n```'
-        testcase_pattern = r'```testcase\s*\n([\s\S]*?)```'
-        match = re.search(testcase_pattern, response, re.DOTALL)
-        if not match:
-            # Fallback: try to find any code block
-            self.logger.warning("  [PathExplorationAgent] No ```testcase block found, trying generic code block...")
-            fallback_pattern = r'```(?:\w+)?\s*\n(.*?)\n```'
-            match = re.search(fallback_pattern, response, re.DOTALL)
-        if not match:
-            raise ValueError(f"No testcase code block found in LLM response after {result['iterations']} iterations")
-        testcase_content = match.group(1)
-        self.logger.info(f"  [PathExplorationAgent] Testcase extracted successfully!")
+        # Step 3: Verify that the test case file was written and is non-empty
+        # Check if the exact path exists first
+        if not os.path.exists(test_case_path):
+            # If not found, search for files matching the pattern (with potential extensions)
+            self.logger.debug(f"  [PathExplorationAgent] Exact path {test_case_path} not found, searching for pattern...")
+            search_pattern = f"{test_case_path}*"
+            matching_files = glob.glob(search_pattern)
+            if not matching_files:
+                raise RuntimeError(
+                    f"Test case file was not created. Expected: {test_case_path} or {test_case_path}.* "
+                    f"LLM may have failed to use write_file tool."
+                )
+            # Update the path using the first matching file (should only be one)
+            test_case_path = matching_files[0]
+            self.logger.info(f"  [PathExplorationAgent] Found test case with extension: {test_case_path}")
 
-        # Save test case to fixed filename: testcase-round{N}
-        test_case_filename = f"testcase-round{self.current_exp_iteration}"
-        test_case_path = os.path.join(round_dir, test_case_filename)
-        with open(test_case_path, 'w') as f:
-            f.write(testcase_content)
+        file_size = os.path.getsize(test_case_path)
+        if file_size == 0:
+            raise RuntimeError(f"Test case file at {test_case_path} is empty. LLM may have failed to write content.")
 
-        self.logger.debug(f"  [PathExplorationAgent] Saved testcase content ({len(testcase_content)} bytes) to {test_case_path}!")
-        self.logger.info (f"  [PathExplorationAgent] Test case generated at: {test_case_path}")
+        self.logger.info(f"  [PathExplorationAgent] Test case successfully written to: {test_case_path}")
+        self.logger.debug(f"  [PathExplorationAgent] Test case file size: {file_size} bytes")
         return test_case_path
 
     def _execute_test_case(self, command: str, binary_abs_path: str) -> Tuple[int, str]: # No LLM needed
@@ -281,6 +290,8 @@ class PathExplorationAgent:
             # Merge stdout and stderr as exec_output
             exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
             self.logger.info(f"  [PathExplorationAgent] Command exit code: {exit_code}")
+            if exit_code != 0:
+                self.logger.info(f"  [PathExplorationAgent] stderr: {stderr[:500]}...") # Log first 500 chars of stderr if error
         except subprocess.TimeoutExpired as e:
             self.logger.warning(f"  [PathExplorationAgent] Command execution timeout after 30s")
             exit_code = -1
@@ -291,7 +302,7 @@ class PathExplorationAgent:
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
         # Step 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
-        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE: {profraw_path}")
+        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE = {profraw_path}")
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
             self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
             self.logger.warning(f"  [PathExplorationAgent] This might indicate the binary was not instrumented or the execution failed early!")
@@ -392,12 +403,17 @@ class PathExplorationAgent:
                     'callsite_line_execution_count' : line_cov['execution_count'],
                 })
             else:
-                pass
+                updated_frame.update({
+                    'failed_query_line_cov'         : True,
+                    'callsite_line_executed'        : False,
+                    'callsite_line_execution_count' : 0,
+                })
             
             cov_frames.append(updated_frame)
 
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
         sorted_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
+        # print(repr(sorted_frames)) # For debug
 
         # Substep 3: Identify the first un-executed critical callsite. And get detailed function coverage in source-line level for branch-level analysis.
         first_uncovered_frame  = None
@@ -419,8 +435,13 @@ class PathExplorationAgent:
                 # Compromise: Couldn't verify callsite line, treat as covered and continue
                 continue
 
+            if frame.get('failed_query_line_cov', False):
+                # Compromise: Couldn't get line coverage info - skip line-level check
+                self.logger.warning(f"  [PathExplorationAgent] Could not get line coverage for verified frame #{frame['sequence_num']} - treating as covered")
+                continue
+
             # Check if callsite line was executed
-            if frame.get('is_verified', False) and not frame.get('callsite_line_executed', False):
+            if not frame.get('callsite_line_executed', False):
                 # Callsite line not executed - this is the first uncovered critical callsite
                 first_uncovered_frame = frame
                 self.logger.info(f"  [PathExplorationAgent] Found first uncovered callsite (line-level): {frame['function_name']} at {frame['file_path']}:{frame['line_number']}")
@@ -481,7 +502,6 @@ class PathExplorationAgent:
 
         # Add detailed frame-by-frame coverage information
         output_lines.append("Function-Level Frame-by-Frame Coverage (from caller to callee):") #####
-        output_lines.append("")
 
         for i, frame in enumerate(sorted_cov_frames, 1):
             seq_num = frame['sequence_num']
@@ -576,7 +596,7 @@ class PathExplorationAgent:
             )
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=analysis_prompt,
-                tools=self.drill_agent.agent_tools,   # Allow tool usage if needed
+                tools=self.drill_agent.basic_tools,   # Allow tool usage if needed
                 system_prompt=PEA_coverage_analysis_system_prompt,
                 max_iterations=5,
                 temperature=0.5,
@@ -662,9 +682,10 @@ class PathExplorationAgent:
         # Check for other interesting exit codes
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
             self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code}).")
-            if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
-                self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
-                return True
+            # Update: Since we have sanitizer-instrumented binaries, we don't treat aborts as crashes for now.
+            # if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
+            #     self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
+            #     return True
 
         elif exit_code == -9 or exit_code == 137:  # SIGKILL
             self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code}).")
@@ -692,8 +713,9 @@ class PathExplorationAgent:
             self.crash_command = command
 
             # Copy the crash PoV to output directory with timestamped name
+            # As long as exit code is 139, we should consider it a crash PoV.
             timestamp = datetime.now().strftime("%y%m%d-%H%M")
-            pov_filename = f"pov-{self.drill_agent.project_name}-{timestamp}-PEA"
+            pov_filename = f"pov-{self.drill_agent.project_name}-{timestamp}-PEA-round{self.current_exp_iteration}"
             pov_output_path = os.path.join(self.drill_agent.output_dir, pov_filename)
             os.makedirs(self.drill_agent.output_dir, exist_ok=True)
             shutil.copy(test_case_path, pov_output_path)

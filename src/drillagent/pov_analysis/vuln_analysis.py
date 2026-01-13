@@ -25,8 +25,9 @@ class VulnAnalysisAgent:
         self.drill_agent: 'DrillAgent' = drill_agent
         self.config: 'AgentConfig' = drill_agent.config
         self.logger: logging.Logger = drill_agent.logger
-        self.basic_tools: List['AgentTool']    = drill_agent.agent_tools
-        self.enhanced_tools: List['AgentTool'] = drill_agent.agent_cov_tools + drill_agent.ast_grep_tools
+        self.basic_tools: List['AgentTool']    = drill_agent.basic_tools
+        self.enhanced_tools: List['AgentTool'] = drill_agent.basic_tools + drill_agent.cov_tools + drill_agent.ast_grep_tools
+        # Sometimes ast-grep may not be usable, so we keep both basic and enhanced toolsets.
 
         # Vulnerability information container!!!!! 
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
@@ -393,7 +394,10 @@ class VulnAnalysisAgent:
                             old_linenum = current_frame['line_number']
                             # Merge refined data back to current frame
                             current_frame.update(refined_frame)
-                            self.logger.info(f"        ✓ Frame #{seq_num}: Line number refined from {old_linenum} to {current_frame['line_number']}")
+                            new_linenum = current_frame['line_number']
+                            original = current_frame.get('is_original_linenum', True)
+                            verified = current_frame.get('is_verified', False)
+                            self.logger.info   (f"        ✓ Frame #{seq_num}: Linenum refined from {old_linenum} to {new_linenum} (original: {original}, verified: {verified})")
                         else:
                             self.logger.warning(f"        ✗ Frame #{seq_num}: Could not extract valid line number, keeping original")
                     else:
@@ -439,7 +443,7 @@ class VulnAnalysisAgent:
                     self.logger.warning(f"      Neither entry '{entry_function}' nor crash '{crash_function}' found in trace, keeping full trace")
 
             if entry_function and crash_function:
-                self.logger.info(f"      Successfully trimmed from entry '{entry_function}' to crash '{crash_function}'!")
+                self.logger.info(f"    Successfully trimmed from entry '{entry_function}' to crash '{crash_function}'!")
 
                 # Update crash_location based on crash_function frame
                 crash_frame = next((f for f in trimmed_trace if f.get('function_name') == crash_function), None)
@@ -472,19 +476,16 @@ class VulnAnalysisAgent:
     def _refine_harness_command(self, project_name, actual_repo_path, raw_harness_command):
         # Refine harness command to use actual paths using LLM with tools
         # LLM: Using new LLMInterface with automatic agent loop
+        # TODO: We also need to extract the filename suffix instead of merely <path/to/testcase>.
         try:
-            # Prepare the prompt
-            user_prompt = VAA_harness_refine_prompt.format(
-                project_name=project_name,
-                actual_repo_path=actual_repo_path,
-                harness_command=raw_harness_command if raw_harness_command else "Not provided"
-            )
-
             # Use LLMInterface for automatic tool calling and conversation management
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to refine harness command...")
-
             result = self.drill_agent.basic_llm.run_agent_loop(
-                task=user_prompt,
+                task=VAA_harness_refine_prompt.format(
+                    project_name=project_name,
+                    actual_repo_path=actual_repo_path,
+                    harness_command=raw_harness_command if raw_harness_command else "Not provided"
+                ),
                 tools=self.basic_tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=3,  # Allow up to 3 rounds of tool usage
@@ -547,16 +548,19 @@ class VulnAnalysisAgent:
             # Store refined information
             self.vuln_info.binary_path = refined_info.get('binary_path', '')
             self.vuln_info.refined_harness_command = refined_info.get('refined_harness_command', '')
+            self.vuln_info.input_file_suffix = refined_info.get('input_file_suffix', '')
 
             self.logger.info(f"    ✓ Refined harness information:")
             self.logger.info(f"      Binary: {self.vuln_info.binary_path}")
             self.logger.info(f"      Command: {self.vuln_info.refined_harness_command}")
+            self.logger.info(f"      Input file suffix: {self.vuln_info.input_file_suffix if self.vuln_info.input_file_suffix else '(none)'}")
 
         except Exception as e:
             self.logger.error(f"  [VulnAnalysisAgent] Failed to refine harness command: {e}", exc_info=True)
             self.logger.error(f"  [VulnAnalysisAgent] Fallback to use raw harness command.")
             # Fallback: use original harness command
             self.vuln_info.refined_harness_command = raw_harness_command if raw_harness_command else ""
+            self.vuln_info.input_file_suffix = ""  # No suffix info in fallback
             # Try to extract binary path from original command
             if raw_harness_command:
                 parts = raw_harness_command.split()
@@ -592,7 +596,7 @@ class VulnAnalysisAgent:
                 system_prompt=VAA_system_prompt,
                 max_iterations=20,  # Allow up to 20 rounds of deep analysis
                 temperature=0.3,
-                max_tokens=20480, # Modern LLMs can handle larger contexts.
+                max_tokens=30720, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."
             )
 
@@ -716,7 +720,8 @@ class VulnInfo:
     call_trace: List[Dict[str, Any]] = field(default_factory=list)
     # harness details
     refined_harness_command: str = ""  # Refined harness command
-    binary_path: str = ""  # Relative path to the target binary
+    binary_path: str       = ""  # Relative path to the target binary
+    input_file_suffix: str = ""  # Input file suffix (e.g., .xml, .png)
     # vuln semantics
     vuln_type: str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
     root_cause: str = ""  # Root cause analysis result
@@ -780,6 +785,10 @@ class VulnInfo:
                 lines.append(f"    {self.refined_harness_command}")
         else:
             lines.append(f"  Harness Command:   N/A")
+        if self.input_file_suffix:
+            lines.append(f"  PoV File Suffix: {self.input_file_suffix}")
+        else:
+            lines.append(f"  PoV File Suffix: N/A")
         # Section 3: Call Trace
         lines.append("\n[CALL TRACE]")
         if self.call_trace and len(self.call_trace) > 0:

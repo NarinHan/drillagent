@@ -14,10 +14,11 @@ from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
 from drillagent.utils.utils import *
-from drillagent.tools.basic_tools import ReadFileTool, GrepTool, FindFileTool, ListDirTool, TreeTool
+from drillagent.tools.basic_tools import *
 from drillagent.tools.cov_query_tools import FuncLineCovTool
 from drillagent.tools.ast_grep_tools import AstGrepFunctionSearchTool
 from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
+from drillagent.utils.log_converter import convert_llm_history_to_text
 
 class DrillAgent:
     # Core orchestration class of DrillAgent
@@ -48,8 +49,8 @@ class DrillAgent:
         self.reasoning_llm: LLMInterface = None
         self.low_cost_llm:  LLMInterface = None
         # LLM agent tools
-        self.agent_tools: List[Any] = []
-        self.agent_cov_tools: List[Any] = []
+        self.basic_tools: List[Any] = []
+        self.cov_tools:   List[Any] = []
         self.ast_grep_tools:  List[Any] = []
         self.clangd_tools:    List[Any] = []
 
@@ -96,15 +97,16 @@ class DrillAgent:
 
         # Initialize basic agent tools for LLM
         try:
-            self.agent_tools = [
+            self.basic_tools = [
                 ReadFileTool(self.config.target_repo_path),
+                WriteFileTool(self.config.target_repo_path),
                 GrepTool(self.config.target_repo_path),
                 FindFileTool(self.config.target_repo_path),
                 ListDirTool(self.config.target_repo_path),
                 TreeTool(self.config.target_repo_path)
             ]
-            self.logger.info(f"✓ Agent basic tools initialized: {len(self.agent_tools)} tools available")
-            # Note: agent_cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
+            self.logger.info(f"✓ Agent basic tools initialized: {len(self.basic_tools)} tools available")
+            # Note: cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
         except Exception as e:
             self.logger.error(f"Failed to initialize agent basic tools: {e}")
 
@@ -119,9 +121,9 @@ class DrillAgent:
 
         # Initialize new LLMInterface instances
         # We use different models for different sub-tasks to optimize cost and performance
+        self.logger.info(f"Initializing LLM interface...")
         try:
             # 1. Basic LLM - uses config's default model for general tasks
-            self.logger.info(f"Initializing basic LLM interface...")
             self.basic_llm = LLMInterface(
                 provider=self.config.model_provider,
                 model_name=self.config.basic_model,
@@ -134,7 +136,6 @@ class DrillAgent:
             # 2. Reasoning LLM - uses reasoning_model if configured, otherwise same as basic
             if self.config.reasoning_model and self.config.reasoning_model[0]:
                 reasoning_provider, reasoning_model = self.config.reasoning_model
-                self.logger.info(f"Initializing reasoning LLM interface ({reasoning_provider}/{reasoning_model})...")
                 self.reasoning_llm = LLMInterface(
                     provider=reasoning_provider,
                     model_name=reasoning_model,
@@ -146,12 +147,11 @@ class DrillAgent:
             else:
                 # Use same as basic_llm if not configured
                 self.reasoning_llm = self.basic_llm
-                self.logger.info(f"✓ Reasoning LLM using basic LLM configuration")
+                self.logger.info(f"✓ Reasoning LLM initialized: re-using basic LLM configuration")
 
             # 3. Low-cost LLM - uses low_cost_model if configured, otherwise use cheaper default
             if self.config.low_cost_model and self.config.low_cost_model[0]:
                 low_cost_provider, low_cost_model = self.config.low_cost_model
-                self.logger.info(f"Initializing low-cost LLM interface ({low_cost_provider}/{low_cost_model})...")
                 self.low_cost_llm = LLMInterface(
                     provider=low_cost_provider,
                     model_name=low_cost_model,
@@ -214,13 +214,13 @@ class DrillAgent:
                     self.config.target_repo_path,
                     self.vulnerability_info.binary_path # obtained from two phases ago
                 )
-                self.agent_cov_tools = [
+                self.cov_tools = [
                     FuncLineCovTool(self.config.target_repo_path, binary_abs_path)
                 ]
-                self.logger.info(f"✓ Coverage agent tools initialized: {len(self.agent_cov_tools)} tools available")
+                self.logger.info(f"✓ Coverage agent tools initialized: {len(self.cov_tools)} tools available")
             except Exception as e:
                 self.logger.warning(f"Failed to initialize coverage agent tools: {e}")
-                self.agent_cov_tools = []  # Keep empty list to avoid errors
+                self.cov_tools = []  # Keep empty list to avoid errors
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:
@@ -313,7 +313,7 @@ class DrillAgent:
         if check_saninstr_binary_exists(saninstr_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(saninstr_repo_path, self.config.base_commit):
             self.logger.info(f"✓ Found qualified sanitizer-instrumented binary, built from commit {self.config.base_commit}")
-            self.logger.info(f"    Binary path: {f"{saninstr_repo_path}/{binary_relative_path}"}")
+            self.logger.info(f"    Binary path: {saninstr_repo_path}/{binary_relative_path}")
             found_san_bin = True
         else:
             self.logger.info("No existing qualified sanitizer-instrumented binary found.")
@@ -324,7 +324,7 @@ class DrillAgent:
         if check_llvmcov_binary_exists(target_repo_path, binary_relative_path) \
               and compare_gitrepo_commit(target_repo_path, self.config.base_commit):
             self.logger.info(f"✓ Found qualified coverage-instrumented binary, built from commit {self.config.base_commit}")
-            self.logger.info(f"    Binary path: {f"{target_repo_path}/{binary_relative_path}"}")
+            self.logger.info(f"    Binary path: {target_repo_path}/{binary_relative_path}")
             found_cov_bin = True
         else:
             self.logger.info("No existing qualified coverage-instrumented binary found.")
@@ -347,7 +347,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
                 self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
-                # exit(1) # For debug
+                exit(1) # For debug
                 return False
 
         # Substep 3: Build source code with coverage instrumentation
@@ -362,7 +362,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-                # exit(2) # For debug
+                exit(2) # For debug
                 return False
 
         self.logger.info("✓ Instrumentation phase completed")
@@ -461,6 +461,14 @@ class DrillAgent:
                 self.logger.warning(f"  - {error}")
 
         self.logger.info("=" * 60)
+
+        # Convert LLM history JSON to text format for easier review
+        try:
+            self.logger.info("\nConverting LLM history to text format...")
+            convert_llm_history_to_text(self.output_dir)
+            self.logger.info(f"✓ LLM history text log saved to {self.output_dir}/llm_history.txt")
+        except Exception as e:
+            self.logger.warning(f"Failed to convert LLM history to text: {e}")
 
         return report
 

@@ -1,22 +1,31 @@
 # Customized Items
 .env
 .claude/
+logs/
 cache/
 output/
 workspace/
-logs/
 test_output/
-openai.key
-claude.key
-gemini.key
-src/drillagent/scripts/lhy_*
-scripts/lhy_*
-default.profraw
-default.profdata
 gt_povs/
 success_povs/
 
-# For instrumentation agents
+# For debug
+src/drillagent/scripts/lhy_*
+scripts/lhy_*
+
+# For LLM
+openai.key
+claude.key
+gemini.key
+
+# For Kaitai
+kaitai_struct_formats/
+kaitai_test/
+
+# For instrumentation and llvm-cov
+default.profraw
+default.profdata
+
 instrumented/
 src/instrumentation/
 fuzzing/

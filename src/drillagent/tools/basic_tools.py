@@ -140,10 +140,19 @@ class ReadFileTool(AgentTool):
 
     def description(self) -> str:
         return (
-            "Read the contents of a source code file with line numbers. "
-            "Use this when you need to examine specific code mentioned in error messages, "
-            "call traces, or to understand implementation details. "
-            "Returns file content with line numbers for easy reference to specific lines."
+            "Read file contents in text mode (with line numbers) or hex mode (binary dump). "
+            "\n\n"
+            "TEXT MODE (default): Reads as UTF-8 text with line numbers. "
+            "Use this for source code files mentioned in error messages, call traces, etc. "
+            "Non-UTF-8 bytes are replaced with � (U+FFFD) to indicate binary content. "
+            "\n\n"
+            "HEX MODE (hex_mode=true): Reads as raw binary and returns hexadecimal dump. "
+            "Use this for binary files, executables, or when you suspect binary data. "
+            "Output format (16 bytes per line):\n"
+            "00000000: 7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00  .ELF............\n"
+            "00000010: 02 00 3e 00 01 00 00 00 50 10 40 00 00 00 00 00  ..>.....P.@.....\n"
+            "\n"
+            "Use start_offset and read_length to examine specific byte ranges in hex mode."
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -161,7 +170,8 @@ class ReadFileTool(AgentTool):
                 "description": (
                     "Starting line number (1-indexed, inclusive). "
                     "If not specified, reads from the beginning. "
-                    "Use this to focus on specific sections mentioned in traces."
+                    "Use this to focus on specific sections mentioned in traces. "
+                    "Ignored if hex_mode is true."
                 ),
                 "required": False
             },
@@ -170,20 +180,51 @@ class ReadFileTool(AgentTool):
                 "description": (
                     "Ending line number (1-indexed, inclusive). "
                     "If not specified, reads up to 50 lines from start_line, "
-                    "or entire file if start_line is also not specified."
+                    "or entire file if start_line is also not specified. "
+                    "Ignored if hex_mode is true."
+                ),
+                "required": False
+            },
+            "hex_mode": {
+                "type": "boolean",
+                "description": (
+                    "If true, read file in binary mode and return hexadecimal dump. "
+                    "Useful for examining binary files or detecting binary content. "
+                    "When enabled, start_line/end_line are ignored; use start_offset/read_length instead."
+                ),
+                "required": False
+            },
+            "start_offset": {
+                "type": "integer",
+                "description": (
+                    "Byte offset to start reading from (0-indexed). "
+                    "Only used when hex_mode is true. Default: 0"
+                ),
+                "required": False
+            },
+            "read_length": {
+                "type": "integer",
+                "description": (
+                    "Number of bytes to read. "
+                    "Only used when hex_mode is true. "
+                    "If not specified, reads up to 1024 bytes from start_offset."
                 ),
                 "required": False
             }
         }
 
     def execute(self, file_path: str, start_line: Optional[int] = None,
-                end_line: Optional[int] = None) -> Dict[str, Any]:
+                end_line: Optional[int] = None, hex_mode: bool = False,
+                start_offset: Optional[int] = None, read_length: Optional[int] = None) -> Dict[str, Any]:
         """
-        Read file contents with optional line range.
+        Read file contents with optional line range or hex dump.
         Args:
             file_path: Relative path to file
             start_line: Optional starting line (1-indexed)
             end_line: Optional ending line (1-indexed, inclusive)
+            hex_mode: If true, read in binary mode and return hex dump
+            start_offset: Byte offset for hex mode (0-indexed)
+            read_length: Number of bytes to read in hex mode
         Returns:
             Dict with success status, file content, and metadata
         """
@@ -206,8 +247,12 @@ class ReadFileTool(AgentTool):
                     "file_path": file_path
                 }
 
-            # Read file
-            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Handle hex mode
+            if hex_mode:
+                return self._read_as_hex(full_path, file_path, start_offset, read_length)
+
+            # Read file in text mode
+            with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                 lines = f.readlines()
 
             total_lines = len(lines)
@@ -271,6 +316,491 @@ class ReadFileTool(AgentTool):
             return {
                 "success": False,
                 "error": f"Failed to read file: {str(e)}",
+                "file_path": file_path
+            }
+
+    def _read_as_hex(self, full_path: Path, file_path: str,
+                     start_offset: Optional[int], read_length: Optional[int]) -> Dict[str, Any]:
+        """
+        Read file in binary mode and return hex dump.
+        Args:
+            full_path: Absolute path to file
+            file_path: Relative path for display
+            start_offset: Byte offset to start from
+            read_length: Number of bytes to read
+        Returns:
+            Dict with success status and hex dump content
+        """
+        try:
+            # Default values
+            offset = start_offset if start_offset is not None else 0
+            length = read_length if read_length is not None else 1024
+
+            # Get file size
+            file_size = full_path.stat().st_size
+
+            # Validate offset
+            if offset < 0:
+                return {
+                    "success": False,
+                    "error": f"Invalid start_offset: {offset} (must be >= 0)",
+                    "file_path": file_path
+                }
+
+            if offset >= file_size:
+                return {
+                    "success": False,
+                    "error": f"start_offset {offset} exceeds file size {file_size}",
+                    "file_path": file_path
+                }
+
+            # Read binary data
+            with open(full_path, 'rb') as f:
+                f.seek(offset)
+                data = f.read(length)
+
+            actual_length = len(data)
+
+            # Generate hex dump
+            hex_lines = []
+            for i in range(0, len(data), 16):
+                chunk = data[i:i+16]
+                addr = offset + i
+
+                # Hex representation
+                hex_part = ' '.join(f'{b:02x}' for b in chunk)
+                # Pad to maintain alignment
+                hex_part = hex_part.ljust(48)  # 16 bytes * 3 chars - 1 space
+
+                # ASCII representation
+                ascii_part = ''.join(
+                    chr(b) if 32 <= b < 127 else '.'
+                    for b in chunk
+                )
+
+                hex_lines.append(f"{addr:08x}: {hex_part}  {ascii_part}")
+
+            hex_dump = '\n'.join(hex_lines)
+
+            return {
+                "success": True,
+                "file_path": file_path,
+                "content": hex_dump,
+                "mode": "hex",
+                "file_size": file_size,
+                "start_offset": offset,
+                "bytes_read": actual_length,
+                "read_range": f"0x{offset:x}-0x{offset + actual_length - 1:x}",
+                "message": f"Read {actual_length} bytes from offset {offset} (file size: {file_size} bytes)"
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to read file in hex mode: {str(e)}",
+                "file_path": file_path
+            }
+
+
+class WriteFileTool(AgentTool):
+    """
+    Tool for writing content to files in text or binary (hex) mode.
+    Supports create, insert, and append operations.
+    """
+
+    def __init__(self, repo_path: str):
+        """
+        Initialize WritFile tool.
+
+        Args:
+            repo_path: Absolute path to the repository root
+        """
+        self.repo_path = Path(repo_path).resolve()
+
+        if not self.repo_path.exists():
+            raise ValueError(f"Repository path does not exist: {repo_path}")
+        if not self.repo_path.is_dir():
+            raise ValueError(f"Repository path is not a directory: {repo_path}")
+
+    def name(self) -> str:
+        return "write_file"
+
+    def description(self) -> str:
+        return (
+            "Write content to a file in text mode or hex mode with different write strategies. "
+            "\n\n"
+            "WRITE MODES:\n"
+            "- create: Overwrite file completely (creates new file if doesn't exist)\n"
+            "- insert: Insert content at specific position (requires start_line or start_offset)\n"
+            "- append: Append content to end of file\n"
+            "\n"
+            "TEXT MODE (default, hex_mode=false):\n"
+            "Write text content as-is. For insert mode, use start_line (1-indexed) to specify "
+            "where to insert. Content is inserted BEFORE the specified line.\n"
+            "\n"
+            "HEX MODE (hex_mode=true):\n"
+            "Write binary data from hexadecimal representation. For insert mode, use start_offset "
+            "(0-indexed byte position). Hex input formats supported:\n"
+            "  - Simple hex string: '7f454c4602010100'\n"
+            "  - Spaced hex bytes: '7f 45 4c 46 02 01 01 00'\n"
+            "  - Hex dump format (extracts hex, ignores address/ASCII):\n"
+            "    '00000000: 7f 45 4c 46 02 01 01 00  .ELF....'\n"
+            "\n"
+            "Examples:\n"
+            "- Create text file: write_mode='create', content='Hello\\nWorld'\n"
+            "- Append to file: write_mode='append', content='New line\\n'\n"
+            "- Insert at line 5: write_mode='insert', start_line=5, content='Inserted\\n'\n"
+            "- Write binary: hex_mode=true, content='504b0304', write_mode='create'\n"
+            "- Insert bytes at offset 0x10: hex_mode=true, write_mode='insert', start_offset=16, content='deadbeef'"
+        )
+
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "file_path": {
+                "type": "string",
+                "description": (
+                    "Path to the file relative to repository root. "
+                    "Examples: 'output.txt', 'data/result.bin', 'patch.dat'"
+                ),
+                "required": True
+            },
+            "content": {
+                "type": "string",
+                "description": (
+                    "Content to write. In text mode, write as plain text. "
+                    "In hex mode, provide hexadecimal string (see description for formats)."
+                ),
+                "required": True
+            },
+            "write_mode": {
+                "type": "string",
+                "description": (
+                    "Write strategy: 'create' (overwrite), 'insert' (at position), or 'append' (at end). "
+                    "Default: 'create'"
+                ),
+                "required": False
+            },
+            "hex_mode": {
+                "type": "boolean",
+                "description": (
+                    "If true, treat content as hexadecimal and write binary data. "
+                    "If false, write as text. Default: false"
+                ),
+                "required": False
+            },
+            "start_line": {
+                "type": "integer",
+                "description": (
+                    "Line number (1-indexed) to insert content BEFORE. "
+                    "Only used when write_mode='insert' and hex_mode=false. "
+                    "Example: start_line=5 inserts before line 5."
+                ),
+                "required": False
+            },
+            "start_offset": {
+                "type": "integer",
+                "description": (
+                    "Byte offset (0-indexed) to insert content at. "
+                    "Only used when write_mode='insert' and hex_mode=true."
+                ),
+                "required": False
+            }
+        }
+
+    def execute(self, file_path: str, content: str, write_mode: str = "create",
+                hex_mode: bool = False, start_line: Optional[int] = None,
+                start_offset: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Write content to file.
+
+        Args:
+            file_path: Relative path to file
+            content: Content to write (text or hex string)
+            write_mode: 'create', 'insert', or 'append'
+            hex_mode: If true, parse content as hex and write binary
+            start_line: Line number for insert in text mode (1-indexed)
+            start_offset: Byte offset for insert in hex mode (0-indexed)
+
+        Returns:
+            Dict with success status and operation details
+        """
+        try:
+            # Validate write_mode
+            if write_mode not in ["create", "insert", "append"]:
+                return {
+                    "success": False,
+                    "error": f"Invalid write_mode: {write_mode}. Must be 'create', 'insert', or 'append'",
+                    "file_path": file_path
+                }
+
+            # Resolve file path
+            full_path = self.repo_path / file_path
+
+            # Ensure parent directory exists
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Handle hex mode
+            if hex_mode:
+                return self._write_as_hex(full_path, file_path, content, write_mode, start_offset)
+            else:
+                return self._write_as_text(full_path, file_path, content, write_mode, start_line)
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to write file: {str(e)}",
+                "file_path": file_path
+            }
+
+    def _parse_hex_content(self, hex_string: str) -> bytes:
+        """
+        Parse hex string into bytes, supporting multiple formats.
+
+        Args:
+            hex_string: Hex string in various formats
+
+        Returns:
+            Parsed bytes
+        """
+        # Remove common hex dump artifacts: addresses, colons, ASCII representation
+        lines = hex_string.strip().split('\n')
+        hex_parts = []
+
+        for line in lines:
+            # Check if line contains address (e.g., "00000000: ...")
+            if ':' in line:
+                # Extract hex part between ':' and any double-space or end
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    hex_part = parts[1].strip()
+                    # Remove ASCII representation (after double space)
+                    if '  ' in hex_part:
+                        hex_part = hex_part.split('  ')[0]
+                    hex_parts.append(hex_part)
+            else:
+                hex_parts.append(line.strip())
+
+        # Combine all hex parts
+        combined = ' '.join(hex_parts)
+
+        # Remove all whitespace
+        hex_clean = ''.join(combined.split())
+
+        # Validate hex string
+        if not all(c in '0123456789abcdefABCDEF' for c in hex_clean):
+            raise ValueError(f"Invalid hex string: contains non-hex characters")
+
+        if len(hex_clean) % 2 != 0:
+            raise ValueError(f"Invalid hex string: odd number of hex digits")
+
+        # Convert to bytes
+        return bytes.fromhex(hex_clean)
+
+    def _write_as_hex(self, full_path: Path, file_path: str, content: str,
+                      write_mode: str, start_offset: Optional[int]) -> Dict[str, Any]:
+        """
+        Write file in hex mode (binary).
+        """
+        try:
+            # Parse hex content
+            data = self._parse_hex_content(content)
+            bytes_to_write = len(data)
+
+            if write_mode == "create":
+                # Overwrite file
+                with open(full_path, 'wb') as f:
+                    f.write(data)
+
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "write_mode": "create",
+                    "mode": "hex",
+                    "bytes_written": bytes_to_write,
+                    "message": f"Created file with {bytes_to_write} bytes"
+                }
+
+            elif write_mode == "append":
+                # Append to end
+                with open(full_path, 'ab') as f:
+                    f.write(data)
+
+                new_size = full_path.stat().st_size
+
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "write_mode": "append",
+                    "mode": "hex",
+                    "bytes_written": bytes_to_write,
+                    "new_file_size": new_size,
+                    "message": f"Appended {bytes_to_write} bytes (new size: {new_size} bytes)"
+                }
+
+            elif write_mode == "insert":
+                if start_offset is None:
+                    return {
+                        "success": False,
+                        "error": "start_offset is required for insert mode in hex mode",
+                        "file_path": file_path
+                    }
+
+                # Read existing content
+                if full_path.exists():
+                    with open(full_path, 'rb') as f:
+                        existing_data = f.read()
+                else:
+                    existing_data = b''
+
+                # Validate offset
+                if start_offset < 0:
+                    return {
+                        "success": False,
+                        "error": f"Invalid start_offset: {start_offset} (must be >= 0)",
+                        "file_path": file_path
+                    }
+
+                if start_offset > len(existing_data):
+                    return {
+                        "success": False,
+                        "error": f"start_offset {start_offset} exceeds file size {len(existing_data)}",
+                        "file_path": file_path
+                    }
+
+                # Insert data
+                new_data = existing_data[:start_offset] + data + existing_data[start_offset:]
+
+                # Write back
+                with open(full_path, 'wb') as f:
+                    f.write(new_data)
+
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "write_mode": "insert",
+                    "mode": "hex",
+                    "insert_offset": start_offset,
+                    "bytes_written": bytes_to_write,
+                    "new_file_size": len(new_data),
+                    "message": f"Inserted {bytes_to_write} bytes at offset {start_offset} (new size: {len(new_data)} bytes)"
+                }
+
+        except ValueError as e:
+            return {
+                "success": False,
+                "error": f"Failed to parse hex content: {str(e)}",
+                "file_path": file_path
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to write file in hex mode: {str(e)}",
+                "file_path": file_path
+            }
+
+    def _write_as_text(self, full_path: Path, file_path: str, content: str,
+                       write_mode: str, start_line: Optional[int]) -> Dict[str, Any]:
+        """
+        Write file in text mode.
+        """
+        try:
+            if write_mode == "create":
+                # Overwrite file
+                with open(full_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+
+                lines_written = content.count('\n') + (1 if content and not content.endswith('\n') else 0)
+
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "write_mode": "create",
+                    "mode": "text",
+                    "bytes_written": len(content.encode('utf-8')),
+                    "lines_written": lines_written,
+                    "message": f"Created file with {lines_written} lines"
+                }
+
+            elif write_mode == "append":
+                # Append to end
+                with open(full_path, 'a', encoding='utf-8') as f:
+                    f.write(content)
+
+                lines_written = content.count('\n') + (1 if content and not content.endswith('\n') else 0)
+                total_lines = sum(1 for _ in open(full_path, 'r', encoding='utf-8'))
+
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "write_mode": "append",
+                    "mode": "text",
+                    "bytes_written": len(content.encode('utf-8')),
+                    "lines_written": lines_written,
+                    "total_lines": total_lines,
+                    "message": f"Appended {lines_written} lines (total: {total_lines} lines)"
+                }
+
+            elif write_mode == "insert":
+                if start_line is None:
+                    return {
+                        "success": False,
+                        "error": "start_line is required for insert mode in text mode",
+                        "file_path": file_path
+                    }
+
+                # Read existing content
+                if full_path.exists():
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                else:
+                    lines = []
+
+                # Validate line number
+                if start_line < 1:
+                    return {
+                        "success": False,
+                        "error": f"Invalid start_line: {start_line} (must be >= 1)",
+                        "file_path": file_path
+                    }
+
+                if start_line > len(lines) + 1:
+                    return {
+                        "success": False,
+                        "error": f"start_line {start_line} exceeds file length {len(lines)} + 1",
+                        "file_path": file_path
+                    }
+
+                # Insert content (before the specified line)
+                insert_idx = start_line - 1
+
+                # Ensure content ends with newline if inserting in middle
+                insert_content = content
+                if insert_idx < len(lines) and not insert_content.endswith('\n'):
+                    insert_content += '\n'
+
+                lines.insert(insert_idx, insert_content)
+
+                # Write back
+                with open(full_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+
+                lines_inserted = insert_content.count('\n') + (1 if insert_content and not insert_content.endswith('\n') else 0)
+
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "write_mode": "insert",
+                    "mode": "text",
+                    "insert_line": start_line,
+                    "lines_inserted": lines_inserted,
+                    "total_lines": len(lines),
+                    "message": f"Inserted {lines_inserted} lines before line {start_line} (total: {len(lines)} lines)"
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to write file in text mode: {str(e)}",
                 "file_path": file_path
             }
 

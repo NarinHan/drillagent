@@ -37,6 +37,8 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
         report = self.drill_agent.config.sanitizer_report
         if "AddressSanitizer" in report:
             self.sanitizer_type = "address"
+        elif "LeakSanitizer" in report:
+            self.sanitizer_type = "address"  # LSAN is part of ASAN. Can be turned off with ASAN_OPTIONS=detect_leaks=0
         elif "UndefinedBehaviorSanitizer" in report:
             self.sanitizer_type = "undefined"
         elif "MemorySanitizer" in report:
@@ -69,6 +71,8 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
                 raise ValueError("No build commands found in config")
             # Replace "set -eu" with "set -e" (don't be that strict)
             basic_build_cmds = re.sub(r'set\s+-eu', 'set -e', basic_build_cmds)
+            # Replace "cd /src/mruby" with ""
+            basic_build_cmds = re.sub(r'cd\s+/src/\S+', '', basic_build_cmds)
 
             # Step 1: Inject sanitizer flags into build commands
             if "-fsanitize=" not in basic_build_cmds:

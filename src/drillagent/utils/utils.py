@@ -7,10 +7,6 @@ from typing import Tuple
 # 
 # Basic file utility functions
 # 
-def get_file_size(file_path: str) -> int:
-    # Get the size of a file in bytes.
-    return os.path.getsize(file_path)
-
 def is_text_file(file_path: str) -> bool:
     # Check if a file is a text file using the file command.
     # Returns True if the file is a text file, False otherwise
@@ -256,6 +252,14 @@ def execute_command(command: str, env: dict = None) -> Tuple[int, str]:
         return -1, f"[ERROR] Command execution failed: {str(e)}"
 
 def detect_sanitizer_triggered(exec_output: str) -> bool:
+    if "AddressSanitizer failed to allocate" in exec_output:
+        # Memory allocation failure - likely due to memory limit, not a sanitizer error
+        print("  [Utils] Detected AddressSanitizer failed to allocate message.")
+        return False
+    if "AddressSanitizer: hard rss limit exhausted" in exec_output:
+        # Memory limit exceeded - likely due to memory limit, not a sanitizer error
+        print("  [Utils] Detected hard rss limit exhausted message - likely due to memory limit.")
+        return False
     # Detect if sanitizer errors are present in the execution output
     sanitizer_indicators = [
         "AddressSanitizer",

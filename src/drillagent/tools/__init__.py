@@ -7,6 +7,7 @@ All tools inherit from AgentTool base class and support both Claude and OpenAI s
 from .basic_tools import (
     AgentTool,
     ReadFileTool,
+    WriteFileTool,
     GrepTool,
     FindFileTool,
     ListDirTool,
@@ -38,6 +39,7 @@ __all__ = [
 
     # Basic repository exploration tools
     "ReadFileTool",
+    "WriteFileTool",
     "GrepTool",
     "FindFileTool",
     "ListDirTool",
