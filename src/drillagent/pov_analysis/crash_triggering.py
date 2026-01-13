@@ -1,7 +1,8 @@
 import os
 import re
-import subprocess
+import glob
 import shutil
+import subprocess
 from datetime import datetime
 
 from typing import Tuple, Dict, Any, TYPE_CHECKING
@@ -120,10 +121,8 @@ class CrashTriggerAgent:
                     'iteration': iteration,
                     'max_iterations': self.max_trigger_iterations
                 }
-                is_valid = self._validate_pov(pov_data, command)
-
                 # If valid PoV found, save it and stop
-                if is_valid:
+                if self._validate_pov(pov_data, command):
                     self.logger.info(f"  [CrashTriggerAgent] *** Valid PoV found at iteration {iteration}! ***")
                     # Save the final PoV to output directory
                     self._record_final_pov(pov_data, pov_path)
@@ -188,9 +187,13 @@ class CrashTriggerAgent:
             )
 
         # Prepare the target PoV file path
-        pov_filename = f"testcase-round{self.current_trigger_iteration}"  # "testcase-roundN"
+        # Add file suffix if available from vulnerability info
+        file_suffix = getattr(self.drill_agent.vulnerability_info, 'input_file_suffix', '') or ''
+        pov_filename = f"testcase-round{self.current_trigger_iteration}{file_suffix}"
         pov_path = os.path.join(round_dir, pov_filename)
         abs_pov_path = os.path.abspath(pov_path)
+        if file_suffix:
+            self.logger.debug(f"  [CrashTriggerAgent] Using file suffix from vulnerability info: {file_suffix}")
 
         # Substep 2: Use LLMInterface to generate the final PoV
         # Format the user prompt for PoV generation
@@ -228,8 +231,20 @@ class CrashTriggerAgent:
         self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
 
         # Substep 3: Verify that the PoV file was written and is non-empty
+        # Check if the exact path exists first
         if not os.path.exists(pov_path):
-            raise RuntimeError(f"PoV file was not created at {pov_path}. LLM may have failed to use write_file tool.")
+            # If not found, search for files matching the pattern (with potential extensions)
+            self.logger.debug(f"  [CrashTriggerAgent] Exact path {pov_path} not found, searching for pattern...")
+            search_pattern = f"{pov_path}*"
+            matching_files = glob.glob(search_pattern)
+            if not matching_files:
+                raise RuntimeError(
+                    f"PoV file was not created. Expected: {pov_path} or {pov_path}.* "
+                    f"LLM may have failed to use write_file tool."
+                )
+            # Update the path using the first matching file (should only be one)
+            pov_path = matching_files[0]
+            self.logger.info(f"  [CrashTriggerAgent] Found PoV with extension: {pov_path}")
 
         file_size = os.path.getsize(pov_path)
         if file_size == 0:

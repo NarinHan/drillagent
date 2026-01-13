@@ -443,7 +443,7 @@ class VulnAnalysisAgent:
                     self.logger.warning(f"      Neither entry '{entry_function}' nor crash '{crash_function}' found in trace, keeping full trace")
 
             if entry_function and crash_function:
-                self.logger.info(f"      Successfully trimmed from entry '{entry_function}' to crash '{crash_function}'!")
+                self.logger.info(f"    Successfully trimmed from entry '{entry_function}' to crash '{crash_function}'!")
 
                 # Update crash_location based on crash_function frame
                 crash_frame = next((f for f in trimmed_trace if f.get('function_name') == crash_function), None)
@@ -476,6 +476,7 @@ class VulnAnalysisAgent:
     def _refine_harness_command(self, project_name, actual_repo_path, raw_harness_command):
         # Refine harness command to use actual paths using LLM with tools
         # LLM: Using new LLMInterface with automatic agent loop
+        # TODO: We also need to extract the filename suffix instead of merely <path/to/testcase>.
         try:
             # Prepare the prompt
             user_prompt = VAA_harness_refine_prompt.format(
@@ -551,16 +552,19 @@ class VulnAnalysisAgent:
             # Store refined information
             self.vuln_info.binary_path = refined_info.get('binary_path', '')
             self.vuln_info.refined_harness_command = refined_info.get('refined_harness_command', '')
+            self.vuln_info.input_file_suffix = refined_info.get('input_file_suffix', '')
 
             self.logger.info(f"    ✓ Refined harness information:")
             self.logger.info(f"      Binary: {self.vuln_info.binary_path}")
             self.logger.info(f"      Command: {self.vuln_info.refined_harness_command}")
+            self.logger.info(f"      Input file suffix: {self.vuln_info.input_file_suffix if self.vuln_info.input_file_suffix else '(none)'}")
 
         except Exception as e:
             self.logger.error(f"  [VulnAnalysisAgent] Failed to refine harness command: {e}", exc_info=True)
             self.logger.error(f"  [VulnAnalysisAgent] Fallback to use raw harness command.")
             # Fallback: use original harness command
             self.vuln_info.refined_harness_command = raw_harness_command if raw_harness_command else ""
+            self.vuln_info.input_file_suffix = ""  # No suffix info in fallback
             # Try to extract binary path from original command
             if raw_harness_command:
                 parts = raw_harness_command.split()
@@ -720,7 +724,8 @@ class VulnInfo:
     call_trace: List[Dict[str, Any]] = field(default_factory=list)
     # harness details
     refined_harness_command: str = ""  # Refined harness command
-    binary_path: str = ""  # Relative path to the target binary
+    binary_path: str       = ""  # Relative path to the target binary
+    input_file_suffix: str = ""  # Input file suffix (e.g., .xml, .png)
     # vuln semantics
     vuln_type: str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
     root_cause: str = ""  # Root cause analysis result
@@ -784,6 +789,10 @@ class VulnInfo:
                 lines.append(f"    {self.refined_harness_command}")
         else:
             lines.append(f"  Harness Command:   N/A")
+        if self.input_file_suffix:
+            lines.append(f"  PoV File Suffix: {self.input_file_suffix}")
+        else:
+            lines.append(f"  PoV File Suffix: N/A")
         # Section 3: Call Trace
         lines.append("\n[CALL TRACE]")
         if self.call_trace and len(self.call_trace) > 0:

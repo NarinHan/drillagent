@@ -46,7 +46,11 @@ YOUR TASK:
    - For text-based test cases: use the `content` parameter with the test data as a string
    - For binary test cases: use the `hex_content` parameter with the test data as a hex string
    - The file should contain ONLY the test input data (no analysis, no comments)
-   - Example: write_file(file_path="{target_testcase_path}", content="your test data here")
+   - If the target path already has the correct extension, use it directly without modification
+   - If the target program requires a specific file extension (e.g., .xml, .pattern), you can append or modify the extension to the target path
+     - Example: If target is `/path/to/testcase-round1` and program needs XML, write to `/path/to/testcase-round1.xml`
+     - The base path and filename prefix must remain unchanged, only append extension if needed
+   - Example: write_file(file_path="/path/to/testcase-roundN[with optional suffix]", content="your test data here")
 
 4. **Explain your approach** (briefly):
    - What input pattern did you generate and why?

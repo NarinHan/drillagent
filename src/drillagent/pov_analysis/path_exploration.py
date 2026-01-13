@@ -1,7 +1,8 @@
 import os
 import re
-import subprocess
+import glob
 import shutil
+import subprocess
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 
@@ -194,9 +195,13 @@ class PathExplorationAgent:
             feedback_section = ""
 
         # Prepare the target test case path
-        test_case_filename = f"testcase-round{self.current_exp_iteration}"
+        # Add file suffix if available from vulnerability info
+        file_suffix = getattr(self.drill_agent.vulnerability_info, 'input_file_suffix', '') or ''
+        test_case_filename = f"testcase-round{self.current_exp_iteration}{file_suffix}"
         test_case_path = os.path.join(round_dir, test_case_filename)
         abs_test_case_path = os.path.abspath(test_case_path)
+        if file_suffix:
+            self.logger.debug(f"  [PathExplorationAgent] Using file suffix from vulnerability info: {file_suffix}")
 
         # Format the unified task prompt. (now root cause is included in vuln_info_str)
         user_prompt = PEA_testcase_generation_prompt.format(
@@ -231,8 +236,20 @@ class PathExplorationAgent:
         self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
 
         # Step 3: Verify that the test case file was written and is non-empty
+        # Check if the exact path exists first
         if not os.path.exists(test_case_path):
-            raise RuntimeError(f"Test case file was not created at {test_case_path}. LLM may have failed to use write_file tool.")
+            # If not found, search for files matching the pattern (with potential extensions)
+            self.logger.debug(f"  [PathExplorationAgent] Exact path {test_case_path} not found, searching for pattern...")
+            search_pattern = f"{test_case_path}*"
+            matching_files = glob.glob(search_pattern)
+            if not matching_files:
+                raise RuntimeError(
+                    f"Test case file was not created. Expected: {test_case_path} or {test_case_path}.* "
+                    f"LLM may have failed to use write_file tool."
+                )
+            # Update the path using the first matching file (should only be one)
+            test_case_path = matching_files[0]
+            self.logger.info(f"  [PathExplorationAgent] Found test case with extension: {test_case_path}")
 
         file_size = os.path.getsize(test_case_path)
         if file_size == 0:
@@ -273,6 +290,8 @@ class PathExplorationAgent:
             # Merge stdout and stderr as exec_output
             exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
             self.logger.info(f"  [PathExplorationAgent] Command exit code: {exit_code}")
+            if exit_code != 0:
+                self.logger.info(f"  [PathExplorationAgent] stderr: {stderr[:500]}...") # Log first 500 chars of stderr if error
         except subprocess.TimeoutExpired as e:
             self.logger.warning(f"  [PathExplorationAgent] Command execution timeout after 30s")
             exit_code = -1
