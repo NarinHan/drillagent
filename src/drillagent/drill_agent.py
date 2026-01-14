@@ -98,11 +98,7 @@ class DrillAgent:
                 ReadFileTool(self.config.target_repo_path),
                 WriteFileTool(self.config.target_repo_path),
                 BashTool(self.config.target_repo_path),
-                FinishTool(),
-                # GrepTool(self.config.target_repo_path),
-                # FindFileTool(self.config.target_repo_path),
-                # ListDirTool(self.config.target_repo_path),
-                # TreeTool(self.config.target_repo_path)
+                FinishTool()
             ]
             self.logger.info(f"✓ Agent basic tools initialized: {len(self.basic_tools)} tools available")
             # Note: cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
