@@ -121,19 +121,19 @@ class ReadFileTool(AgentTool):
     Useful for examining code mentioned in sanitizer reports or call traces.
     """
 
-    def __init__(self, repo_path: str):
+    def __init__(self, code_repo_path: str):
         """
         Initialize ReadFile tool.
 
         Args:
-            repo_path: Absolute path to the repository root
+            code_repo_path: Absolute path to the repository root
         """
-        self.repo_path = Path(repo_path).resolve()
+        self.code_repo_path = Path(code_repo_path).resolve()
 
-        if not self.repo_path.exists():
-            raise ValueError(f"Repository path does not exist: {repo_path}")
-        if not self.repo_path.is_dir():
-            raise ValueError(f"Repository path is not a directory: {repo_path}")
+        if not self.code_repo_path.exists():
+            raise ValueError(f"Repository path does not exist: {code_repo_path}")
+        if not self.code_repo_path.is_dir():
+            raise ValueError(f"Repository path is not a directory: {code_repo_path}")
 
     def name(self) -> str:
         return "read_file"
@@ -141,6 +141,7 @@ class ReadFileTool(AgentTool):
     def description(self) -> str:
         return (
             "Read file contents in text mode (with line numbers) or hex mode (binary dump). "
+            "Supports both relative paths (from code repository root) and absolute paths (any file on the system). "
             "\n\n"
             "TEXT MODE (default): Reads as UTF-8 text with line numbers. "
             "Use this for source code files mentioned in error messages, call traces, etc. "
@@ -153,6 +154,9 @@ class ReadFileTool(AgentTool):
             "00000010: 02 00 3e 00 01 00 00 00 50 10 40 00 00 00 00 00  ..>.....P.@.....\n"
             "\n"
             "Use start_offset and read_length to examine specific byte ranges in hex mode."
+            "\n\n"
+            "TIP: You can call this tool multiple times in a single response to read multiple files at once. "
+            "This is more efficient than reading files one by one across multiple turns."
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -160,8 +164,9 @@ class ReadFileTool(AgentTool):
             "file_path": {
                 "type": "string",
                 "description": (
-                    "Path to the file relative to repository root. "
-                    "Examples: 'src/parser.c', 'lib/buffer.cpp', 'main.c'"
+                    "Path to the file. Can be either: "
+                    "1) Relative path from code repository root (e.g., 'src/parser.c', 'lib/buffer.cpp'), or "
+                    "2) Absolute path to any file on the system (e.g., '/tmp/crash_input.bin', '/var/log/output.txt', 'path/to/testcase')."
                 ),
                 "required": True
             },
@@ -229,8 +234,13 @@ class ReadFileTool(AgentTool):
             Dict with success status, file content, and metadata
         """
         try:
-            # Resolve file path
-            full_path = self.repo_path / file_path
+            # Resolve file path - support both absolute and relative paths
+            if os.path.isabs(file_path):
+                # Absolute path: use as-is
+                full_path = Path(file_path)
+            else:
+                # Relative path: resolve relative to code_repo_path
+                full_path = self.code_repo_path / file_path
 
             # Check if file exists
             if not full_path.exists():
@@ -408,19 +418,19 @@ class WriteFileTool(AgentTool):
     Supports create, insert, and append operations.
     """
 
-    def __init__(self, repo_path: str):
+    def __init__(self, code_repo_path: str):
         """
         Initialize WritFile tool.
 
         Args:
-            repo_path: Absolute path to the repository root
+            code_repo_path: Absolute path to the repository root
         """
-        self.repo_path = Path(repo_path).resolve()
+        self.code_repo_path = Path(code_repo_path).resolve()
 
-        if not self.repo_path.exists():
-            raise ValueError(f"Repository path does not exist: {repo_path}")
-        if not self.repo_path.is_dir():
-            raise ValueError(f"Repository path is not a directory: {repo_path}")
+        if not self.code_repo_path.exists():
+            raise ValueError(f"Repository path does not exist: {code_repo_path}")
+        if not self.code_repo_path.is_dir():
+            raise ValueError(f"Repository path is not a directory: {code_repo_path}")
 
     def name(self) -> str:
         return "write_file"
@@ -428,6 +438,7 @@ class WriteFileTool(AgentTool):
     def description(self) -> str:
         return (
             "Write content to a file in text mode or hex mode with different write strategies. "
+            "Supports both relative paths (from code repository root) and absolute paths (any location on the system). "
             "\n\n"
             "WRITE MODES:\n"
             "- create: Overwrite file completely (creates new file if doesn't exist)\n"
@@ -459,8 +470,9 @@ class WriteFileTool(AgentTool):
             "file_path": {
                 "type": "string",
                 "description": (
-                    "Path to the file relative to repository root. "
-                    "Examples: 'output.txt', 'data/result.bin', 'patch.dat'"
+                    "Path to the file. Can be either: "
+                    "1) Relative path from code repository root (e.g., 'output.txt', 'data/result.bin'), or "
+                    "2) Absolute path to any location on the system (e.g., '/tmp/poc.bin', '/var/data/output.txt')"
                 ),
                 "required": True
             },
@@ -533,8 +545,13 @@ class WriteFileTool(AgentTool):
                     "file_path": file_path
                 }
 
-            # Resolve file path
-            full_path = self.repo_path / file_path
+            # Resolve file path - support both absolute and relative paths
+            if os.path.isabs(file_path):
+                # Absolute path: use as-is
+                full_path = Path(file_path)
+            else:
+                # Relative path: resolve relative to code_repo_path
+                full_path = self.code_repo_path / file_path
 
             # Ensure parent directory exists
             full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -805,6 +822,372 @@ class WriteFileTool(AgentTool):
             }
 
 
+class BashTool(AgentTool):
+    """
+    Tool for executing bash commands with whitelist-based security.
+    Useful for file operations, binary analysis, and running Python scripts.
+    """
+
+    def __init__(self, code_repo_path: str):
+        """
+        Initialize BashTool.
+
+        Args:
+            code_repo_path: Absolute path to the repository root
+        """
+        self.code_repo_path = Path(code_repo_path).resolve()
+
+        if not self.code_repo_path.exists():
+            raise ValueError(f"Repository path does not exist: {code_repo_path}")
+        if not self.code_repo_path.is_dir():
+            raise ValueError(f"Repository path is not a directory: {code_repo_path}")
+
+        # Whitelist of allowed commands
+        self.allowed_commands = {
+            # File operations
+            'ls', 'cat', 'head', 'tail', 'tree', 'wc', 'file', 'stat', 'chmod',
+            # Search/find
+            'grep', 'find', 'locate',
+            # Binary analysis
+            'strings', 'xxd', 'hexdump', 'od', 'objdump', 'readelf', 'nm', 'ldd',
+            # Python execution
+            'python3',
+            # Utilities
+            'diff', 'base64', 'md5sum', 'sha256sum', 'timeout',
+            # Additional common tools
+            'echo', 'realpath', 'pwd', 'mkdir', 'touch', 'cp', 'mv',
+            # Compilation/build
+            # 'gcc', 'g++', 'clang', 'make', 'cmake',
+            # Advanced tools
+            # 'llvm-cov', 'ast-grep', 'clangd', 'ksc'
+        }
+
+        # Forbidden patterns (regex)
+        # Note: Use \b word boundaries to avoid false positives (e.g., "nc" in "include")
+        self.forbidden_patterns = [
+            (r"\brm\s+-rf\b", "Recursive deletion (rm -rf) is forbidden"),
+            (r"\bwget\b|\bcurl\b", "Network downloads (wget/curl) are forbidden"),
+            (r"\bnc\b|\bnetcat\b", "Network connections (nc/netcat) are forbidden"),
+            (r">\s*/etc", "Writing to /etc is forbidden"),
+            (r">\s*/dev/sd", "Writing to disk devices is forbidden"),
+            (r"\bmkfs\b", "Filesystem operations (mkfs) are forbidden"),
+            (r"\bdd\b\s+.*of=/dev", "Dangerous dd operations to devices are forbidden"),
+        ]
+
+        # Timeout for command execution (seconds)
+        self.timeout = 30
+
+        # Maximum output length (characters)
+        self.max_output_chars = 30000
+
+    def name(self) -> str:
+        return "execute_bash"
+
+    def description(self) -> str:
+        cmd_list = ", ".join(sorted(self.allowed_commands))
+        forbidden_desc = "\n".join([f"  - {desc}" for _, desc in self.forbidden_patterns])
+
+        return (
+            "Execute bash commands for file operations, binary analysis, and running scripts.\n"
+            "\n"
+            "COMMAND EXECUTION:\n"
+            "- You can only execute ONE bash command at a time. To run multiple commands sequentially, use `&&` or `;` to chain them together.\n"
+            "- Use efficient commands (ls, find, grep, etc.) with appropriate filters to minimize unnecessary operations.\n"
+            "\n"
+            "ALLOWED COMMANDS:\n"
+            f"{cmd_list}\n"
+            "\n"
+            "FORBIDDEN OPERATIONS:\n"
+            f"{forbidden_desc}\n"
+            "\n"
+            "PYTHON EXECUTION:\n"
+            "To run Python code:\n"
+            "1. Use write_file to create a .py script\n"
+            "2. Use execute_bash to run: python3 /path/to/your_script.py\n"
+            "3. Common python libraries: os, struct, io(.BytesIO), binascii, zlib, etc.\n"
+            "4. Do NOT attempt pip install - all necessary libraries are pre-installed\n"
+            "\n"
+            "WORKING DIRECTORY:\n"
+            f"Commands execute in the specified `working_dir` (default: code repository root).\n"
+            "`working_dir` can be relative (to repo root) or absolute path.\n"
+            "Try to maintain working directory by using absolute paths and avoiding excessive use of `cd`.\n"
+            "\n"
+            "OUTPUT TRUNCATION:\n"
+            f"If the output exceeds {self.max_output_chars} characters, it will be truncated.\n"
+            "Control output size yourself using:\n"
+            "  - head -n 100 (first 100 lines)\n"
+            "  - tail -n 50 (last 50 lines)\n"
+            "  - grep with filters\n"
+            "\n"
+            f"TIMEOUT: {self.timeout} seconds per command\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  - List files: ls -la\n"
+            "  - Examine binary: readelf -h ./target\n"
+            "  - Search strings: strings ./binary | grep 'flag'\n"
+            "  - Run analysis: python3 /path/to/analyze.py\n"
+            "  - Chain commands: mkdir -p output && cp file.txt output/\n"
+            "TIP: You can call this tool multiple times in a single response to conduct multiple read operations at once, which could be more efficient. "
+        )
+
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "command": {
+                "type": "string",
+                "description": (
+                    "The bash command to execute. "
+                    f"Must start with one of the allowed commands: {', '.join(sorted(self.allowed_commands))}. "
+                    "Use pipes, redirects, and command substitution as needed."
+                ),
+                "required": True
+            },
+            "working_dir": {
+                "type": "string",
+                "description": (
+                    "Working directory for command execution. Can be either: "
+                    "1) Relative path from code repository root (e.g., '.', 'src', 'build'), or "
+                    "2) Absolute path to any directory on the system (e.g., '/tmp', '/var/data', '/path/to/agent/workspace/'). "
+                    "Default: '.' (code repository root)"
+                ),
+                "required": False
+            }
+        }
+
+    def execute(self, command: str, working_dir: str = ".") -> Dict[str, Any]:
+        """
+        Execute a bash command with security checks.
+
+        Args:
+            command: The bash command to execute
+            working_dir: Working directory relative to repo root (default: ".")
+
+        Returns:
+            Dict with execution results:
+            - success: Always True unless validation fails
+            - stdout: Command standard output
+            - stderr: Command standard error
+            - exit_code: Command exit code (0 = success)
+            - command: The executed command
+            - working_dir: The actual working directory used
+            - blocked_reason: Present if command was blocked (success=False)
+        """
+        try:
+            # Step 1: Resolve working directory
+            if working_dir.startswith('/'):
+                # Absolute path
+                work_path = Path(working_dir)
+            else:
+                # Relative to code_repo_path
+                work_path = self.code_repo_path / working_dir
+
+            work_path = work_path.resolve()
+
+            # Ensure working directory exists
+            if not work_path.exists():
+                return {
+                    "success": False,
+                    "error": f"Working directory does not exist: {working_dir}",
+                    "command": command,
+                    "blocked_reason": "invalid_working_dir"
+                }
+
+            if not work_path.is_dir():
+                return {
+                    "success": False,
+                    "error": f"Working directory is not a directory: {working_dir}",
+                    "command": command,
+                    "blocked_reason": "invalid_working_dir"
+                }
+
+            # Step 2: Parse command to extract command name
+            import shlex
+            try:
+                tokens = shlex.split(command)
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error": f"Failed to parse command: {str(e)}",
+                    "command": command,
+                    "blocked_reason": "parse_error"
+                }
+
+            if not tokens:
+                return {
+                    "success": False,
+                    "error": "Empty command",
+                    "command": command,
+                    "blocked_reason": "empty_command"
+                }
+
+            # Extract the base command (first token)
+            base_command = tokens[0]
+
+            # Step 3: Whitelist validation
+            if base_command not in self.allowed_commands:
+                allowed_list = ", ".join(sorted(self.allowed_commands))
+                return {
+                    "success": False,
+                    "error": (
+                        f"Command '{base_command}' is not allowed. "
+                        f"Allowed commands: {allowed_list}"
+                    ),
+                    "command": command,
+                    "blocked_reason": "command_not_in_whitelist"
+                }
+
+            # Step 4: Forbidden patterns 
+            # TODO: also avoid visiting gt_povs and success_povs (these are our debug data)
+            import re
+            for pattern, description in self.forbidden_patterns:
+                if re.search(pattern, command, re.IGNORECASE):
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Command matches forbidden pattern: {description}\n"
+                            f"Pattern: {pattern}\n"
+                            f"Command: {command}"
+                        ),
+                        "command": command,
+                        "blocked_reason": "forbidden_pattern"
+                    }
+
+            # Step 5: Execute command
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=str(work_path),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout
+            )
+
+            # Step 6: Truncate output if necessary
+            stdout = result.stdout
+            stderr = result.stderr
+            truncated = False
+
+            if len(stdout) > self.max_output_chars:
+                stdout = stdout[:self.max_output_chars] + f"\n\n... [OUTPUT TRUNCATED: {len(result.stdout)} chars total, showing first {self.max_output_chars}]"
+                truncated = True
+
+            if len(stderr) > self.max_output_chars:
+                stderr = stderr[:self.max_output_chars] + f"\n\n... [STDERR TRUNCATED: {len(result.stderr)} chars total, showing first {self.max_output_chars}]"
+                truncated = True
+
+            # Return results (success=True even if exit_code != 0)
+            response = {
+                "success": True,
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": result.returncode,
+                "command": command,
+                "working_dir": str(work_path.relative_to(self.code_repo_path)) if work_path.is_relative_to(self.code_repo_path) else str(work_path)
+            }
+
+            if truncated:
+                response["truncated"] = True
+
+            return response
+
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": f"Command timed out after {self.timeout} seconds",
+                "command": command,
+                "blocked_reason": "timeout"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Execution failed: {str(e)}",
+                "command": command,
+                "blocked_reason": "execution_error"
+            }
+
+
+class FinishTool(AgentTool):
+    """
+    Tool to signal the completion of the agent's task.
+    Requires a summary message and task completion status.
+    """
+
+    def name(self) -> str:
+        return "finish"
+
+    def description(self) -> str:
+        return """Signals the completion of the current task or conversation.
+
+Use this tool when:
+- You have successfully completed the user's requested task
+- You have partially completed the task but cannot proceed further
+- You cannot proceed further due to technical limitations or missing information
+
+The message should include:
+- A clear summary of actions taken and their results
+- The path to the generated PoV file (if applicable)
+- Explanation if you're unable to complete the task
+- Any relevant findings or observations
+
+The task_completed field indicates your completion status:
+- "true": Task fully completed successfully
+- "false": Task could not be completed
+- "partial": Task partially completed (some progress made but not fully done)
+"""
+
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "message": {
+                "type": "string",
+                "description": (
+                    "Final message summarizing the task outcome. "
+                    "Include: actions taken, results achieved, PoV file path (if generated), "
+                    "and any important observations or limitations encountered."
+                ),
+                "required": True
+            },
+            "task_completed": {
+                "type": "string",
+                "description": (
+                    "Task completion status: "
+                    "'true' if fully completed, "
+                    "'false' if unable to complete, "
+                    "'partial' if some progress was made but task is not fully done."
+                ),
+                "enum": ["true", "false", "partial"],
+                "required": True
+            }
+        }
+
+    def execute(self, message: str, task_completed: str) -> Dict[str, Any]:
+        """
+        Execute finish tool.
+
+        Args:
+            message: Final summary message describing what was accomplished
+            task_completed: Completion status ('true', 'false', or 'partial')
+
+        Returns:
+            Dict indicating completion with the provided message and status
+        """
+        # Validate task_completed value
+        valid_statuses = ["true", "false", "partial"]
+        if task_completed not in valid_statuses:
+            return {
+                "success": False,
+                "error": f"Invalid task_completed value: {task_completed}. Must be one of: {valid_statuses}"
+            }
+
+        return {
+            "success": True,
+            "message": message,
+            "task_completed": task_completed
+        }
+
+
+
+# 
+# If we have bash tool, we can remove the following tools that overlap in functionality.
+# 
 class GrepTool(AgentTool):
     """
     Tool for searching code patterns across the repository.

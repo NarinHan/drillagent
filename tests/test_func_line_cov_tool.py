@@ -60,7 +60,7 @@ def test_schema_conversion():
         print(json.dumps(openai_schema, indent=2))
 
         # Verify required fields
-        assert claude_schema["name"] == "retrieve_function_line_coverage"
+        assert claude_schema["name"] == "get_function_line_coverage"
         assert "description" in claude_schema
         assert "input_schema" in claude_schema
         assert "properties" in claude_schema["input_schema"]

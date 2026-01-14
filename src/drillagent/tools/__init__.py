@@ -8,6 +8,8 @@ from .basic_tools import (
     AgentTool,
     ReadFileTool,
     WriteFileTool,
+    BashTool,
+    FinishTool,
     GrepTool,
     FindFileTool,
     ListDirTool,
@@ -40,6 +42,8 @@ __all__ = [
     # Basic repository exploration tools
     "ReadFileTool",
     "WriteFileTool",
+    "BashTool",
+    "FinishTool",
     "GrepTool",
     "FindFileTool",
     "ListDirTool",

@@ -33,7 +33,7 @@ import os
 import json
 import logging
 import time
-from typing import Optional, List, Dict, Any, Tuple, Callable, Iterator
+from typing import Optional, List, Dict, Any, Tuple, Callable
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -218,7 +218,7 @@ class LLMInterface:
         # Automatic agent loop (recommended)
         result = llm.run_agent_loop(
             task="Find and analyze main.py",
-            tools=[ReadFileTool(), GrepTool()],
+            tools=[ReadFileTool(), BashTool()],
             max_iterations=5
         )
 
@@ -397,27 +397,41 @@ class LLMInterface:
         - Provider-specific message formatting
         - Iteration control
         - Error handling with automatic retries
+        - Finish tool detection for early exit
+
+        The loop exits when:
+        1. LLM calls the 'finish' tool (preferred - explicit completion signal)
+        2. LLM stops calling tools with stop_reason 'end_turn'/'stop'
+        3. Max iterations reached
+        4. Error occurs
 
         Args:
             task: The task description for the agent
-            tools: List of AgentTool instances
+            tools: List of AgentTool instances (should include FinishTool for explicit completion)
             system_prompt: Optional system instruction
             max_iterations: Maximum number of iterations
             temperature: Sampling temperature
             max_tokens: Max tokens **per LLM generation**
             tool_executor: Optional custom tool executor function(tool_calls, tools) -> List[results]
                           If None, uses default executor that calls tool.execute()
-            continuation_prompt: Prompt to send after tool results
+            continuation_prompt: Prompt to send after tool results (not used if finish tool is called)
             on_iteration: Optional callback(iteration, response, tool_calls) called each iteration
             max_retries: Maximum retries for rate limit/timeout errors (default: 3)
 
         Returns:
             Dict containing:
             - success: bool - whether task completed successfully
-            - final_response: str - final text response from LLM
+            - final_response: str - final text response from LLM (or finish tool message)
             - iterations: int - number of iterations used
             - conversation: ConversationManager - full conversation history
-            - stop_reason: str - why the agent stopped
+            - stop_reason: str - why the agent stopped:
+                * 'finish_tool_true' - finish tool called with task_completed=true
+                * 'finish_tool_false' - finish tool called with task_completed=false
+                * 'finish_tool_partial' - finish tool called with task_completed=partial
+                * 'end_turn'/'stop' - LLM stopped naturally without tool calls
+                * 'max_iterations' - reached iteration limit
+                * 'rate_limit_error'/'timeout_error'/'llm_error' - various errors
+            - task_completed: Optional[str] - 'true'/'false'/'partial' (only when finish tool used)
             - error: Optional[str] - error message if failed
             - usage_stats: Dict - token usage statistics for this call only
         """
@@ -705,14 +719,73 @@ class LLMInterface:
                     tool_results = [f"Unexpected error: {e}"] * len(tool_calls)
 
                 # Log tool results to update the last interaction
+                # Pass both tool_calls and tool_results for structured logging
                 if self.output_dir:
                     try:
-                        log_tool_results(self.output_dir, tool_results)
+                        log_tool_results(self.output_dir, tool_calls, tool_results)
                     except Exception as e:
                         self.logger.warning(f"Failed to log tool results: {e}")
 
                 # Automatically add tool results to history (handles provider differences)
                 conversation.add_tool_results(tool_calls, tool_results)
+
+                # ==================== Finish Tool Detection ====================
+                # Check if the LLM called the 'finish' tool to signal task completion
+                # This allows early exit from the loop without wasting continuation prompts
+                for i, tool_call in enumerate(tool_calls):
+                    if tool_call.get('name') == 'finish':
+                        # Extract finish tool result
+                        finish_result = tool_results[i]
+
+                        # Handle both dict results and error strings
+                        if isinstance(finish_result, dict):
+                            task_completed = finish_result.get('task_completed', 'false')
+                            finish_message = finish_result.get('message', text_response)
+                            finish_success = finish_result.get('success', True)
+                        else:
+                            # Error occurred during finish tool execution
+                            task_completed = 'false'
+                            finish_message = str(finish_result)
+                            finish_success = False
+
+                        # Determine overall success based on task_completed status
+                        # 'true' or 'partial' are considered successful exits
+                        success = finish_success and task_completed in ['true', 'partial']
+
+                        self.logger.info(
+                            f"Finish tool called at iteration {iteration}: "
+                            f"task_completed={task_completed}, success={success}"
+                        )
+
+                        result = {
+                            'success': success,
+                            'final_response': finish_message,
+                            'iterations': iteration,
+                            'conversation': conversation,
+                            'stop_reason': f'finish_tool_{task_completed}',
+                            'task_completed': task_completed,
+                            'usage_stats': self.usage_stats.to_dict()
+                        }
+
+                        # Add error info if task was not completed
+                        if task_completed == 'false':
+                            result['error'] = f"Task not completed: {finish_message}"
+
+                        # Log agent loop end
+                        if self.output_dir:
+                            try:
+                                log_agent_loop_end(
+                                    output_dir=self.output_dir,
+                                    success=success,
+                                    final_response=finish_message,
+                                    iterations=iteration,
+                                    stop_reason=f'finish_tool_{task_completed}'
+                                )
+                            except Exception as log_err:
+                                self.logger.warning(f"Failed to log agent loop end: {log_err}")
+
+                        return result
+                # ==================== End Finish Tool Detection ====================
 
                 # Prepare next iteration prompt based on remaining iterations
                 # In the second-to-last round, tools can still be called one final time, and in the final round (the last round), tool calls are disabled.

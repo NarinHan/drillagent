@@ -125,21 +125,41 @@ def log_llm_interaction(
         f.write(json.dumps(log_data, indent=2, ensure_ascii=False) + "\n")
 
 
-def log_tool_results(output_dir: str, tool_results: List[Any]) -> None:
+def log_tool_results(
+    output_dir: str,
+    tool_calls: List[Dict[str, Any]],
+    tool_results: List[Any]
+) -> None:
     """
     Update the last LLM interaction with tool execution results.
 
     This should be called after tools are executed to append their results
-    to the most recent llm_interaction entry.
+    to the most recent llm_interaction entry. The results are stored in a
+    structured format that clearly associates each result with its tool call.
 
     Args:
         output_dir: Directory where llm_history.json is stored
-        tool_results: List of tool execution results
+        tool_calls: List of tool calls from LLM, each containing:
+            - id: Unique identifier for the tool call
+            - name: Name of the tool
+            - arguments: Arguments passed to the tool
+        tool_results: List of tool execution results (same order as tool_calls)
     """
     log_file = Path(output_dir) / "llm_history.json"
 
     if not log_file.exists():
         return  # Nothing to update
+
+    # Build structured tool results with clear association to tool calls
+    structured_results = []
+    for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
+        structured_results.append({
+            "index": i,
+            "tool_call_id": tool_call.get("id", f"unknown_{i}"),
+            "tool_name": tool_call.get("name", "unknown"),
+            "arguments": tool_call.get("arguments", {}),
+            "result": result
+        })
 
     # Read existing content
     with open(log_file, 'r', encoding='utf-8') as f:
@@ -149,7 +169,7 @@ def log_tool_results(output_dir: str, tool_results: List[Any]) -> None:
     interactions = log_data.get("interactions", [])
     for i in range(len(interactions) - 1, -1, -1):
         if interactions[i].get("type") == "llm_interaction":
-            interactions[i]["tool_results"] = tool_results
+            interactions[i]["tool_results"] = structured_results
             break
 
     # Write back

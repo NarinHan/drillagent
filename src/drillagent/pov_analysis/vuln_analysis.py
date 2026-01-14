@@ -26,7 +26,7 @@ class VulnAnalysisAgent:
         self.config: 'AgentConfig' = drill_agent.config
         self.logger: logging.Logger = drill_agent.logger
         self.basic_tools: List['AgentTool']    = drill_agent.basic_tools
-        self.enhanced_tools: List['AgentTool'] = drill_agent.basic_tools + drill_agent.cov_tools + drill_agent.ast_grep_tools
+        self.enhanced_tools: List['AgentTool'] = drill_agent.basic_tools + drill_agent.ast_grep_tools
         # Sometimes ast-grep may not be usable, so we keep both basic and enhanced toolsets.
 
         # Vulnerability information container!!!!! 
@@ -304,7 +304,7 @@ class VulnAnalysisAgent:
                 ),
                 tools=self.basic_tools,  # Provide tools to locate files if needed
                 system_prompt=VAA_system_prompt,
-                max_iterations=5,  # Allow a few iterations for file location
+                max_iterations=10,  # Allow a few iterations for file location
                 temperature=0.1,
                 max_tokens=4096,
                 continuation_prompt="Please continue transforming the call trace and provide the final JSON output."
@@ -340,7 +340,7 @@ class VulnAnalysisAgent:
                     entry['file_path'] = file_path
                     validated_trace.append(entry)
                 else:
-                    self.logger.warning(f"      ✗ File not found for frame #{entry.get('sequence_num')}: {abs_path}")
+                    self.logger.warning(f"    ✗ File not found for frame #{entry.get('sequence_num')}: {abs_path}")
             self.logger.info(f"Validated file paths in call trace: {len(validated_trace)} valid frames (from {len(parsed_data['call_trace'])} total)")
 
             # Print trace before line number adjustment (for debug)
@@ -385,7 +385,7 @@ class VulnAnalysisAgent:
                         max_iterations=3,
                         temperature=0.1,
                         max_tokens=4096,
-                        continuation_prompt="Please continue verifying the line number using the code browsing tools and provide the final JSON output."
+                        continuation_prompt="Please continue verifying the line number using the tools and provide the final JSON output."
                     )
 
                     if result['success']:

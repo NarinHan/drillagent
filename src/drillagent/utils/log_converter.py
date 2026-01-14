@@ -130,8 +130,8 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
 
     # Tool results
     if tool_results and tool_calls:
-        # Filter to only show results for retrieve_function_line_coverage
-        whilelist_tools = ["retrieve_function_line_coverage"]
+        # Filter to only show results for get_function_line_coverage
+        whilelist_tools = ["get_function_line_coverage"]
         coverage_results = []
         for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
             tool_name = tool_call.get("name", "unknown")
@@ -153,9 +153,9 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
         prompt_tokens = usage_stats.get("prompt_tokens", 0)
         completion_tokens = usage_stats.get("completion_tokens", 0)
         api_calls = usage_stats.get("api_calls", 0)
-        output.append(f"\n### 📊 Usage Stats:")
-        output.append(f"  Total Tokens: {total_tokens:,} (Prompt: {prompt_tokens:,} | Completion: {completion_tokens:,})")
-        output.append(f"  API Calls: {api_calls}")
+        # output.append(f"\n### 📊 Usage Stats:")
+        # output.append(f"  Total Tokens: {total_tokens:,} (Prompt: {prompt_tokens:,} | Completion: {completion_tokens:,})")
+        # output.append(f"  API Calls: {api_calls}")
 
     output.append("~" * 100 + "\n")
 
