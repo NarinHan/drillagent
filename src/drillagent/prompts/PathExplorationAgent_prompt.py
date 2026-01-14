@@ -8,7 +8,9 @@ When generating test cases:
 - Study the call trace to understand the execution path leading to the vulnerability
 - Consider edge cases and malicious input patterns that could trigger the vulnerability
 
-IMPORTANT: Start with simple test cases and avoid over-engineering. Focus on reaching the vulnerable code path first.
+EFFICIENCY TIP: You can call multiple tools in a single response. When you need to read several related source files (e.g., to understand a call chain), call `read_file` multiple times (<= 5) in one turn rather than reading them one by one across multiple turns. This saves iterations and gives you more context at once.
+
+IMPORTANT: Start with simple test cases and avoid over-engineering. Focus on reaching the target vulnerable function along correct path first.
 """
 
 

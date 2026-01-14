@@ -13,6 +13,8 @@ When generating PoVs:
 - For NULL Pointer Dereference (NPD): create inputs that cause NULL pointers to be dereferenced
 - For Out-of-Bounds (OOB) access: generate inputs that access memory beyond valid bounds (e.g., larger array indices)
 
+EFFICIENCY TIP: You can call multiple tools in a single response. When you need to read several related source files (e.g., to understand a call chain), call `read_file` multiple times (<= 5) in one turn rather than reading them one by one across multiple turns. This saves iterations and gives you more context at once.
+
 IMPORTANT:
 - Start with simple PoVs and avoid over-engineering. Focus on triggering the crash first.
 - If previous simple test cases failed, you can increase complexity based on the feedback.
@@ -38,7 +40,7 @@ CTA_coverage_config_template = """During previous round of PoV generation, the g
 By executing this test case, we have obtained code coverage profile data stored in:
 - profdata_path: `{profdata_path}`
 
-You are encouraged to use the `retrieve_function_line_coverage` tool to analyze code coverage of previous execution, and synthesize the insights into your final PoV.
+You are encouraged to use the `get_function_line_coverage` tool to analyze code coverage of previous execution, and synthesize the insights into your final PoV.
 Example tool call:
 {{
     "profdata_path": "path/to/xxx.profdata",

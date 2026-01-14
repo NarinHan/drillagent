@@ -33,7 +33,7 @@ class FuncLineCovTool(AgentTool):
             raise ValueError(f"Binary file not found: {binary_path}")
 
     def name(self) -> str:
-        return "retrieve_function_line_coverage"
+        return "get_function_line_coverage"
 
     def description(self) -> str:
         return (

@@ -154,6 +154,9 @@ class ReadFileTool(AgentTool):
             "00000010: 02 00 3e 00 01 00 00 00 50 10 40 00 00 00 00 00  ..>.....P.@.....\n"
             "\n"
             "Use start_offset and read_length to examine specific byte ranges in hex mode."
+            "\n\n"
+            "TIP: You can call this tool multiple times in a single response to read multiple files at once. "
+            "This is more efficient than reading files one by one across multiple turns."
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -860,14 +863,15 @@ class BashTool(AgentTool):
         }
 
         # Forbidden patterns (regex)
+        # Note: Use \b word boundaries to avoid false positives (e.g., "nc" in "include")
         self.forbidden_patterns = [
-            (r"rm\s+-rf", "Recursive deletion (rm -rf) is forbidden"),
-            (r"wget|curl", "Network downloads (wget/curl) are forbidden"),
-            (r"nc|netcat", "Network connections (nc/netcat) are forbidden"),
+            (r"\brm\s+-rf\b", "Recursive deletion (rm -rf) is forbidden"),
+            (r"\bwget\b|\bcurl\b", "Network downloads (wget/curl) are forbidden"),
+            (r"\bnc\b|\bnetcat\b", "Network connections (nc/netcat) are forbidden"),
             (r">\s*/etc", "Writing to /etc is forbidden"),
             (r">\s*/dev/sd", "Writing to disk devices is forbidden"),
-            (r"mkfs", "Filesystem operations (mkfs) are forbidden"),
-            (r"dd\s+.*of=/dev", "Dangerous dd operations to devices are forbidden"),
+            (r"\bmkfs\b", "Filesystem operations (mkfs) are forbidden"),
+            (r"\bdd\b\s+.*of=/dev", "Dangerous dd operations to devices are forbidden"),
         ]
 
         # Timeout for command execution (seconds)
@@ -923,6 +927,7 @@ class BashTool(AgentTool):
             "  - Search strings: strings ./binary | grep 'flag'\n"
             "  - Run analysis: python3 /path/to/analyze.py\n"
             "  - Chain commands: mkdir -p output && cp file.txt output/\n"
+            "TIP: You can call this tool multiple times in a single response to conduct multiple read operations at once, which could be more efficient. "
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -1103,30 +1108,79 @@ class BashTool(AgentTool):
 class FinishTool(AgentTool):
     """
     Tool to signal the completion of the agent's task.
+    Requires a summary message and task completion status.
     """
 
     def name(self) -> str:
         return "finish"
 
     def description(self) -> str:
-        return (
-            "Indicate that the agent has completed its task. "
-            "No further actions are needed."
-        )
+        return """Signals the completion of the current task or conversation.
+
+Use this tool when:
+- You have successfully completed the user's requested task
+- You have partially completed the task but cannot proceed further
+- You cannot proceed further due to technical limitations or missing information
+
+The message should include:
+- A clear summary of actions taken and their results
+- The path to the generated PoV file (if applicable)
+- Explanation if you're unable to complete the task
+- Any relevant findings or observations
+
+The task_completed field indicates your completion status:
+- "true": Task fully completed successfully
+- "false": Task could not be completed
+- "partial": Task partially completed (some progress made but not fully done)
+"""
 
     def parameters_schema(self) -> Dict[str, Any]:
-        return {}
+        return {
+            "message": {
+                "type": "string",
+                "description": (
+                    "Final message summarizing the task outcome. "
+                    "Include: actions taken, results achieved, PoV file path (if generated), "
+                    "and any important observations or limitations encountered."
+                ),
+                "required": True
+            },
+            "task_completed": {
+                "type": "string",
+                "description": (
+                    "Task completion status: "
+                    "'true' if fully completed, "
+                    "'false' if unable to complete, "
+                    "'partial' if some progress was made but task is not fully done."
+                ),
+                "enum": ["true", "false", "partial"],
+                "required": True
+            }
+        }
 
-    def execute(self) -> Dict[str, Any]:
+    def execute(self, message: str, task_completed: str) -> Dict[str, Any]:
         """
         Execute finish tool.
 
+        Args:
+            message: Final summary message describing what was accomplished
+            task_completed: Completion status ('true', 'false', or 'partial')
+
         Returns:
-            Dict indicating completion
+            Dict indicating completion with the provided message and status
         """
+        # Validate task_completed value
+        valid_statuses = ["true", "false", "partial"]
+        if task_completed not in valid_statuses:
+            return {
+                "success": False,
+                "error": f"Invalid task_completed value: {task_completed}. Must be one of: {valid_statuses}"
+            }
+
         return {
             "success": True,
-            "message": "Agent has finished its task."
+            "message": message,
+            "task_completed": task_completed
         }
 
 

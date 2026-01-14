@@ -98,6 +98,7 @@ class DrillAgent:
                 ReadFileTool(self.config.target_repo_path),
                 WriteFileTool(self.config.target_repo_path),
                 BashTool(self.config.target_repo_path),
+                FinishTool(),
                 # GrepTool(self.config.target_repo_path),
                 # FindFileTool(self.config.target_repo_path),
                 # ListDirTool(self.config.target_repo_path),

@@ -11,6 +11,8 @@ When using tools and generating paths, please adhere to the following guidelines
 
 When exploring the codebase, use efficient commands like ls, find, grep, etc. with appropriate filters to minimize unnecessary operations.
 
+EFFICIENCY TIP: You can call multiple tools in a single response. When you need to read several related source files (e.g., to understand a call chain), call `read_file` multiple times (<= 5) in one turn rather than reading them one by one across multiple turns. This saves iterations and gives you more context at once.
+
 """
 
 

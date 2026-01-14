@@ -161,7 +161,7 @@ class PathExplorationAgent:
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep1: Generating test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
-        max_generation_turns = 20 # We can set this parameter.
+        max_generation_turns = 10 # 10 or 15 or 20
 
         # Step 1: Construct the prompt for test case generation
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
@@ -221,7 +221,7 @@ class PathExplorationAgent:
             task=user_prompt,
             tools=self.tools_for_generation, # When generating test case, LLM is encouraged to use tools
             system_prompt=PEA_system_prompt,
-            max_iterations=max_generation_turns,  # Allow up to 20 rounds of tool usage
+            max_iterations=max_generation_turns, # tunable parameter
             temperature=0.7,  # Higher temperature for creative test case generation
             max_tokens=30720,
             # TODO: FIX: The continuation_prompt should be different if there is already a test case written. 
