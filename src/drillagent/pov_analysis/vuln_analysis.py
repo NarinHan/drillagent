@@ -26,7 +26,7 @@ class VulnAnalysisAgent:
         self.config: 'AgentConfig' = drill_agent.config
         self.logger: logging.Logger = drill_agent.logger
         self.basic_tools: List['AgentTool']    = drill_agent.basic_tools
-        self.enhanced_tools: List['AgentTool'] = drill_agent.basic_tools + drill_agent.cov_tools + drill_agent.ast_grep_tools
+        self.enhanced_tools: List['AgentTool'] = drill_agent.basic_tools + drill_agent.ast_grep_tools
         # Sometimes ast-grep may not be usable, so we keep both basic and enhanced toolsets.
 
         # Vulnerability information container!!!!! 

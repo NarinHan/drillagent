@@ -90,12 +90,14 @@ For each line starting with '#' in the call trace:
 IMPORTANT PATH CONVERSION RULES:
 - If the path contains the project name (e.g., "/home/b/asan/libplist/tools/plistutil.c"), extract the relative part (e.g., "tools/plistutil.c").
 - If the path is a system library (e.g., "/lib/i386-linux-gnu/libc.so.6" or contains libasan, libstdc++, libc), keep it as-is but mark it as external.
-- If there is only a file name without path (e.g., "main.c"), you MUST use the provided tools (find_file, list_dir) to locate the file in the repository and determine its correct relative path.
+- If there is only a file name without path (e.g., "main.c"), you MUST use the provided tools (e.g., `execute_bash`) to locate the file in the repository and determine its correct relative path.
 - The relative path should start from the repository root.
 - Remove any absolute path prefix that includes the repository path.
 
 TOOL USAGE:
-- You have access to code browsing tools (find_file, list_dir, read_file) to help locate files when needed.
+- You have access to `execute_bash` tool to help locate files when needed.
+  - Example command: `ls src/` to list files in a directory.
+  - Example command: `find . -name "main.c"` to find the relative path of "main.c" in the repository.
 - Use these tools when a file name appears without a full path to find its correct relative location.
 
 SKIP THE FOLLOWING:
@@ -237,7 +239,7 @@ IMPORTANT PATH REQUIREMENTS:
 - refined_harness_command must be runnable from any directory (i.e., the binary program in the command should use absolute path)
 - For the binary_path, you don't have to verify its existence in the repository (it may not be compiled yet)! Just infer the expected path.
 
-Use the available tools (find_file, list_dir) to explore the repository structure.
+Use the available tools to explore the repository structure.
 
 Respond in the following JSON format ONLY:
 {{
@@ -273,7 +275,7 @@ binary_path_verify_prompt = """"
 # Some of the prompt contents are removed to handle the code repo that has not been compiled yet, since VulnAnalysis may be earlier than Instrumentation check.
 # 1. **Locate the binary**: Find the actual executable binary in the repository
 #    - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/
-#    - Use find_file or list_dir tools to locate the binary
+#    - Use provided tools to locate the binary
 #    - Verify it exists and is executable
 # 2. **Extract binary_path**: The path RELATIVE to the repository root
 #    - Format: build/njs (NOT /home/ubuntu/PoV/Repos/njs/build/njs)

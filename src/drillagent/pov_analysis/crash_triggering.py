@@ -5,9 +5,10 @@ import shutil
 import subprocess
 from datetime import datetime
 
-from typing import Tuple, Dict, Any, TYPE_CHECKING
+from typing import Tuple, List, Dict, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
+    from drillagent.tools.basic_tools import AgentTool
 
 from drillagent.prompts.CrashTriggerAgent_prompt import (
     CTA_system_prompt,
@@ -24,6 +25,8 @@ class CrashTriggerAgent:
         self.drill_agent = drill_agent
         self.config = drill_agent.config
         self.logger = drill_agent.logger
+
+        self.tools_for_generation: List['AgentTool'] = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools + self.drill_agent.cov_tools
 
         # The outermost-loop counters.
         self.max_trigger_iterations = 8
@@ -207,12 +210,10 @@ class CrashTriggerAgent:
         )
 
         # For crash triggering, we also provide ast-grep and coverage tools.
-        cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools + self.drill_agent.cov_tools
-
         self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=user_prompt,
-            tools=cur_tools,  # Allow LLM to use tools for exploration, including write_file
+            tools=self.tools_for_generation,  # Allow LLM to use tools for exploration, including write_file
             system_prompt=CTA_system_prompt,
             max_iterations=max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation

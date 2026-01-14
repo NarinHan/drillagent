@@ -4,10 +4,11 @@ import glob
 import shutil
 import subprocess
 from datetime import datetime
-from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 
+from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
+    from drillagent.tools.basic_tools import AgentTool
 
 from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_system_prompt,
@@ -31,6 +32,8 @@ class PathExplorationAgent:
         self.drill_agent = drill_agent
         self.config = drill_agent.config
         self.logger = drill_agent.logger
+
+        self.tools_for_generation: List['AgentTool'] = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools + self.drill_agent.cov_tools
 
         # In each exploration, the agent will generate a PoV test case, execute it, and collect coverage feedback.
         # The outermost-loop counters:
@@ -213,12 +216,10 @@ class PathExplorationAgent:
         )
 
         # Step 2: Use LLMInterface for automatic tool calling and conversation management
-        cur_tools = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools
-
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         result = self.drill_agent.low_cost_llm.run_agent_loop(
             task=user_prompt,
-            tools=cur_tools,  # When generating test case, LLM is encouraged to use tools, including write_file
+            tools=self.tools_for_generation, # When generating test case, LLM is encouraged to use tools
             system_prompt=PEA_system_prompt,
             max_iterations=max_generation_turns,  # Allow up to 20 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation

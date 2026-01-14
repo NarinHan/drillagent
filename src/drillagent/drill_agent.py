@@ -46,7 +46,7 @@ class DrillAgent:
         self.reasoning_llm: LLMInterface = None
         self.low_cost_llm:  LLMInterface = None
         # LLM agent tools
-        self.basic_tools: List[Any] = []
+        self.basic_tools: List[Any] = []     # Include BashTool, ReadFileTool, WriteFileTool, etc.
         self.cov_tools:   List[Any] = []
         self.ast_grep_tools:  List[Any] = []
         self.clangd_tools:    List[Any] = []
@@ -97,10 +97,11 @@ class DrillAgent:
             self.basic_tools = [
                 ReadFileTool(self.config.target_repo_path),
                 WriteFileTool(self.config.target_repo_path),
-                GrepTool(self.config.target_repo_path),
-                FindFileTool(self.config.target_repo_path),
-                ListDirTool(self.config.target_repo_path),
-                TreeTool(self.config.target_repo_path)
+                BashTool(self.config.target_repo_path),
+                # GrepTool(self.config.target_repo_path),
+                # FindFileTool(self.config.target_repo_path),
+                # ListDirTool(self.config.target_repo_path),
+                # TreeTool(self.config.target_repo_path)
             ]
             self.logger.info(f"✓ Agent basic tools initialized: {len(self.basic_tools)} tools available")
             # Note: cov_tools will be initialized after vulnerability analysis when binary_path becomes available.

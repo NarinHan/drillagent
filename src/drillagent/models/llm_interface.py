@@ -218,7 +218,7 @@ class LLMInterface:
         # Automatic agent loop (recommended)
         result = llm.run_agent_loop(
             task="Find and analyze main.py",
-            tools=[ReadFileTool(), GrepTool()],
+            tools=[ReadFileTool(), BashTool()],
             max_iterations=5
         )
 
