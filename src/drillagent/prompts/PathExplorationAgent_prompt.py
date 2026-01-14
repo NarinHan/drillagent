@@ -1,18 +1,18 @@
 PEA_system_prompt = """You are a security researcher specializing in generating Proof-of-Concept (PoV) test cases to trigger given vulnerabilities. Your task is to analyze vulnerability information and generate test inputs that can reach the vulnerable function and potentially trigger the crash.
 
 When generating test cases:
-- Generate inputs that follow the expected format of the target program
-  - (e.g., if the program is a xml parser, generate pure xml content as input)
-  - (e.g., if the program is a ruby interpreter, generate pure ruby code as input)
+- First determine the expected input format based on the target program:
+  - Text-based inputs (scripts, markup, config): use `write_file` tool directly
+  - Binary/structured inputs (images, archives, protocols): write a Python script with `write_file`, then execute it with `execute_bash`
 - Analyze the vulnerability type and understand what input patterns can trigger it
 - Study the call trace to understand the execution path leading to the vulnerability
 - Consider edge cases and malicious input patterns that could trigger the vulnerability
-- Use the write_file tool to write the test case to the specified file path
 
-IMPORTANT: Sometimes the analysis can become overly complicated. When generating a PoV candidate, it is better to focus on the key points and start by constructing simple test cases, avoiding over-engineering.
+IMPORTANT: Start with simple test cases and avoid over-engineering. Focus on reaching the vulnerable code path first.
 """
 
 
+# Core prompt for this phase.
 PEA_testcase_generation_prompt = """You are generating a test case to trigger a vulnerability. Your goal is to create an input that can reach the vulnerable function and potentially trigger a crash.
 
 Vulnerable Project Name: {project_name}
@@ -33,38 +33,90 @@ YOUR TASK:
    - Study the call trace to understand the execution path
    - Identify what input format the program expects
 
-2. **Generate a test case**:
-   - Create an input that aims to reach the vulnerable function
-   - Consider the program's input format (text file, binary data, specific protocol, etc.)
+2. **Determine the input file type**:
+   Based on the project name, harness command, and vulnerability information, determine if the target program expects:
+   - **Text-based input**: e.g., source code for interpreters (JavaScript, Ruby, Lua), markup (XML, JSON, HTML), config files, etc.
+   - **Structured binary input**: e.g., image formats (PNG, JPEG, GIF), document formats (PDF), archive formats (ZIP), network protocols, custom binary formats, etc.
+
+3. **Generate a test case** (choose the appropriate method):
+
+   **Method A - For TEXT-based input (e.g., script interpreters like njs, mruby, lua):**
+   - Use `write_file` tool directly to write the test case content
+   - Example: `write_file(file_path="/path/to/testcase-round1.js", content="var x = ...;")`
+
+   **Method B - For structured BINARY input (e.g., image parsers, PDF readers):**
+   - Step 1: Write a Python script using `write_file` tool
+     - Script path: same directory as testcase, named `gen_testcase_round{{N}}.py`
+     - Use `struct` module for binary packing, handle magic headers, checksums, etc.
+   - Step 2: Execute the script using `execute_bash` tool
+     - Example: `execute_bash(command="python3 /path/to/gen_testcase_round1.py")`
+   - The script should generate the binary testcase file at the TARGET TEST CASE FILE PATH
+
+4. **Vulnerability-specific patterns**:
    - For buffer overflows: generate inputs that exceed buffer boundaries
-	- For Use-After-Free (UAF): generate inputs that trigger object deallocation followed by subsequent access or reuse of the freed memory
-	- For NULL Pointer Dereference (NPD): generate inputs that cause pointers to remain NULL and be dereferenced during execution
-	- For Out-of-Bounds (OOB): generate inputs that lead to memory accesses beyond the valid bounds of arrays or buffers
+   - For Use-After-Free (UAF): generate inputs that trigger object deallocation followed by subsequent access or reuse of the freed memory
+   - For NULL Pointer Dereference (NPD): generate inputs that cause pointers to remain NULL and be dereferenced during execution
+   - For Out-of-Bounds (OOB): generate inputs that lead to memory accesses beyond the valid bounds of arrays or buffers
 
-3. **Write the test case using write_file tool**:
-   - Use the `write_file` tool to write the test case content to the target file path specified above
-   - For text-based test cases: use the `content` parameter with the test data as a string
-   - For binary test cases: use the `hex_content` parameter with the test data as a hex string
-   - The file should contain ONLY the test input data (no analysis, no comments)
-   - Example: write_file(file_path="/path/to/testcase-roundN[with optional suffix]", content="your test data here")
-
-4. **Explain your approach** (briefly):
+5. **Explain your approach** (briefly):
    - What input pattern did you generate and why?
    - How does it aim to reach/trigger the vulnerability?
+
+---
+EXAMPLES:
+
+**Example 1 - Text-based (JavaScript interpreter like njs):**
+```
+# Directly write JS code that triggers the vulnerability
+write_file(
+    file_path="/workspace/round1/testcase-round1.js",
+    content="function trigger() {{ var arr = new Array(100); arr[200] = 1; }} trigger();"
+)
+```
+
+**Example 2 - Binary format (PNG parser):**
+```
+# Step 1: Write Python script to generate malformed PNG
+write_file(
+   file_path="/workspace/round1/gen_testcase_round1.py",
+   content='''
+import struct
+
+output_path = "/workspace/round1/testcase-round1.png"
+
+with open(output_path, "wb") as f:
+   # PNG magic header
+   f.write(b"\\x89PNG\\r\\n\\x1a\\n")
+   # Malformed IHDR chunk with oversized dimensions
+   ihdr_data = struct.pack(">IIBBBBB", 0xFFFFFFFF, 0xFFFFFFFF, 8, 2, 0, 0, 0)
+   f.write(struct.pack(">I", len(ihdr_data)))  # chunk length
+   f.write(b"IHDR")
+   f.write(ihdr_data)
+   # ... more chunks
+
+print(f"Generated testcase at {{output_path}}")
+   '''
+)
+
+# Step 2: Execute the script
+execute_bash(command="python3 /workspace/round1/gen_testcase_round1.py", working_dir="/workspace/round1")
+```
+---
 
 IMPORTANT:
 - You should use provided tools to read related source code if needed, and then generate the test case.
   - Mainly use `ast_grep_search_function` tool to read function implementations that are relevant to the vulnerability and call trace.
   - You can also use `read_file` tool to read code if there is no function name. (you are encouraged to read more than one line)
-- **CRITICAL**: You MUST use the `write_file` tool to write the test case to the target file path before your final response!
-- If it is already the final turn, ensure you write the test case file in this turn!!!
-- The test case should be pure input data (not a script or code)
+- **CRITICAL**: You MUST ensure the test case file exists at the TARGET TEST CASE FILE PATH before your final response!
+- If it is already the final turn, ensure you write/generate the test case file in this turn!!!
+- The test case file should contain ONLY the input data for the target program (not a script or code)
 - Focus on generating input that reaches the vulnerable code path first
 - You can refine the input in subsequent rounds based on coverage feedback
 
-Generate the test case now and write it to the target file path using the write_file tool.
+Generate the test case now and write it to the target file path.
 """
 
+# Template for providing previous execution feedback to guide LLM
 PEA_feedback_results_template = """
 EXECUTION FEEDBACK FROM PREVIOUS ITERATION:
 
@@ -88,6 +140,7 @@ Learn from its structure and improve upon it based on the coverage feedback abov
 
 
 
+# Not used currently
 PEA_coverage_analysis_system_prompt = """You are a security researcher specializing in analyzing code coverage feedback for vulnerability exploitation. Your task is to understand why test case execution gets stuck at certain points and provide actionable suggestions to reach deeper into the call trace.
 
 When analyzing coverage feedback:

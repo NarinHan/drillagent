@@ -873,6 +873,9 @@ class BashTool(AgentTool):
         # Timeout for command execution (seconds)
         self.timeout = 30
 
+        # Maximum output length (characters)
+        self.max_output_chars = 30000
+
     def name(self) -> str:
         return "execute_bash"
 
@@ -882,6 +885,10 @@ class BashTool(AgentTool):
 
         return (
             "Execute bash commands for file operations, binary analysis, and running scripts.\n"
+            "\n"
+            "COMMAND EXECUTION:\n"
+            "- You can only execute ONE bash command at a time. To run multiple commands sequentially, use `&&` or `;` to chain them together.\n"
+            "- Use efficient commands (ls, find, grep, etc.) with appropriate filters to minimize unnecessary operations.\n"
             "\n"
             "ALLOWED COMMANDS:\n"
             f"{cmd_list}\n"
@@ -897,11 +904,13 @@ class BashTool(AgentTool):
             "4. Do NOT attempt pip install - all necessary libraries are pre-installed\n"
             "\n"
             "WORKING DIRECTORY:\n"
-            f"Commands execute in the specified `working_dir` (default: current directory).\n"
-            "Use relative paths from `working_dir` or absolute paths.\n"
+            f"Commands execute in the specified `working_dir` (default: code repository root).\n"
+            "`working_dir` can be relative (to repo root) or absolute path.\n"
+            "Try to maintain working directory by using absolute paths and avoiding excessive use of `cd`.\n"
             "\n"
-            "OUTPUT CONTROL:\n"
-            "No automatic output truncation. Control output size yourself using:\n"
+            "OUTPUT TRUNCATION:\n"
+            f"If the output exceeds {self.max_output_chars} characters, it will be truncated.\n"
+            "Control output size yourself using:\n"
             "  - head -n 100 (first 100 lines)\n"
             "  - tail -n 50 (last 50 lines)\n"
             "  - grep with filters\n"
@@ -911,8 +920,9 @@ class BashTool(AgentTool):
             "EXAMPLES:\n"
             "  - List files: ls -la\n"
             "  - Examine binary: readelf -h ./target\n"
-            "  - Search strings: strings ./binary | grep 'flag'"
+            "  - Search strings: strings ./binary | grep 'flag'\n"
             "  - Run analysis: python3 /path/to/analyze.py\n"
+            "  - Chain commands: mkdir -p output && cp file.txt output/\n"
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -1020,7 +1030,8 @@ class BashTool(AgentTool):
                     "blocked_reason": "command_not_in_whitelist"
                 }
 
-            # Step 4: Forbidden patterns validation
+            # Step 4: Forbidden patterns 
+            # TODO: also avoid visiting gt_povs and success_povs (these are our debug data)
             import re
             for pattern, description in self.forbidden_patterns:
                 if re.search(pattern, command, re.IGNORECASE):
@@ -1045,15 +1056,33 @@ class BashTool(AgentTool):
                 timeout=self.timeout
             )
 
+            # Step 6: Truncate output if necessary
+            stdout = result.stdout
+            stderr = result.stderr
+            truncated = False
+
+            if len(stdout) > self.max_output_chars:
+                stdout = stdout[:self.max_output_chars] + f"\n\n... [OUTPUT TRUNCATED: {len(result.stdout)} chars total, showing first {self.max_output_chars}]"
+                truncated = True
+
+            if len(stderr) > self.max_output_chars:
+                stderr = stderr[:self.max_output_chars] + f"\n\n... [STDERR TRUNCATED: {len(result.stderr)} chars total, showing first {self.max_output_chars}]"
+                truncated = True
+
             # Return results (success=True even if exit_code != 0)
-            return {
+            response = {
                 "success": True,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stdout": stdout,
+                "stderr": stderr,
                 "exit_code": result.returncode,
                 "command": command,
                 "working_dir": str(work_path.relative_to(self.code_repo_path)) if work_path.is_relative_to(self.code_repo_path) else str(work_path)
             }
+
+            if truncated:
+                response["truncated"] = True
+
+            return response
 
         except subprocess.TimeoutExpired:
             return {
@@ -1069,6 +1098,37 @@ class BashTool(AgentTool):
                 "command": command,
                 "blocked_reason": "execution_error"
             }
+
+
+class FinishTool(AgentTool):
+    """
+    Tool to signal the completion of the agent's task.
+    """
+
+    def name(self) -> str:
+        return "finish"
+
+    def description(self) -> str:
+        return (
+            "Indicate that the agent has completed its task. "
+            "No further actions are needed."
+        )
+
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {}
+
+    def execute(self) -> Dict[str, Any]:
+        """
+        Execute finish tool.
+
+        Returns:
+            Dict indicating completion
+        """
+        return {
+            "success": True,
+            "message": "Agent has finished its task."
+        }
+
 
 
 # 

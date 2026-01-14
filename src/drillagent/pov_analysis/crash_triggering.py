@@ -218,7 +218,7 @@ class CrashTriggerAgent:
             max_iterations=max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation
             max_tokens=30720,
-            continuation_prompt="Please continue your analysis and use write_file tool to write the final PoV to the target file path."
+            continuation_prompt="Please continue your analysis and and craft the final PoV candidate after you get enough information."
         )
 
         if not result['success']:

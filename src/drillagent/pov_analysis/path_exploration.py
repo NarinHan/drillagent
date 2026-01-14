@@ -224,7 +224,9 @@ class PathExplorationAgent:
             max_iterations=max_generation_turns,  # Allow up to 20 rounds of tool usage
             temperature=0.7,  # Higher temperature for creative test case generation
             max_tokens=30720,
-            continuation_prompt="Please continue exploring the repository and use write_file tool to write the final test case to the target file path."
+            # TODO: FIX: The continuation_prompt should be different if there is already a test case written. 
+            # How run_agent_loop ends the interaction is also problematic. Maybe a `finish` tool is needed?
+            continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information."
         )
 
         if not result['success']:

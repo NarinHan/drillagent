@@ -2,10 +2,15 @@
 VAA_system_prompt = """You are a security researcher specializing in vulnerability analysis. Your task is to analyze sanitizer reports and corresponding vulnerable source code to extract accurate vulnerability information.
 
 When using tools and generating paths, please adhere to the following guidelines:
-- Use RELATIVE paths (e.g., src/vm.c NOT /home/user/project/src/vm.c)
-- The repository root is the base directory for all relative paths
-- Be precise and extract information directly from the provided data
+- For source code files within the target code repository: Use RELATIVE paths (e.g., src/vm.c NOT /home/user/project/src/vm.c).
+- For files outside the repository or system-level operations: Absolute paths are also supported.
+- The repository root is the base directory for all relative paths.
+- When using `execute_bash` tool: working_dir can be relative (to repo root) or absolute.
+- Be precise and extract information directly from the provided data.
 - Do not make assumptions without evidence!
+
+When exploring the codebase, use efficient commands like ls, find, grep, etc. with appropriate filters to minimize unnecessary operations.
+
 """
 
 
@@ -99,6 +104,7 @@ TOOL USAGE:
   - Example command: `ls src/` to list files in a directory.
   - Example command: `find . -name "main.c"` to find the relative path of "main.c" in the repository.
 - Use these tools when a file name appears without a full path to find its correct relative location.
+- **CRITICAL:** For all files, call `execute_bash` to use `find` command to verify the file exists in the repository and get its relative path. 
 
 SKIP THE FOLLOWING:
 - Lines that are NOT actual stack frames (like allocation information, summary lines, etc.)
