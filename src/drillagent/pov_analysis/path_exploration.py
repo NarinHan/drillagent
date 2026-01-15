@@ -42,7 +42,7 @@ class PathExplorationAgent:
 
         # Fields for coverage collection
         self.llvm_cov_utils : LLVMCovUtils = None
-        self.vuln_call_trace = self.drill_agent.vulnerability_info.call_trace # Obtained from VulnAnalysisAgent directly
+        self.vuln_crash_trace = self.drill_agent.vulnerability_info.crash_trace # Obtained from VulnAnalysisAgent directly
         # self.coverage_state = dict()  # e.g., covered functions/branches
 
         # All of the intermediate PoV results should be stored, and can be passed to next agent easily.
@@ -345,7 +345,7 @@ class PathExplorationAgent:
 
     def _collect_coverage_feedback(self) -> tuple[List[Dict], Dict, str]: # No LLM needed
         # Collect function-level coverage feedback along the vulnerable call trace.
-        # 1. Extract function information from self.vuln_call_trace
+        # 1. Extract function information from self.vuln_crash_trace
         # 2. Query coverage using self.llvm_cov_utils.get_multi_functions_coverage()
         # 3. Format and return the coverage information as a string for analysis
         print("")
@@ -353,15 +353,15 @@ class PathExplorationAgent:
 
         # Check LLVMCovUtils and if we have a valid call trace
         assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!" # TODO: Why we still reach here and failed?
-        if not self.vuln_call_trace or len(self.vuln_call_trace) == 0:
+        if not self.vuln_crash_trace or len(self.vuln_crash_trace) == 0:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
-            raise ValueError("No vulnerability call trace available for coverage analysis") # We assume there should be vuln_call_trace.
+            raise ValueError("No vulnerability call trace available for coverage analysis") # We assume there should be vuln_crash_trace.
 
         # Substep 1: Extract function information from vulnerable call trace
         # Build a list of (function_name, file_path) tuples for batch query
         valid_frames: List[Tuple[Dict, Any]] = []  # Store (frame, abs_file_path) tuples for frames we'll query
         repo_path = self.drill_agent.config.target_repo_path
-        for frame in self.vuln_call_trace:
+        for frame in self.vuln_crash_trace:
             # Skip external functions and frames without complete info
             if frame.get('is_external', False) or not frame.get('function_name') or not frame.get('file_path'):
                 self.logger.debug(f"  [PathExplorationAgent] Skipping frame #{frame.get('sequence_num', -1)}: external or incomplete info")

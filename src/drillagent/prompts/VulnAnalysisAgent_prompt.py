@@ -29,9 +29,9 @@ Sanitizer Report:
 
 Your task is to extract the following information from the sanitizer report:
 
-1. **Vulnerability Type**: Identify the type (e.g., heap-use-after-free, heap-buffer-overflow, stack-buffer-overflow, use-after-return, double-free and so on)
+1. **Vulnerability Type**: Identify the type (e.g., heap-buffer-overflow, stack-buffer-overflow, heap-use-after-free, double-free, null pointer dereference, and so on)
 
-2. **Crash Function**: From the call trace, find the INNERMOST function that is IN THE REPOSITORY CODE (not in libc or system libraries).
+2. **Crash Function**: From the crash call trace, find the INNERMOST function that is IN THE REPOSITORY CODE (not in libc or system libraries).
    - Look at the stack trace from #0 downwards
    - Skip functions in system libraries (libc, libstdc++, etc.)
    - Find the first function that is in the project's source code
@@ -51,10 +51,22 @@ Your task is to extract the following information from the sanitizer report:
    - Format: src/main.c:45 (NOT /home/user/project/src/main.c:45)
    - If entry location is not clearly in the call trace, leave it empty
 
-6. **Call Trace**: Extract the full stack trace (all lines starting with #) 
-   - For heap-use-after-free or heap-buffer-overflow vulnerabilities, there might be multiple sets of call traces in the report (e.g., allocation trace, free trace, crash trace).
-   - ONLY keep the "crash" trace (usually caused by READ/WRITE/access) and ignore the other sets of traces.
-   - Most of the situations, the call trace contains more than 3 frames and one of them is the main function. Check this carefully!
+6. **Call Traces**: Extract ALL call traces from the sanitizer report. Different vulnerability types have different traces:
+
+   For **heap-buffer-overflow**:
+   - `crash_trace` (REQUIRED): The main error trace showing where the overflow READ/WRITE occurred (starts with "ERROR: AddressSanitizer:")
+   - `allocation_trace` (OPTIONAL): Shows where the overflowed buffer was allocated (starts with "allocated by thread")
+
+   For **heap-use-after-free** and **double-free**:
+   - `crash_trace` (REQUIRED): The main error trace showing where the freed memory was accessed (starts with "ERROR: AddressSanitizer:")
+   - `free_trace` (OPTIONAL): Shows where the memory was freed (starts with "freed by thread")
+   - `allocation_trace` (OPTIONAL): Shows where the memory was originally allocated (starts with "previously allocated by thread")
+
+   For **other vulnerability types**:
+   - `crash_trace` (REQUIRED): The main error trace
+   - `allocation_trace` and `free_trace`: Leave as empty strings if not present
+
+   IMPORTANT: Each trace should include ALL lines starting with # (the full stack frames).
 
 IMPORTANT PATH REQUIREMENTS:
 - ALL paths must be relative to repository root: {actual_repo_path}
@@ -68,7 +80,9 @@ Respond in the following JSON format ONLY:
     "crash_location": "relative/path/file.c:line_number",
     "entry_function": "main or other entry function",
     "entry_location": "relative/path/file.c:line_number",
-    "call_trace": "full stack trace starting with #0... #1... etc."
+    "crash_trace": "full stack trace of the crash point starting with #0... #1... etc.",
+    "allocation_trace": "full stack trace showing where memory was allocated (or empty string if not present)",
+    "free_trace": "full stack trace showing where memory was freed (or empty string if not present, only for use-after-free and double-free)"
 }}
 
 Be precise. Extract information directly from the report.
@@ -310,16 +324,29 @@ Command to trigger the vulnerability crash:
 {refined_harness_command}
 ```
 
-Call trace to trigger the vulnerability crash (from a sanitizer report):
+**Crash Call Trace** (where the vulnerability was triggered):
 ```
 {refined_call_trace}
+```
+
+**Allocation Call Trace** (where the problematic memory was allocated, if available):
+```
+{allocation_trace}
+```
+
+**Free Call Trace** (where the memory was freed, for use-after-free and double-free, if available):
+```
+{free_trace}
 ```
 
 Your task is to explain the ROOT CAUSE of this vulnerability:
 
 1. Examine the source code at the crash location.
-2. Follow the above call trace to retrieve the source code around the corresponding locations, and analyze the data flow along the function calls, with particular attention to the call sites at each layer.
-3. Identify WHY the vulnerability occurs during analysis. (e.g., missing bounds check, use-after-free due to dangling pointer)
+2. Follow the crash call trace to retrieve the source code around the corresponding locations, and analyze the data flow along the function calls, with particular attention to the call sites at each layer.
+3. For memory-related vulnerabilities (heap-buffer-overflow, heap-use-after-free, double-free):
+   - Use the **allocation trace** to understand where and how the memory was allocated (size, context)
+   - For use-after-free and double-free: Use the **free trace** to understand where the memory was freed and why it became a dangling pointer
+4. Identify WHY the vulnerability occurs during analysis. (e.g., missing bounds check, use-after-free due to dangling pointer)
 
 Use the provided tools (mainly `ast_grep_search_function`, supplemented by `read_file`) to examine relevant source files.
 - All the relative file paths are based on the repository root: {actual_repo_path}

@@ -1252,3 +1252,68 @@ class LLMInterface:
                 self.logger.warning(f"Failed to log LLM interaction: {e}")
 
         return text_response, tool_calls, assistant_message, stop_reason
+
+    # ==================== Utility Static Methods ====================
+
+    @staticmethod
+    def extract_json_from_response(response: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract JSON object from LLM response text.
+
+        This method handles various formats that LLMs commonly use when returning JSON:
+        1. JSON wrapped in markdown code blocks (```json ... ``` or ``` ... ```)
+        2. Raw JSON object embedded in text (finds first { to last })
+        3. Pure JSON response (entire response is valid JSON)
+
+        Args:
+            response: The LLM response text that may contain JSON
+
+        Returns:
+            Extracted JSON as a dictionary, or None if extraction fails
+
+        Example:
+            >>> response = '''Here is the result:
+            ... ```json
+            ... {"name": "test", "value": 123}
+            ... ```
+            ... '''
+            >>> LLMInterface.extract_json_from_response(response)
+            {'name': 'test', 'value': 123}
+        """
+        if not response or not isinstance(response, str):
+            return None
+
+        # Method 1: Try markdown code block first
+        if '```' in response:
+            parts = response.split('```')
+            for i, part in enumerate(parts):
+                # Check odd-indexed parts (content inside code blocks)
+                if i > 0 and i % 2 == 1:
+                    lines = part.strip().split('\n')
+                    # Remove language identifier if present (e.g., "json")
+                    if lines and lines[0].strip().lower() in ['json', '']:
+                        json_str = '\n'.join(lines[1:]) if lines[0].strip() else part.strip()
+                    else:
+                        json_str = part.strip()
+                    try:
+                        data = json.loads(json_str)
+                        if data:
+                            return data
+                    except json.JSONDecodeError:
+                        continue
+
+        # Method 2: Try finding JSON object in response (first { to last })
+        if '{' in response and '}' in response:
+            start_idx = response.find('{')
+            end_idx = response.rfind('}')
+            if start_idx != -1 and end_idx > start_idx:
+                try:
+                    return json.loads(response[start_idx:end_idx + 1])
+                except json.JSONDecodeError:
+                    pass
+
+        # Method 3: Try parsing entire response as JSON
+        try:
+            return json.loads(response.strip())
+        except json.JSONDecodeError:
+            return None
