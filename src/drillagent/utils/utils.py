@@ -275,6 +275,22 @@ def detect_sanitizer_triggered(exec_output: str) -> bool:
             return True
     return False
 
+def get_sanitizer_type(exec_output: str) -> str:
+    # Identify which sanitizer triggered the error based on execution output
+    # TODO: To be integrated into the CrashTriggerAgent. Also need to examine more types.
+    if "AddressSanitizer" in exec_output:
+        return "AddressSanitizer"
+    elif "MemorySanitizer" in exec_output:
+        return "MemorySanitizer"
+    elif "UndefinedBehaviorSanitizer" in exec_output:
+        return "UndefinedBehaviorSanitizer"
+    elif "ThreadSanitizer" in exec_output:
+        return "ThreadSanitizer"
+    elif "LeakSanitizer" in exec_output:
+        return "LeakSanitizer"
+    else:
+        return "OtherSanitizer"
+
 def switch_ruby_version(version: str = "3.0.6") -> Tuple[bool, str]:
     # Switch the system Ruby version using rbenv and verify the change
     # Returns (success, message) tuple

@@ -327,7 +327,12 @@ class VulnAnalysisAgent:
             # Substep 2: Validate file paths and filter out invalid/external frames
             validated_trace = []
             for entry in parsed_data['call_trace']:
-                if entry.get('is_external', False) or not entry.get('file_path'):
+                if entry.get('is_external', False):
+                    self.logger.debug(f"    ✗ Skipping external frame #{entry.get('sequence_num')}: {entry.get('function_name')} @ {entry.get('file_path')}")
+                    continue
+
+                if not entry.get('file_path'):
+                    self.logger.warning(f"    ✗ Missing file path for frame #{entry.get('sequence_num')}, skipping")
                     continue
 
                 file_path = entry['file_path']

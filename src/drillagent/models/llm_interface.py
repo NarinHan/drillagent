@@ -461,21 +461,29 @@ class LLMInterface:
 
             # Prepare initial prompt based on whether this is the last iteration
             if max_iterations == 1:
-                # Only one iteration allowed - must provide final answer immediately
+                # Only one iteration allowed - can only use write_file, execute_bash, finish
                 current_prompt = (
-                    "CRITICAL: You have ONLY ONE iteration to complete this task. "
-                    "You can NO LONGER call any tools. "
-                    "You must provide your final answer based on all available context and knowledge. "
-                    "Analyze thoroughly and give your complete response as required. The task is as below.\n\n"
+                    "CRITICAL: You have ONLY ONE iteration to complete this task. Make sure you will give a complete answer.\n"
+                    "If you are asked to generate a testcase or PoV file. You are allowed to use the following tools: write_file, execute_bash.\n\n"
+                    "You can:\n"
+                    "1. Use write_file to generate the target PoV/testcase file (or a Python script that generates it)\n"
+                    "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
+                    "The task is as below.\n\n"
                     f"{task}"
                 )
             else:
                 current_prompt = task
 
-            for iteration in range(1, max_iterations + 1): # 1 ~ max_iterations 
+            # Define tools allowed in the final iteration (for file generation and completion)
+            final_iteration_allowed_tools = {'write_file', 'execute_bash', 'finish'}
+
+            for iteration in range(1, max_iterations + 1): # 1 ~ max_iterations
                 # Determine tools availability based on iteration
-                # On the last iteration, disable tools to force final answer
-                current_tools = [] if iteration == max_iterations else tools
+                # On the last iteration, only allow write_file, execute_bash, and finish tools
+                if iteration == max_iterations:
+                    current_tools = [t for t in tools if t.name() in final_iteration_allowed_tools]
+                else:
+                    current_tools = tools
 
                 # Retry logic for rate limits and timeouts
                 retry_count = 0
@@ -788,21 +796,26 @@ class LLMInterface:
                 # ==================== End Finish Tool Detection ====================
 
                 # Prepare next iteration prompt based on remaining iterations
-                # In the second-to-last round, tools can still be called one final time, and in the final round (the last round), tool calls are disabled.
                 next_iteration = iteration + 1
                 if next_iteration == max_iterations:
-                    # Next iteration is the last one: it will have no tools, must provide final answer
+                    # Next iteration is the last one: only write_file, execute_bash, finish tools available
                     current_prompt = (
-                        "CRITICAL: You can NO LONGER call any tools. "
-                        "You must provide your final answer based on all the context and information gathered so far. "
-                        "Analyze the available information thoroughly and give your complete response as required by the task."
+                        "CRITICAL: This is your FINAL iteration. Make sure you will give a complete answer.\n\n"
+                        "Theoretically, you should no longer perform tool calls.\n"
+                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration."
+                        "You can:\n"
+                        "1. Use write_file to generate the target file (or a Python script that generates it)\n"
+                        "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
+                        "**Note that** this is your LAST response, and you won't be able to view the tool results!\n\n"
                     )
                 elif next_iteration == max_iterations - 1:
-                    # Next iteration is second-to-last: warn this is the last chance to use tools
+                    # Next iteration is second-to-last: warn this is the last chance to use all tools
                     current_prompt = (
-                        "IMPORTANT: This is your LAST chance to call tools. "
+                        "IMPORTANT: This is your second-to-last iteration (maybe your LAST chance to call tools). "
                         "After this iteration, you will need to provide your final answer based on all available context. "
                         "Use tools wisely if needed, or provide your final answer now if you have enough information.\n\n"
+                        # "You can still use any tools in this iteration, but in the next iteration you will only be able to use write_file and execute_bash.\n\n"
+                        "(If you are asked to generate a testcase or PoV file, conduct generation operations now!)\n\n"
                         f"{continuation_prompt}"
                     )
                 else:
