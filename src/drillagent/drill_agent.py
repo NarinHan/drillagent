@@ -58,7 +58,6 @@ class DrillAgent:
         self.path_agent: PathExplorationAgent          = None
         self.crash_agent: CrashTriggerAgent            = None
 
-
         # Intermediate analysis results
         self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD

@@ -126,7 +126,7 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
                         'sanitizer_type': self.sanitizer_type
                     }
                 else:
-                    error_msg = f"Binary not found at expected path: {self.binary_path}"
+                    error_msg = f"Qualified binary not found at expected path: {self.binary_path}"
                     self.logger.error(error_msg)
                     return {
                         'success': False,
@@ -193,14 +193,14 @@ LDFLAGS="${{LDFLAGS:-}}"
         )
 
         # Inject flags based on build system
-        if 'configure' in modified:
+        if contains_in_non_comment_lines(modified, 'configure'):
             # Plain configure
             modified = re.sub(
                 r'(\n\s*)(\./configure)(\s|$)',
                 r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CFLAGS="$SAN_FLAGS $CFLAGS" CXXFLAGS="$SAN_FLAGS $CXXFLAGS" LDFLAGS="$SAN_FLAGS $LDFLAGS" ./configure\3',
                 modified
             )
-        elif 'cmake' in modified.lower():
+        elif contains_in_non_comment_lines(modified, 'cmake'):
             # CMake builds
             modified = re.sub(
                 r'(\n\s*)(cmake\s)',

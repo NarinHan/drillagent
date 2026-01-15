@@ -83,61 +83,70 @@ class PathExplorationAgent:
                     shutil.rmtree(item_path)
             self.logger.debug(f"  [PathExplorationAgent] Created and cleared round directory: {round_dir}")
 
-            # Substep1: Generate test case (with feedback from previous iteration if available)
-            # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
-            test_case_path = self._generate_test_case(previous_feedback)
-            self.history_testcases.append(test_case_path)
-            self.generated_testcases[self.current_exp_iteration] = test_case_path  # Record for feedback in next iteration
+            try:
+                # Step1: Generate test case (with feedback from previous iteration if available)
+                # Returned test_case should be the path to the file within the drill_agent.work_dir (workspace).
+                test_case_path = self._generate_test_case(previous_feedback)
+                self.history_testcases.append(test_case_path)
+                self.generated_testcases[self.current_exp_iteration] = test_case_path  # Record for feedback in next iteration
 
-            # Substep2: Execute test case dynamically
-            # This will also generate a profraw/profdata file.
-            repo_path = self.drill_agent.config.target_repo_path
-            binary_path = self.drill_agent.vulnerability_info.binary_path
-            binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path)) # Useful for LLVMCovUtils
-            # Transform general harness command to executable command in current round directory
-            ## Since we use "absolute path" in _refine_harness_command, here we just need to replace the testcase path.
-            harness_command = self.drill_agent.vulnerability_info.refined_harness_command
-            abs_test_case_path = os.path.abspath(test_case_path)
-            command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
-            # Exec!
-            exit_code, exec_output = self._execute_test_case(command, binary_abs_path)
+                # Step2: Execute test case dynamically
+                # This will also generate a profraw/profdata file.
+                repo_path = self.drill_agent.config.target_repo_path
+                binary_path = self.drill_agent.vulnerability_info.binary_path
+                binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path)) # Useful for LLVMCovUtils
+                # Transform general harness command to executable command in current round directory
+                ## Since we use "absolute path" in _refine_harness_command, here we just need to replace the testcase path.
+                harness_command = self.drill_agent.vulnerability_info.refined_harness_command
+                abs_test_case_path = os.path.abspath(test_case_path)
+                command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
+                # Exec!
+                exit_code, exec_output = self._execute_test_case(command, binary_abs_path)
 
-            # Check segmentation fault to detect early-stop after each execution
-            ## TODO: Maybe here we can also run sanitizer-instrumented binary. (two processes synchronously will be good?)
-            found_pov = self._detect_stop_status(exit_code, exec_output)
-            if found_pov:
-                self._record_current_pov(test_case_path, command, exit_code, exec_output)
-                self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Triggered early stop.")
-                break
-
-            # Substep3: Collect useful coverage feedback along the vulnerable call trace
-            sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data = self._collect_coverage_feedback()
-            ## Store the collected coverage data into roundN dir.
-            coverage_record = f"Exit code: {exit_code}\n" + f"Execution output:\n{exec_output}\n" + "\n"
-            coverage_record += self._format_coverage_feedback(sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data)
-            with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
-                f.write(coverage_record)
-
-            ## Special: Check if there is already enough `vfunc_reached_testcases`.
-            ## If we disable here's "break", the agent will continue to explore branch-level coverage.
-            if first_uncovered_frame is None:
-                self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered. Stopping early.")
-                self.vfunc_reached_testcases.append(test_case_path)
-                # If there are at least 3 test cases that have reached the vulnerable function, we can also stop early.
-                if len(self.vfunc_reached_testcases) >= 3:
-                    self.logger.info(f"  [PathExplorationAgent] Multiple test cases have reached the vulnerable function. Stopping early.")
+                # Check segmentation fault to detect early-stop after each execution
+                ## TODO: Maybe here we can also run sanitizer-instrumented binary. (two processes synchronously will be good?)
+                found_pov = self._detect_stop_status(exit_code, exec_output)
+                if found_pov:
+                    self._record_current_pov(test_case_path, command, exit_code, exec_output)
+                    self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Triggered early stop.")
                     break
 
-            # Substep4: Analyze coverage feedback around the first uncovered point A in the call trace
-            # Output: reachability failure analysis, test case adjustment suggestion.
-            previous_feedback = self._analyze_coverage_feedback(
-                test_case_path, exit_code, exec_output, 
-                sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data
-            ) # Also store feedback for next iteration
+                # Step3: Collect useful coverage feedback along the vulnerable call trace
+                sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data = self._collect_coverage_feedback()
+                ## Store the collected coverage data into roundN dir.
+                coverage_record = f"Exit code: {exit_code}\n" + f"Execution output:\n{exec_output}\n" + "\n"
+                coverage_record += self._format_coverage_feedback(sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data)
+                with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
+                    f.write(coverage_record)
 
-            # FIX: LLVMCovUtils.clear_data should be called to avoid memory leak!!! (conservative operation)
-            if self.llvm_cov_utils:
-                self.llvm_cov_utils.clear_data()
+                ## Special: Check if there is already enough `vfunc_reached_testcases`.
+                ## If we disable here's "break", the agent will continue to explore branch-level coverage.
+                if first_uncovered_frame is None:
+                    self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered. Stopping early.")
+                    self.vfunc_reached_testcases.append(test_case_path)
+                    # If there are at least 3 test cases that have reached the vulnerable function, we can also stop early.
+                    if len(self.vfunc_reached_testcases) >= 3:
+                        self.logger.info(f"  [PathExplorationAgent] Multiple test cases have reached the vulnerable function. Stopping early.")
+                        break
+
+                # Step4: Analyze coverage feedback around the first uncovered point A in the call trace
+                # Output: reachability failure analysis, test case adjustment suggestion.
+                previous_feedback = self._analyze_coverage_feedback(
+                    test_case_path, exit_code, exec_output,
+                    sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data
+                ) # Also store feedback for next iteration
+
+                # FIX: LLVMCovUtils.clear_data should be called to avoid memory leak!!! (conservative operation)
+                if self.llvm_cov_utils:
+                    self.llvm_cov_utils.clear_data()
+
+            except Exception as e:
+                self.logger.error(f"  [PathExplorationAgent] Iteration {iteration} failed with error: {e}")
+                self.logger.warning(f"  [PathExplorationAgent] Continuing to next iteration...")
+                # Clear LLVMCovUtils data to avoid memory leak even on failure
+                if self.llvm_cov_utils:
+                    self.llvm_cov_utils.clear_data()
+                continue
         
         self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
@@ -163,7 +172,7 @@ class PathExplorationAgent:
         round_dir = self._get_round_dir(self.current_exp_iteration)
         max_generation_turns = 10 # 10 or 15 or 20
 
-        # Step 1: Construct the prompt for test case generation
+        # Substep 1: Construct the prompt for test case generation
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
         vuln_info_str += "\n" + self.drill_agent.vulnerability_info.get_full_root_cause()
 
@@ -215,30 +224,34 @@ class PathExplorationAgent:
             feedback_section=feedback_section # If this is empty, prompt will still work fine.
         )
 
-        # Step 2: Use LLMInterface for automatic tool calling and conversation management
+        # Substep 2: Use LLMInterface for automatic tool calling and conversation management
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
-        result = self.drill_agent.low_cost_llm.run_agent_loop(
-            task=user_prompt,
-            tools=self.tools_for_generation, # When generating test case, LLM is encouraged to use tools
-            system_prompt=PEA_system_prompt,
-            max_iterations=max_generation_turns, # tunable parameter
-            temperature=0.7,  # Higher temperature for creative test case generation
-            max_tokens=30720,
-            # TODO: FIX: The continuation_prompt should be different if there is already a test case written. 
-            # How run_agent_loop ends the interaction is also problematic. Maybe a `finish` tool is needed?
-            continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information."
-        )
+        try:
+            result = self.drill_agent.low_cost_llm.run_agent_loop(
+                task=user_prompt,
+                tools=self.tools_for_generation, # When generating test case, LLM is encouraged to use tools
+                system_prompt=PEA_system_prompt,
+                max_iterations=max_generation_turns, # tunable parameter
+                temperature=0.7,  # Higher temperature for creative test case generation
+                max_tokens=30720,
+                # How run_agent_loop ends the interaction is also problematic. Maybe a `finish` tool is needed?
+                continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information."
+            )
 
-        if not result['success']:
-            error_msg = result.get('error', 'Unknown error')
-            self.logger.error(f"  [PathExplorationAgent] LLM agent loop failed: {error_msg}")
-            raise RuntimeError(f"Failed to generate test case: {error_msg}")
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.warning(f"  [PathExplorationAgent] LLM agent loop did not complete successfully: {error_msg}")
+                # Don't raise error here - continue to Step 3 to check if the file was still generated
 
-        response = result['final_response']
-        self.logger.info(f"  [PathExplorationAgent] LLM completed in {result['iterations']} iteration(s)")
-        self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
+            response = result.get('final_response', '')
+            self.logger.info(f"  [PathExplorationAgent] LLM completed in {result.get('iterations', 'N/A')} iteration(s)")
+            if response:
+                self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
+        except Exception as e:
+            self.logger.warning(f"  [PathExplorationAgent] Exception during LLM agent loop: {e}")
+            # Don't raise error here - continue to Step 3 to check if the file was still generated
 
-        # Step 3: Verify that the test case file was written and is non-empty
+        # Substep 3: Verify that the test case file was written and is non-empty
         # Check if the exact path exists first
         if not os.path.exists(test_case_path):
             # If not found, search for files matching the pattern (with potential extensions)

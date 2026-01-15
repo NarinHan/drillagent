@@ -300,19 +300,34 @@ class ReadFileTool(AgentTool):
 
             content = '\n'.join(content_lines)
 
+            # Apply byte size limit (max 8KB) to prevent overly large responses
+            MAX_CONTENT_BYTES = 8 * 1024
+            content_bytes = len(content.encode('utf-8'))
+            byte_truncated = False
+            if content_bytes > MAX_CONTENT_BYTES:
+                # Truncate by lines until under limit
+                while content_lines and len('\n'.join(content_lines).encode('utf-8')) > MAX_CONTENT_BYTES:
+                    content_lines.pop()
+                content = '\n'.join(content_lines)
+                byte_truncated = True
+
             result = {
                 "success": True,
                 "file_path": file_path,
                 "content": content,
                 "total_lines": total_lines,
-                "displayed_lines": len(display_lines),
-                "display_range": f"{line_offset}-{line_offset + len(display_lines) - 1}"
+                "displayed_lines": len(content_lines),
+                "display_range": f"{line_offset}-{line_offset + len(content_lines) - 1}"
             }
 
             # Add truncation warning if applicable
             if start_line is None and end_line is None and total_lines > 200:
                 result["truncated"] = True
                 result["message"] = f"File has {total_lines} lines. Showing first 200. Use start_line/end_line to see more."
+
+            if byte_truncated:
+                result["truncated"] = True
+                result["message"] = result.get("message", "") + f" Content truncated to {MAX_CONTENT_BYTES // 1024}KB limit ({len(content_lines)} lines shown)."
 
             return result
 
@@ -392,7 +407,20 @@ class ReadFileTool(AgentTool):
 
             hex_dump = '\n'.join(hex_lines)
 
-            return {
+            # Apply byte size limit (max 32KB) to prevent overly large responses
+            MAX_CONTENT_BYTES = 32 * 1024
+            hex_dump_bytes = len(hex_dump.encode('utf-8'))
+            byte_truncated = False
+            if hex_dump_bytes > MAX_CONTENT_BYTES:
+                # Truncate by lines until under limit
+                while hex_lines and len('\n'.join(hex_lines).encode('utf-8')) > MAX_CONTENT_BYTES:
+                    hex_lines.pop()
+                hex_dump = '\n'.join(hex_lines)
+                byte_truncated = True
+                # Recalculate actual bytes shown
+                actual_length = len(hex_lines) * 16
+
+            result = {
                 "success": True,
                 "file_path": file_path,
                 "content": hex_dump,
@@ -403,6 +431,12 @@ class ReadFileTool(AgentTool):
                 "read_range": f"0x{offset:x}-0x{offset + actual_length - 1:x}",
                 "message": f"Read {actual_length} bytes from offset {offset} (file size: {file_size} bytes)"
             }
+
+            if byte_truncated:
+                result["truncated"] = True
+                result["message"] += f" (truncated to {MAX_CONTENT_BYTES // 1024}KB limit)"
+
+            return result
 
         except Exception as e:
             return {

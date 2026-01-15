@@ -218,6 +218,25 @@ def clean_gitrepo(actual_repo_path: str):
         check=True
     )
 
+def contains_in_non_comment_lines(text: str, keyword: str) -> bool:
+    """Check if keyword exists in non-comment lines (case-sensitive).
+
+    Args:
+        text: Multi-line text to search in
+        keyword: Keyword to search for
+
+    Returns:
+        True if keyword found in any non-comment line, False otherwise
+    """
+    for line in text.split('\n'):
+        stripped = line.lstrip()
+        # Skip comment lines (starting with #)
+        if stripped.startswith('#'):
+            continue
+        if keyword in line:
+            return True
+    return False
+
 # 
 # For later two sub-agents. 
 # 
