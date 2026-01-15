@@ -218,6 +218,25 @@ def clean_gitrepo(actual_repo_path: str):
         check=True
     )
 
+def contains_in_non_comment_lines(text: str, keyword: str) -> bool:
+    """Check if keyword exists in non-comment lines (case-sensitive).
+
+    Args:
+        text: Multi-line text to search in
+        keyword: Keyword to search for
+
+    Returns:
+        True if keyword found in any non-comment line, False otherwise
+    """
+    for line in text.split('\n'):
+        stripped = line.lstrip()
+        # Skip comment lines (starting with #)
+        if stripped.startswith('#'):
+            continue
+        if keyword in line:
+            return True
+    return False
+
 # 
 # For later two sub-agents. 
 # 
@@ -274,6 +293,22 @@ def detect_sanitizer_triggered(exec_output: str) -> bool:
         if indicator in exec_output:
             return True
     return False
+
+def get_sanitizer_type(exec_output: str) -> str:
+    # Identify which sanitizer triggered the error based on execution output
+    # TODO: To be integrated into the CrashTriggerAgent. Also need to examine more types.
+    if "AddressSanitizer" in exec_output:
+        return "AddressSanitizer"
+    elif "MemorySanitizer" in exec_output:
+        return "MemorySanitizer"
+    elif "UndefinedBehaviorSanitizer" in exec_output:
+        return "UndefinedBehaviorSanitizer"
+    elif "ThreadSanitizer" in exec_output:
+        return "ThreadSanitizer"
+    elif "LeakSanitizer" in exec_output:
+        return "LeakSanitizer"
+    else:
+        return "OtherSanitizer"
 
 def switch_ruby_version(version: str = "3.0.6") -> Tuple[bool, str]:
     # Switch the system Ruby version using rbenv and verify the change

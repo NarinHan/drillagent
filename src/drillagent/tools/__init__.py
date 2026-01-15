@@ -9,11 +9,7 @@ from .basic_tools import (
     ReadFileTool,
     WriteFileTool,
     BashTool,
-    FinishTool,
-    GrepTool,
-    FindFileTool,
-    ListDirTool,
-    TreeTool
+    FinishTool
 )
 
 from .cov_query_tools import (
@@ -44,10 +40,6 @@ __all__ = [
     "WriteFileTool",
     "BashTool",
     "FinishTool",
-    "GrepTool",
-    "FindFileTool",
-    "ListDirTool",
-    "TreeTool",
 
     # Coverage query tools
     "FuncLineCovTool",

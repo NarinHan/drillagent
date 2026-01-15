@@ -29,9 +29,9 @@ Sanitizer Report:
 
 Your task is to extract the following information from the sanitizer report:
 
-1. **Vulnerability Type**: Identify the type (e.g., heap-use-after-free, heap-buffer-overflow, stack-buffer-overflow, use-after-return, double-free and so on)
+1. **Vulnerability Type**: Identify the type (e.g., heap-buffer-overflow, stack-buffer-overflow, heap-use-after-free, double-free, null pointer dereference, and so on)
 
-2. **Crash Function**: From the call trace, find the INNERMOST function that is IN THE REPOSITORY CODE (not in libc or system libraries).
+2. **Crash Function**: From the crash call trace, find the INNERMOST function that is IN THE REPOSITORY CODE (not in libc or system libraries).
    - Look at the stack trace from #0 downwards
    - Skip functions in system libraries (libc, libstdc++, etc.)
    - Find the first function that is in the project's source code
@@ -51,10 +51,22 @@ Your task is to extract the following information from the sanitizer report:
    - Format: src/main.c:45 (NOT /home/user/project/src/main.c:45)
    - If entry location is not clearly in the call trace, leave it empty
 
-6. **Call Trace**: Extract the full stack trace (all lines starting with #) 
-   - For heap-use-after-free or heap-buffer-overflow vulnerabilities, there might be multiple sets of call traces in the report (e.g., allocation trace, free trace, crash trace).
-   - ONLY keep the "crash" trace (usually caused by READ/WRITE/access) and ignore the other sets of traces.
-   - Most of the situations, the call trace contains more than 3 frames and one of them is the main function. Check this carefully!
+6. **Call Traces**: Extract ALL call traces from the sanitizer report. Different vulnerability types have different traces:
+
+   For **heap-buffer-overflow**:
+   - `crash_trace` (REQUIRED): The main error trace showing where the overflow READ/WRITE occurred (starts with "ERROR: AddressSanitizer:")
+   - `allocation_trace` (OPTIONAL): Shows where the overflowed buffer was allocated (starts with "allocated by thread")
+
+   For **heap-use-after-free** and **double-free**:
+   - `crash_trace` (REQUIRED): The main error trace showing where the freed memory was accessed (starts with "ERROR: AddressSanitizer:")
+   - `free_trace` (OPTIONAL): Shows where the memory was freed (starts with "freed by thread")
+   - `allocation_trace` (OPTIONAL): Shows where the memory was originally allocated (starts with "previously allocated by thread")
+
+   For **other vulnerability types**:
+   - `crash_trace` (REQUIRED): The main error trace
+   - `allocation_trace` and `free_trace`: Leave as empty strings if not present
+
+   IMPORTANT: Each trace should include ALL lines starting with # (the full stack frames).
 
 IMPORTANT PATH REQUIREMENTS:
 - ALL paths must be relative to repository root: {actual_repo_path}
@@ -68,7 +80,9 @@ Respond in the following JSON format ONLY:
     "crash_location": "relative/path/file.c:line_number",
     "entry_function": "main or other entry function",
     "entry_location": "relative/path/file.c:line_number",
-    "call_trace": "full stack trace starting with #0... #1... etc."
+    "crash_trace": "full stack trace of the crash point starting with #0... #1... etc.",
+    "allocation_trace": "full stack trace showing where memory was allocated (or empty string if not present)",
+    "free_trace": "full stack trace showing where memory was freed (or empty string if not present, only for use-after-free and double-free)"
 }}
 
 Be precise. Extract information directly from the report.
@@ -214,7 +228,7 @@ Project: {project_name}
 Repository path: {actual_repo_path}
 
 Current harness command: 
-(May contain absolute path prefix not existing in the local machine, need to be refined)
+(may contain absolute path prefix not existing in the local machine, need to be refined)
 ```
 {harness_command}
 ```
@@ -223,15 +237,17 @@ Your tasks:
 
 1. **Extract and infer the binary_path**: The path RELATIVE to the repository root
    - You can refer to the provided harness command to infer the path. Or read README doc to find the built binary program location.
-   - Note that the repository path may not be compiled yet, so the binary may not exist currently. You can still infer the expected binary path based on harness command.
+   - Note that the repository path may not be compiled yet, so the binary may not exist currently! You can still infer the expected binary path based on harness command.
    - Format example: build/njs (NOT /home/ubuntu/PoV/Repos/njs/build/njs)
    - Must be relative to: {actual_repo_path}
 
 2. **Refine the command**: Create a command that can be run from any directory
    - The command should be executable when run from arbitrary directories, so try to construct absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
-   - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
-   - Example: /absolute/path/to/build/njs <path/to/testcase>
+   - For the input file path in the command, replace it with placeholders like "<path/to/testcase>"
+     - Example: /absolute/path/to/build/njs <path/to/testcase>
+     - Never use "<path/to/testcase>.js"! The file suffix should be indicated by the "input_file_suffix" field in your returned JSON object!
+     - Avoid using angle-bracket placeholders for non-input files. Just use a random path in the current directory, like ./tmp1.xx or ./tmp2.yy.
 
 3. **Extract input file suffix (if any)**: Identify if the program expects a specific file extension for input files
    - Examine the harness command to see if the input file has an extension (e.g., .js, .xml, .rb, .json, .pattern)
@@ -252,7 +268,7 @@ Use the available tools to explore the repository structure.
 Respond in the following JSON format ONLY:
 {{
     "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "/absolute/path/to/binary [flags] [<path/to/testcase>]",
+    "refined_harness_command": "/absolute/path/to/binary [flags] <path/to/testcase>",
     "input_file_suffix": ".ext or empty string"
 }}
 
@@ -267,19 +283,17 @@ Then output should be:
 }}
 
 Example 2 (without file suffix):
-If harness is: "/src/program/bin/parser /testcase/input"
+If harness is: "/src/program/bin/parser /testcase/input -o /testcase/output/result.log"
 And repo is: "/home/ubuntu/PoV/Repos/program"
 Then output should be:
 {{
     "binary_path": "bin/parser",
-    "refined_harness_command": "/home/ubuntu/PoV/Repos/program/bin/parser <path/to/testcase>",
+    "refined_harness_command": "/home/ubuntu/PoV/Repos/program/bin/parser <path/to/testcase> -o ./result.log",
     "input_file_suffix": ""
 }}
 
 """
 
-binary_path_verify_prompt = """"
-"""
 # Some of the prompt contents are removed to handle the code repo that has not been compiled yet, since VulnAnalysis may be earlier than Instrumentation check.
 # 1. **Locate the binary**: Find the actual executable binary in the repository
 #    - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/
@@ -310,16 +324,29 @@ Command to trigger the vulnerability crash:
 {refined_harness_command}
 ```
 
-Call trace to trigger the vulnerability crash (from a sanitizer report):
+**Crash Call Trace** (where the vulnerability was triggered):
 ```
 {refined_call_trace}
+```
+
+**Allocation Call Trace** (where the problematic memory was allocated, if available):
+```
+{allocation_trace}
+```
+
+**Free Call Trace** (where the memory was freed, for use-after-free and double-free, if available):
+```
+{free_trace}
 ```
 
 Your task is to explain the ROOT CAUSE of this vulnerability:
 
 1. Examine the source code at the crash location.
-2. Follow the above call trace to retrieve the source code around the corresponding locations, and analyze the data flow along the function calls, with particular attention to the call sites at each layer.
-3. Identify WHY the vulnerability occurs during analysis. (e.g., missing bounds check, use-after-free due to dangling pointer)
+2. Follow the crash call trace to retrieve the source code around the corresponding locations, and analyze the data flow along the function calls, with particular attention to the call sites at each layer.
+3. For memory-related vulnerabilities (heap-buffer-overflow, heap-use-after-free, double-free):
+   - Use the **allocation trace** to understand where and how the memory was allocated (size, context)
+   - For use-after-free and double-free: Use the **free trace** to understand where the memory was freed and why it became a dangling pointer
+4. Identify WHY the vulnerability occurs during analysis. (e.g., missing bounds check, use-after-free due to dangling pointer)
 
 Use the provided tools (mainly `ast_grep_search_function`, supplemented by `read_file`) to examine relevant source files.
 - All the relative file paths are based on the repository root: {actual_repo_path}

@@ -62,6 +62,7 @@ class AgentConfig:
     # 
     work_dir: str = "./workspace" # Including: Intermidiate results in each round and cache dir.
     output_dir: str = "./output"  # Including: Final PoV inputs and analysis logs.
+    force_clear_cache: bool = False # TODO: Manage VulnAnalysisAgent cache. 
     verbose: bool = False
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
@@ -95,8 +96,8 @@ class AgentConfig:
         print(f"  CVE ID:             {self.cve_id}")
         print(f"  Language:           {self.lang}")
         print(f"  Target Repo Path:   {self.target_repo_path}")
-        print(f"  Vuln Locatio   (raw):    {self.vuln_location}")
-        print(f"  Harness Command(raw):    {self.harness_command}")
+        print(f"  Vuln Location   (raw):    {self.vuln_location}")
+        print(f"  Harness Command (raw):    {self.harness_command}")
         print(f"  Base Commit:        {self.base_commit}")
         # print(f"  Build Script:       {self.build_sh}")
         # print(f"  Sanitizer Report:   {self.sanitizer_report}")

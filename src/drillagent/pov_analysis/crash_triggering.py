@@ -61,8 +61,7 @@ class CrashTriggerAgent:
         if path_agent is not None:
             # Check if we already have a crash input
             if path_agent.crash_input_pov is not None:
-                is_validated = self._validate_pov(path_agent.crash_input_pov, path_agent.crash_command)
-                if is_validated:
+                if self._validate_pov(path_agent.crash_input_pov, path_agent.crash_command):
                     self.logger.info("  [CrashTriggerAgent] Valid crash input found from path exploration phase! Using it as final PoV.")
                     # Save the crash input as final PoV
                     crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')

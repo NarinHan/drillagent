@@ -26,7 +26,7 @@ response = llm.generate(prompt="Explain Python decorators")
 ```python
 text, tool_calls, msg, stop_reason = llm.generate_with_tools(
     prompt="Analyze this code",
-    tools=[ReadFileTool(), GrepTool()],
+    tools=[ReadFileTool(), BashTool()],
     conversation_history=history
 )
 ```
@@ -35,7 +35,7 @@ text, tool_calls, msg, stop_reason = llm.generate_with_tools(
 ```python
 result = llm.run_agent_loop(
     task="Find all Python files and read main.py",
-    tools=[FindFileTool(), ReadFileTool()],
+    tools=[BashTool(), ReadFileTool()],
     max_iterations=10
 )
 print(result['final_response'])
