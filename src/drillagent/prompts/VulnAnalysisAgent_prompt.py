@@ -214,7 +214,7 @@ Project: {project_name}
 Repository path: {actual_repo_path}
 
 Current harness command: 
-(May contain absolute path prefix not existing in the local machine, need to be refined)
+(may contain absolute path prefix not existing in the local machine, need to be refined)
 ```
 {harness_command}
 ```
@@ -223,15 +223,17 @@ Your tasks:
 
 1. **Extract and infer the binary_path**: The path RELATIVE to the repository root
    - You can refer to the provided harness command to infer the path. Or read README doc to find the built binary program location.
-   - Note that the repository path may not be compiled yet, so the binary may not exist currently. You can still infer the expected binary path based on harness command.
+   - Note that the repository path may not be compiled yet, so the binary may not exist currently! You can still infer the expected binary path based on harness command.
    - Format example: build/njs (NOT /home/ubuntu/PoV/Repos/njs/build/njs)
    - Must be relative to: {actual_repo_path}
 
 2. **Refine the command**: Create a command that can be run from any directory
    - The command should be executable when run from arbitrary directories, so try to construct absolute path for the binary program
    - Remain all the flags and command line arguments as in the original harness command!!!
-   - For the input file paths in the command, replace them with placeholders like "<path/to/testcase>"
-   - Example: /absolute/path/to/build/njs <path/to/testcase>
+   - For the input file path in the command, replace it with placeholders like "<path/to/testcase>"
+     - Example: /absolute/path/to/build/njs <path/to/testcase>
+     - Never use "<path/to/testcase>.js"! The file suffix should be indicated by the "input_file_suffix" field in your returned JSON object!
+     - Avoid using angle-bracket placeholders for non-input files. Just use a random path in the current directory, like ./tmp1.xx or ./tmp2.yy.
 
 3. **Extract input file suffix (if any)**: Identify if the program expects a specific file extension for input files
    - Examine the harness command to see if the input file has an extension (e.g., .js, .xml, .rb, .json, .pattern)
@@ -252,7 +254,7 @@ Use the available tools to explore the repository structure.
 Respond in the following JSON format ONLY:
 {{
     "binary_path": "relative/path/to/binary",
-    "refined_harness_command": "/absolute/path/to/binary [flags] [<path/to/testcase>]",
+    "refined_harness_command": "/absolute/path/to/binary [flags] <path/to/testcase>",
     "input_file_suffix": ".ext or empty string"
 }}
 
@@ -267,19 +269,17 @@ Then output should be:
 }}
 
 Example 2 (without file suffix):
-If harness is: "/src/program/bin/parser /testcase/input"
+If harness is: "/src/program/bin/parser /testcase/input -o /testcase/output/result.log"
 And repo is: "/home/ubuntu/PoV/Repos/program"
 Then output should be:
 {{
     "binary_path": "bin/parser",
-    "refined_harness_command": "/home/ubuntu/PoV/Repos/program/bin/parser <path/to/testcase>",
+    "refined_harness_command": "/home/ubuntu/PoV/Repos/program/bin/parser <path/to/testcase> -o ./result.log",
     "input_file_suffix": ""
 }}
 
 """
 
-binary_path_verify_prompt = """"
-"""
 # Some of the prompt contents are removed to handle the code repo that has not been compiled yet, since VulnAnalysis may be earlier than Instrumentation check.
 # 1. **Locate the binary**: Find the actual executable binary in the repository
 #    - You can refer to harness command to infer the path. Or check common build directories: build/, out/, bin/, .libs/

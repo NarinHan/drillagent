@@ -339,7 +339,7 @@ class PathExplorationAgent:
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep3: Collecting coverage feedback...")
 
         # Check LLVMCovUtils and if we have a valid call trace
-        assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!"
+        assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!" # TODO: Why we still reach here and failed?
         if not self.vuln_call_trace or len(self.vuln_call_trace) == 0:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
             raise ValueError("No vulnerability call trace available for coverage analysis") # We assume there should be vuln_call_trace.
