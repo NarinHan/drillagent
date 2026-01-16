@@ -14,9 +14,7 @@ from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_system_prompt,
     PEA_testcase_generation_prompt,
     PEA_feedback_results_template,
-    PEA_previous_testcase_template,
-    PEA_coverage_analysis_system_prompt,
-    PEA_coverage_analysis_prompt,
+    PEA_previous_roundir_template
 )
 from drillagent.utils.llvm_cov import LLVMCovUtils
 from drillagent.utils.utils import *
@@ -94,13 +92,12 @@ class PathExplorationAgent:
                 self.generated_testcases[self.current_exp_iteration] = test_case_path  # Record for feedback in next iteration
 
                 # Step2: Execute test case dynamically
-                # This will also generate a profraw/profdata file.
                 # Transform general harness command to executable command in current round directory
                 ## Since we use "absolute path" in _refine_harness_command, here we just need to replace the testcase path.
                 harness_command = self.drill_agent.vulnerability_info.refined_harness_command
                 abs_test_case_path = os.path.abspath(test_case_path)
                 command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
-                # Exec!
+                # Exec! This will also generate a profraw/profdata file.
                 exit_code, exec_output = self._execute_test_case(command)
 
                 # Check segmentation fault to detect early-stop after each execution
@@ -113,11 +110,6 @@ class PathExplorationAgent:
 
                 # Step3: Collect useful coverage feedback along the vulnerable call trace
                 sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data = self._collect_coverage_feedback()
-                ## Store the collected coverage data into roundN dir.
-                coverage_record = f"Exit code: {exit_code}\n" + f"Execution output:\n{exec_output}\n" + "\n"
-                coverage_record += self._format_coverage_feedback(sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data)
-                with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
-                    f.write(coverage_record)
 
                 ## Special: Check if there is already enough `vfunc_reached_testcases`.
                 ## If we disable here's "break", the agent will continue to explore branch-level coverage.
@@ -136,14 +128,13 @@ class PathExplorationAgent:
                     sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data
                 ) # Also store feedback for next iteration
 
-                # FIX: LLVMCovUtils.clear_data should be called to avoid memory leak!!! (conservative operation)
+                # FIX: clear_data should be called to avoid memory leak!!! (conservative operation)
                 if self.llvm_cov_utils:
                     self.llvm_cov_utils.clear_data()
 
             except Exception as e:
                 self.logger.error(f"  [PathExplorationAgent] Iteration {iteration} failed with error: {e}")
                 self.logger.warning(f"  [PathExplorationAgent] Continuing to next iteration...")
-                # Clear LLVMCovUtils data to avoid memory leak even on failure
                 if self.llvm_cov_utils:
                     self.llvm_cov_utils.clear_data()
                 continue # If we meet any error during generation and coverage analysis, just continue to next iteration.
@@ -170,7 +161,7 @@ class PathExplorationAgent:
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep1: Generating test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
-        max_generation_turns = 10 # 10 or 15 or 20
+        max_generation_turns = 15 # 10 or 15 or 20
 
         # Substep 1: Construct the prompt for test case generation
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
@@ -178,6 +169,7 @@ class PathExplorationAgent:
 
         # Build feedback section if we have previous iteration results
         feedback_section = ""
+        # TODO: It ugly to handle previous_feedback like this... 
         if previous_feedback:
             if len(previous_feedback) == 3:  # Parse the feedback information tuple
                 refined_feedback = f"{previous_feedback[0]}\n\n" \
@@ -194,14 +186,14 @@ class PathExplorationAgent:
                 previous_feedback=refined_feedback
             )
 
-            # Fixed: Add previous testcase path to guide LLM (similar to CrashTriggerAgent approach)
+            # Add previous round directory to guide LLM
             if self.current_exp_iteration > 1:
-                previous_testcase_path = self.generated_testcases.get(self.current_exp_iteration - 1)
-                if previous_testcase_path:
-                    self.logger.info(f"  [PathExplorationAgent] Adding previous testcase path to prompt: {previous_testcase_path}")
-                    feedback_section += "\n" + PEA_previous_testcase_template.format(
+                previous_round_dir = self._get_round_dir(self.current_exp_iteration - 1)
+                if os.path.exists(previous_round_dir):
+                    self.logger.info(f"  [PathExplorationAgent] Adding previous round dir path to prompt: {previous_round_dir}")
+                    feedback_section += "\n" + PEA_previous_roundir_template.format(
                         previous_iteration=self.current_exp_iteration - 1,
-                        testcase_path=previous_testcase_path
+                        previous_round_dir=previous_round_dir
                     )
         else: # e.g., previous_feedback is None
             feedback_section = ""
@@ -281,12 +273,12 @@ class PathExplorationAgent:
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
 
-        # Step 1: Set environment variable to generate profraw file
+        # Substep 1: Set environment variable to generate profraw file
         profraw_path = os.path.join(round_dir, f"test_{self.current_exp_iteration}.profraw")
         env = os.environ.copy()
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
-        # Step 2: Execute the command with memory limit
+        # Substep 2: Execute the command with memory limit
         self.logger.info (f"  [PathExplorationAgent] Executing command: {command} in {round_dir}")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
@@ -294,10 +286,10 @@ class PathExplorationAgent:
                 command,
                 shell=True,
                 cwd=round_dir, # Path to instrumented binary is absolute, so we can execute anywhere.
-                env=env,
+                env=env,       # LLVM_PROFILE_FILE is set
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 seconds timeout
+                timeout=30,    # 30 seconds timeout
                 preexec_fn=set_memory_limit  # Apply memory limit to subprocess
             )
             exit_code = result.returncode
@@ -317,20 +309,17 @@ class PathExplorationAgent:
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
-        # Step 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
+        # Substep 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
         self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE = {profraw_path}")
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
-            self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
-            self.logger.warning(f"  [PathExplorationAgent] This might indicate the binary was not instrumented or the execution failed early!")
+            self.logger.warning(f"  [PathExplorationAgent] Failed to find this profraw file!!") # Maybe the binary was not well-instrumented or the execution failed early...
             return exit_code, exec_output
 
-        try:   # Here we already have llvm profraw file in current round directory.
-            # LLVMCovUtils will replace last round's coverage data with new execution results.
-            # And automatically convert profraw to profdata inside.
-            self.llvm_cov_utils.update_profile_data(profraw_path)
-            self.logger.info(f"  [PathExplorationAgent] Current profdata file generated/updated at: {self.llvm_cov_utils.profdata_path}")
+        try:
+            # Here we should already have llvm profraw file in current round directory.
+            self.llvm_cov_utils.update_profile_data(profraw_path) # Transform profraw to profdata internally, but the JSON _coverage_data will be lazy-loaded.
+            self.logger.info(f"  [PathExplorationAgent] Current cov profdata file at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
-
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to convert profraw to profdata: {e}")
             return exit_code, exec_output
@@ -342,9 +331,9 @@ class PathExplorationAgent:
         # 3. Format and return the coverage information as a string for analysis
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep3: Collecting coverage feedback...")
+        assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!" # Should never happen
 
-        # Check LLVMCovUtils and if we have a valid call trace
-        assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!" # TODO: Why we still reach here and failed?
+        # Check if we have a valid call trace
         if not self.vuln_crash_trace or len(self.vuln_crash_trace) == 0:
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
             raise ValueError("No vulnerability call trace available for coverage analysis") # We assume there should be vuln_crash_trace.
@@ -362,7 +351,7 @@ class PathExplorationAgent:
             abs_file_path = os.path.abspath(os.path.join(repo_path, frame['file_path']))
             valid_frames.append((frame, abs_file_path))
 
-        # Batch query function coverage using LLVMCovUtils
+        # Batch query function coverage (faster)
         # self.logger.info(f"  [PathExplorationAgent] Querying coverage for {len(functions_to_query)} functions in call trace")
         # functions_to_query = []
         # for frame, abs_file_path in valid_frames:
@@ -377,7 +366,7 @@ class PathExplorationAgent:
         #     self.logger.error(f"  [PathExplorationAgent] Failed to query function coverage: {e}")
         #     return f"ERROR: Coverage query failed - {str(e)}"
 
-        # Substep 2: Collecting current execution's coverage data using LLVMCovUtils.
+        # Substep 2: Collecting current execution's coverage data at function and call-site-line level.
         # Use get_function_coverage, get_line_coverage.
         cov_frames: List[Dict] = []
         for frame, abs_file_path in valid_frames:
@@ -393,6 +382,7 @@ class PathExplorationAgent:
                 })
             except Exception as e:
                 # TODO: FIX: Here we meet too many failures/fallbacks!!! Jepordizes the analysis...
+                ## Even though the file path may be wrong, we should still try to get function coverage by function name.
                 self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage: {e}.  Maybe caused by compiler optimizations (omitted)...")
                 updated_frame.update({
                     'failed_getting_cov'   : True,
@@ -489,25 +479,6 @@ class PathExplorationAgent:
             ""
         ]
 
-        # # Calculate coverage statistics
-        # total_count = len(sorted_cov_frames)
-        # covered_count = 0
-        # line_level_covered_count = 0
-        # # When calculating cov statistics, we are strict (LHY).
-        # for frame in sorted_cov_frames:
-        #     if frame['func_executed']:
-        #         covered_count += 1
-        #         # Also count line-level coverage for verified frames
-        #         if frame.get('is_verified', False) and frame.get('callsite_line_executed', False):
-        #             line_level_covered_count += 1
-        # coverage_percentage = (covered_count / total_count * 100) if total_count > 0 else 0.0
-        # # Add summary statistics
-        # output_lines.append(f"Call Trace Coverage Summary:")
-        # output_lines.append(f"  Total frames in call trace: {total_count}")
-        # output_lines.append(f"  Functions executed: {covered_count}/{total_count} ({coverage_percentage:.1f}%)")
-        # output_lines.append(f"  Callsite lines executed (verified frames): {line_level_covered_count}/{sum(1 for f in sorted_cov_frames if f.get('is_verified', False))}")
-        # output_lines.append("")
-
         # Add detailed frame-by-frame coverage information
         output_lines.append("Function-Level Frame-by-Frame Coverage (from caller to callee):") #####
 
@@ -569,26 +540,26 @@ class PathExplorationAgent:
         self, test_case_path: str, exit_code: int, exec_output: str, 
         sorted_cov_frames: List[Dict], first_uncovered_frame: Dict|None, detailed_func_cov_data: str|None
     ) -> Tuple:
-        # Organize the collected coverage results, after LLM analysis, feed the results back for the next invocation of _generate_test_case.
         # For input parameters, `sorted_cov_frames` contains most of the information we need.
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep4: Analyzing coverage feedback...")
-
-        formatted_cov_info = ""
-        coverage_stagnation_reasons = ""
-        input_adjustment_suggestion = ""
         
-        # Step 1: Aggregate basic execution and coverage info
+        # Aggregate basic execution and coverage info
         basic_info = [
             "=" * 80,
             f"BASIC EXECUTION INFO - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
             "=" * 80,
-            f"exit code: {exit_code}\n"
-            f"execution output:\n{exec_output}\n"
+            f"Exit code: {exit_code}\n"
+            f"Execution output:\n{exec_output}\n"
         ]
         basic_info = '\n'.join(basic_info)
         cov_feedback = self._format_coverage_feedback(sorted_cov_frames, first_uncovered_frame, detailed_func_cov_data)
         formatted_cov_info = basic_info + cov_feedback
+
+        # Store the collected coverage data into roundN dir.
+        round_dir = self._get_round_dir(self.current_exp_iteration)
+        with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
+            f.write(formatted_cov_info)
         
         print(formatted_cov_info) # For debug
         return (formatted_cov_info)

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from drillagent.prompts.CrashTriggerAgent_prompt import (
     CTA_system_prompt,
     CTA_useful_testcase_and_cov_template,
-    CTA_coverage_config_template,
+    CTA_previous_roundir_template,
     CTA_final_pov_generation_prompt,
 )
 
@@ -179,14 +179,15 @@ class CrashTriggerAgent:
             else:
                 previous_progress = "No useful test cases available from path exploration. You have to generate PoV from current knowledge."
         else:
-            last_round_info = self.generated_candidates.get(self.current_trigger_iteration - 1, {})
-            last_testcase_path = last_round_info.get("testcase_path", "N/A")
-            last_profdata_path = last_round_info.get("profdata_path", "N/A")
-            # Format the cov tool usage instructions with pre-round info.
-            previous_progress = CTA_coverage_config_template.format(
-                testcase_path=last_testcase_path,
-                profdata_path=last_profdata_path
-            )
+            # Provide previous round directory to guide LLM
+            previous_round_dir = self._get_round_dir(self.current_trigger_iteration - 1)
+            if os.path.exists(previous_round_dir):
+                previous_progress = CTA_previous_roundir_template.format(
+                    previous_iteration=self.current_trigger_iteration - 1,
+                    previous_round_dir=previous_round_dir
+                )
+            else:
+                previous_progress = "Previous round directory not found. Generate PoV based on current knowledge."
 
         # Prepare the target PoV file path
         # Add file suffix if available from vulnerability info

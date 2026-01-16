@@ -5,7 +5,8 @@ from typing import Dict, Any, Optional
 
 from .basic_tools import AgentTool
 
-
+# TODO: Read LLM log to see if FuncLineCovTool is used properly.
+# When use this agent tool, we assume that there is already a *.profdata file.
 class FuncLineCovTool(AgentTool):
     """
     Tool for retrieving detailed line-by-line coverage for a specific function.

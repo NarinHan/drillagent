@@ -16,7 +16,7 @@ When generating PoVs:
 EFFICIENCY TIP: You can call multiple tools in a single response. When you need to read several related source files (e.g., to understand a call chain), call `read_file` multiple times (<= 5) in one turn rather than reading them one by one across multiple turns. This saves iterations and gives you more context at once.
 
 IMPORTANT:
-- Start with simple PoVs and avoid over-engineering. Focus on triggering the crash first.
+- Start with simple PoVs, try to grasp the essence and avoid over-engineering. Focus on triggering the crash first.
 - If previous simple test cases failed, you can increase complexity based on the feedback.
 """
 # - Focus on reliability: ensure the PoV consistently triggers the crash
@@ -35,21 +35,30 @@ Use the `read_file` tool to examine these files and synthesize their insights in
 """
 
 # **Coverage Analysis Configuration:**
-CTA_coverage_config_template = """During previous round of PoV generation, the generated test case is at `{testcase_path}` (failed to trigger the crash).
+CTA_previous_roundir_template = """
+**Previous Round Artifacts:**
+The previous round (iteration {previous_iteration}) artifacts are stored in directory:
+`{previous_round_dir}`
 
-By executing this test case, we have obtained code coverage profile data stored in:
-- profdata_path: `{profdata_path}`
+This directory contains:
+- `test_{previous_iteration}.profdata`: Coverage data file from the previous execution. Use `get_function_line_coverage` tool to query specific function/line coverage from this file.
+- `testcase-round{previous_iteration}*`: The test case file(s) generated in the previous round (failed to trigger the crash).
 
-You are encouraged to use the `get_function_line_coverage` tool to analyze code coverage of previous execution, and synthesize the insights into your final PoV.
-Example tool call:
+You can:
+1. Use `execute_bash` with `ls {previous_round_dir}` to see all files in this directory.
+2. Use `read_file` tool to examine the previous test case content and understand what approach was tried.
+3. Use `get_function_line_coverage` tool with the profdata file to query detailed coverage information for specific functions.
+
+Example `get_function_line_coverage` tool call for coverage analysis:
 {{
-    "profdata_path": "path/to/xxx.profdata",
+    "profdata_path": "{previous_round_dir}/test_{previous_iteration}.profdata",
     "function_name": "target_function_name",
     "source_file_path": "relative/path/to/file.c"  // optional, can be omitted to search all files
 }}
 
-Note: The binary path is already configured in the tool. You only need to provide profdata_path, function_name, and optionally source_file_path.
+Learn from the previous test case structure and coverage results, then improve upon it to trigger the crash.
 """
+
 
 # Core prompt for this phase.
 # Use `previous_pov_gen_progress` to provide previous execution feedback.
