@@ -146,7 +146,7 @@ class PathExplorationAgent:
                 # Clear LLVMCovUtils data to avoid memory leak even on failure
                 if self.llvm_cov_utils:
                     self.llvm_cov_utils.clear_data()
-                continue
+                continue # If we meet any error during generation and coverage analysis, just continue to next iteration.
         
         self.logger.info(f"  [PathExplorationAgent] Just left the path exploration loop ({self.current_exp_iteration}/{self.max_exp_iterations}).")
 
@@ -601,73 +601,6 @@ class PathExplorationAgent:
         print(formatted_cov_info) # For debug
         return (formatted_cov_info)
 
-        # 2025.12.25: It seems that this part is not very stable or effective yet, we can temporarily disable it.
-        # Step 2: Utilize LLM to analyze coverage feedback and provide suggestions
-        self.logger.info("  [PathExplorationAgent] Using LLM to analyze coverage feedback...")
-        try:
-            # Use LLM to analyze coverage and generate suggestions
-            analysis_prompt = PEA_coverage_analysis_prompt.format(
-                formatted_cov_info=formatted_cov_info,
-                test_case_path=test_case_path
-            )
-            result = self.drill_agent.basic_llm.run_agent_loop(
-                task=analysis_prompt,
-                tools=self.drill_agent.basic_tools,   # Allow tool usage if needed
-                system_prompt=PEA_coverage_analysis_system_prompt,
-                max_iterations=5,
-                temperature=0.5,
-                max_tokens=8192
-            )
-
-            if not result['success']: # Failure in LLM analysis
-                error_msg = result.get('error', 'Unknown error')
-                self.logger.error(f"  [PathExplorationAgent] Coverage analysis failed: {error_msg}")
-                # Fallback: return error messages
-                coverage_stagnation_reasons = "ERROR: Failed to analyze coverage feedback"
-                input_adjustment_suggestion = "ERROR: Failed to generate suggestions"
-            else:
-                response = result['final_response']
-                self.logger.info (f"  [PathExplorationAgent] Coverage analysis completed")
-                self.logger.debug(f"  [PathExplorationAgent] Analysis response: {response[:300]}...")
-                
-                # Extract the analysis content from code block
-                code_block_pattern = r'```\s*\n(.*?)\n```'
-                code_block_match = re.search(code_block_pattern, response, re.DOTALL)
-                if code_block_match:
-                    analysis_content = code_block_match.group(1)
-                    # Extract the two sections from the analysis
-                    reasons_pattern = r'## COVERAGE STAGNATION REASONS\s*\n(.*?)(?=## INPUT ADJUSTMENT SUGGESTION|$)'
-                    suggestion_pattern = r'## INPUT ADJUSTMENT SUGGESTION\s*\n(.*?)(?=$)'
-                    reasons_match = re.search(reasons_pattern, analysis_content, re.DOTALL)
-                    suggestion_match = re.search(suggestion_pattern, analysis_content, re.DOTALL)
-                    coverage_stagnation_reasons = reasons_match.group(1).strip() if reasons_match else "Could not extract stagnation reasons"
-                    input_adjustment_suggestion = suggestion_match.group(1).strip() if suggestion_match else "Could not extract input suggestions"
-                    self.logger.info("  [PathExplorationAgent] Successfully extracted all coverage analysis sections")
-                else:
-                    # Fallback: try to extract directly without code block wrapper
-                    self.logger.warning("  [PathExplorationAgent] No code block found, trying direct extraction...")
-                    reasons_pattern = r'## COVERAGE STAGNATION REASONS\s*\n(.*?)(?=## INPUT ADJUSTMENT SUGGESTION|$)'
-                    suggestion_pattern = r'## INPUT ADJUSTMENT SUGGESTION\s*\n(.*?)(?=$)'
-                    reasons_match = re.search(reasons_pattern, response, re.DOTALL)
-                    suggestion_match = re.search(suggestion_pattern, response, re.DOTALL)
-                    if reasons_match and suggestion_match:
-                        coverage_stagnation_reasons = reasons_match.group(1).strip()
-                        input_adjustment_suggestion = suggestion_match.group(1).strip()
-                        self.logger.info("  [PathExplorationAgent] Successfully extracted all sections from direct response")
-                    else:
-                        # Last resort: use the full response
-                        self.logger.warning("  [PathExplorationAgent] Could not parse structured response, using full response")
-                        coverage_stagnation_reasons = response
-                        input_adjustment_suggestion = "See stagnation reasons for full analysis"
-
-        except Exception as e:
-            self.logger.error(f"  [PathExplorationAgent] Exception during coverage analysis: {e}")
-            coverage_stagnation_reasons = f"ERROR: Exception during analysis - {str(e)}"
-            input_adjustment_suggestion = "ERROR: Could not generate suggestions due to exception"
-
-        print("***\nCOVERAGE STAGNATION REASONS(debug)\n***\n" + coverage_stagnation_reasons)
-        print("\n***\nINPUT ADJUSTMENT SUGGESTION(debug)\n***\n" + input_adjustment_suggestion)
-        return (formatted_cov_info, coverage_stagnation_reasons, input_adjustment_suggestion)
 
     def _detect_stop_status(self, exit_code: int, exec_output: str) -> bool:
         """

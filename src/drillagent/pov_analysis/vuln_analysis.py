@@ -715,6 +715,7 @@ class VulnInfo:
         )
 
     def format_output(self, skip_rca_result=False) -> str:
+        # Returns the basic vulnerability information as a formatted string. Including crash trace and allocation/free traces.
         lines = []
         lines.append("=" * 80)
         lines.append("VULNERABILITY ANALYSIS RESULTS")
