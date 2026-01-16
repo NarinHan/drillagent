@@ -45,7 +45,7 @@ class CrashTriggerAgent:
         repo_path = self.drill_agent.config.target_repo_path
         binary_relative_path = self.drill_agent.vulnerability_info.binary_path
         binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_relative_path))
-        self.llvm_cov_utils = LLVMCovUtils(binary_path=binary_abs_path)
+        self.llvm_cov_utils = LLVMCovUtils(binary_abs_path=binary_abs_path)
 
     def run(self) -> None:
         self.logger.info("  [CrashTriggerAgent] Starting running. Checking previous path exploration results...")

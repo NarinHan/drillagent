@@ -41,7 +41,10 @@ class PathExplorationAgent:
         self.current_exp_iteration = 0
 
         # Fields for coverage collection
-        self.llvm_cov_utils : LLVMCovUtils = None
+        repo_path = self.drill_agent.config.target_repo_path
+        binary_path = self.drill_agent.vulnerability_info.binary_path
+        binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path))
+        self.llvm_cov_utils = LLVMCovUtils(binary_abs_path=binary_abs_path)
         self.vuln_crash_trace = self.drill_agent.vulnerability_info.crash_trace # Obtained from VulnAnalysisAgent directly
         # self.coverage_state = dict()  # e.g., covered functions/branches
 
@@ -92,16 +95,13 @@ class PathExplorationAgent:
 
                 # Step2: Execute test case dynamically
                 # This will also generate a profraw/profdata file.
-                repo_path = self.drill_agent.config.target_repo_path
-                binary_path = self.drill_agent.vulnerability_info.binary_path
-                binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_path)) # Useful for LLVMCovUtils
                 # Transform general harness command to executable command in current round directory
                 ## Since we use "absolute path" in _refine_harness_command, here we just need to replace the testcase path.
                 harness_command = self.drill_agent.vulnerability_info.refined_harness_command
                 abs_test_case_path = os.path.abspath(test_case_path)
                 command = harness_command.replace('<path/to/testcase>', abs_test_case_path)
                 # Exec!
-                exit_code, exec_output = self._execute_test_case(command, binary_abs_path)
+                exit_code, exec_output = self._execute_test_case(command)
 
                 # Check segmentation fault to detect early-stop after each execution
                 ## TODO: Maybe here we can also run sanitizer-instrumented binary. (two processes synchronously will be good?)
@@ -275,7 +275,7 @@ class PathExplorationAgent:
         self.logger.debug(f"  [PathExplorationAgent] Test case file size: {file_size} bytes")
         return test_case_path
 
-    def _execute_test_case(self, command: str, binary_abs_path: str) -> Tuple[int, str]: # No LLM needed
+    def _execute_test_case(self, command: str) -> Tuple[int, str]: # No LLM needed
         # Execute the program with llvm-cov instrumentation, return exit code and output.
         print("")
         self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
@@ -322,20 +322,12 @@ class PathExplorationAgent:
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
             self.logger.warning(f"  [PathExplorationAgent] profraw file not generated at {profraw_path}")
             self.logger.warning(f"  [PathExplorationAgent] This might indicate the binary was not instrumented or the execution failed early!")
-            # Return without initializing llvm_cov_utils! If None, next step will return directly.
             return exit_code, exec_output
 
         try:   # Here we already have llvm profraw file in current round directory.
-            if self.llvm_cov_utils is None:
-                # First time init
-                self.llvm_cov_utils = LLVMCovUtils(
-                    binary_path=binary_abs_path, # absolute path to the instrumented binary
-                    profraw_path=profraw_path    # relative path (by default)
-                )
-            else:
-                # LLVMCovUtils will replace last round's coverage data with new execution results.
-                # And automatically convert profraw to profdata inside.
-                self.llvm_cov_utils.update_profile_data(profraw_path) # relative path (by default)
+            # LLVMCovUtils will replace last round's coverage data with new execution results.
+            # And automatically convert profraw to profdata inside.
+            self.llvm_cov_utils.update_profile_data(profraw_path)
             self.logger.info(f"  [PathExplorationAgent] Current profdata file generated/updated at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
 

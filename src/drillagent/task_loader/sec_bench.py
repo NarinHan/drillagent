@@ -62,9 +62,9 @@ class SecbTask:
         """
         
         location = None # What we want to return
-        # print(f"Handling get_vuln_location for {self.instance_id}...") # by LHY
+        # print(f"Handling get_vuln_location for {self.instance_id}...")
         if not self.sanitizer_report:
-            print(f"{self.instance_id} has no sanitizer report.") # by LHY
+            print(f"{self.instance_id} has no sanitizer report.")
             return None
 
         # We need to modify some project names manually for matching
@@ -145,11 +145,11 @@ class SecbTask:
             if location is not None:
                 break
 
-        # print(f"Extracted vuln_location: {location}\n") # by LHY
+        # print(f"Extracted vuln_location: {location}\n")
         # if not location: # Current we have 9 "Extracted vuln_location: None"
-        #     print(f"repo_name: {self.repo_name}") # by LHY
-        #     print(f"project_name: {self.project_name}") # by LHY
-        #     print(f"Sanitizer report for {self.instance_id}:\n{self.sanitizer_report}\nEnd of report.\n") # by LHY
+        #     print(f"repo_name: {self.repo_name}")
+        #     print(f"project_name: {self.project_name}")
+        #     print(f"Sanitizer report for {self.instance_id}:\n{self.sanitizer_report}\nEnd of report.\n")
 
         # Remove the leading debug markers (^^^, &&&, ***)
         if location is not None and len(location) > 3:
@@ -164,7 +164,7 @@ class SecbTask:
         if not self.secb_sh:
             return None
 
-        # print(f"Handling get_harness_command for {self.instance_id}...") # by LHY
+        # print(f"Handling get_harness_command for {self.instance_id}...")
         # Find the repro() function
         lines = self.secb_sh.split('\n')
         in_repro_function = False
