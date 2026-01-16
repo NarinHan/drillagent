@@ -293,6 +293,11 @@ Examples:
         '--summary-file',
         help='Path to save execution summary JSON (default: output_dir/summary.json)'
     )
+    parser.add_argument(
+        '--force-clear-cache',
+        action='store_true',
+        help='Force clear VulnAnalysisAgent cache before analysis (re-run from scratch)'
+    )
 
     return parser.parse_args()
 
@@ -387,7 +392,8 @@ def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_p
         # Output options
         work_dir=str(work_dir),
         output_dir=str(output_dir),
-        verbose=not args.no_verbose
+        verbose=not args.no_verbose,
+        force_clear_cache=args.force_clear_cache
     )
 
     # Create output directories

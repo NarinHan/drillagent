@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import logging
 from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
@@ -115,11 +116,22 @@ class VulnAnalysisAgent:
         except Exception as e:
             self.logger.error(f"  [VulnAnalysisAgent] Failed to store cache: {e}", exc_info=True)
 
+    def _clear_cache(self):
+        # Clear the entire cache directory and its contents.
+        # Called when force_clear_cache is True.
+        try:
+            if os.path.exists(self.cache_dir):
+                shutil.rmtree(self.cache_dir)
+                self.logger.info(f"  [VulnAnalysisAgent] Cleared cache directory: {self.cache_dir}")
+            else:
+                self.logger.info(f"  [VulnAnalysisAgent] Cache directory does not exist: {self.cache_dir}")
+        except Exception as e:
+            self.logger.error(f"  [VulnAnalysisAgent] Failed to clear cache: {e}", exc_info=True)
 
     def run(self) -> 'VulnInfo':
         # Run vulnerability analysis with a VulnInfo object returned.
         self.logger.info("  [VulnAnalysisAgent] Starting vulnerability analysis...")
-        
+
         # The analysis is based on the following basic information.
         project_name     = self.config.project_name
         actual_repo_path = self.config.target_repo_path
@@ -128,10 +140,13 @@ class VulnAnalysisAgent:
         raw_harness_command  = self.config.harness_command
         self.logger.info(f"  [VulnAnalysisAgent] Actual repo path: {actual_repo_path}")
 
-        # Before all, Try to load from cache first.
-        if self.load_from_cache():
-            self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
-            return self.vuln_info
+        # Handle force_clear_cache: delete cache files if requested (then analyze from scratch).
+        if self.config.force_clear_cache:
+            self._clear_cache()
+        # Try to examine if there is already a cached result and load from cache first.
+        elif self.load_from_cache():
+                self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
+                return self.vuln_info
         
         # Substep1: Extract basic vulnerability information (if sanitizer report is available)
         if len(sanitizer_report) > 0:

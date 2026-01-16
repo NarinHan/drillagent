@@ -212,26 +212,31 @@ class CrashTriggerAgent:
 
         # For crash triggering, we also provide ast-grep and coverage tools.
         self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
-        result = self.drill_agent.basic_llm.run_agent_loop(
-            task=user_prompt,
-            tools=self.tools_for_generation,  # Allow LLM to use tools for exploration, including write_file
-            system_prompt=CTA_system_prompt,
-            max_iterations=self.max_generation_turns,
-            temperature=0.7,  # Higher temperature for creative PoV generation
-            max_tokens=30720,
-            continuation_prompt="Please continue your analysis and craft the final PoV candidate after you get enough information." + \
-              "If you already generated the file, call `finish` tool to end the process."
-        )
+        try:
+            result = self.drill_agent.basic_llm.run_agent_loop(
+                task=user_prompt,
+                tools=self.tools_for_generation,  # Allow LLM to use tools for exploration, including write_file
+                system_prompt=CTA_system_prompt,
+                max_iterations=self.max_generation_turns,
+                temperature=0.7,  # Higher temperature for creative PoV generation
+                max_tokens=30720,
+                continuation_prompt="Please continue your analysis and craft the final PoV candidate after you get enough information." + \
+                  "If you already generated the file, call `finish` tool to end the process."
+            )
 
-        if not result['success']:
-            error_msg = result.get('error', 'Unknown error')
-            self.logger.error(f"  [CrashTriggerAgent] LLM agent loop failed: {error_msg}")
-            raise RuntimeError(f"Failed to generate final PoV: {error_msg}")
+            if not result['success']:
+                error_msg = result.get('error', 'Unknown error')
+                self.logger.warning(f"  [CrashTriggerAgent] LLM agent loop did not complete successfully: {error_msg}")
+                # Don't raise error here - continue to Substep 3 to check if the file was still generated
 
-        response = result['final_response']
-        self.logger.info(f"  [CrashTriggerAgent] LLM completed in {result['iterations']} iteration(s)")
-        self.logger.info(f"  [CrashTriggerAgent] Stop reason: {result['stop_reason']}")
-        self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
+            response = result.get('final_response', '')
+            self.logger.info(f"  [CrashTriggerAgent] LLM completed in {result.get('iterations', 'N/A')} iteration(s)")
+            self.logger.info(f"  [CrashTriggerAgent] Stop reason: {result.get('stop_reason', 'N/A')}")
+            if response:
+                self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
+        except Exception as e:
+            self.logger.warning(f"  [CrashTriggerAgent] Exception during LLM agent loop: {e}")
+            # Don't raise error here - continue to Substep 3 to check if the file was still generated
 
         # Substep 3: Verify that the PoV file was written and is non-empty
         # Check if the exact path exists first
