@@ -31,6 +31,8 @@ class CrashTriggerAgent:
         # The outermost-loop counters.
         self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
+        # Control test case generation turns.
+        self.max_generation_turns = 20 # 15 or 20 or 25
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
@@ -48,7 +50,7 @@ class CrashTriggerAgent:
         self.llvm_cov_utils = LLVMCovUtils(binary_abs_path=binary_abs_path)
 
     def run(self) -> None:
-        self.logger.info("  [CrashTriggerAgent] Starting running. Checking previous path exploration results...")
+        self.logger.info(f"  [CrashTriggerAgent] Starting running. Checking previous path exploration results...  (tools num: {len(self.tools_for_generation)})")
 
         # Clear all the previous roundN directories if exist
         for i in range(1, self.max_trigger_iterations+1+4):
@@ -103,7 +105,7 @@ class CrashTriggerAgent:
 
             try:# Main operations!
                 # Step 1: Generate final PoV.
-                pov_path = self._generate_final_pov()
+                pov_path = self._generate_pov_candidate()
                 self.generated_candidates[iteration]["testcase_path"] = pov_path
 
                 # Step 2: Execute PoV candidate for cov-instr program (to collect coverage).
@@ -146,11 +148,10 @@ class CrashTriggerAgent:
         # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
         return os.path.join(self.drill_agent.work_dir, f"triggering", f"round{round_num}")
 
-    def _generate_final_pov(self) -> str:
+    def _generate_pov_candidate(self) -> str:
         # Generate final PoV using LLM with vulnerability analysis and path exploration feedback
         # Returns path to the generated PoV file
-        self.logger.info(f"  [CrashTriggerAgent] Generating final PoV using LLM...")
-        max_generation_turns = 20  # Allow LLM multiple turns to generate PoV
+        self.logger.info(f"  [CrashTriggerAgent] Generating final PoV candidate...")
         round_dir = self._get_round_dir(self.current_trigger_iteration)
         os.makedirs(round_dir, exist_ok=True)
 
@@ -215,10 +216,11 @@ class CrashTriggerAgent:
             task=user_prompt,
             tools=self.tools_for_generation,  # Allow LLM to use tools for exploration, including write_file
             system_prompt=CTA_system_prompt,
-            max_iterations=max_generation_turns,
+            max_iterations=self.max_generation_turns,
             temperature=0.7,  # Higher temperature for creative PoV generation
             max_tokens=30720,
-            continuation_prompt="Please continue your analysis and and craft the final PoV candidate after you get enough information."
+            continuation_prompt="Please continue your analysis and craft the final PoV candidate after you get enough information." + \
+              "If you already generated the file, call `finish` tool to end the process."
         )
 
         if not result['success']:

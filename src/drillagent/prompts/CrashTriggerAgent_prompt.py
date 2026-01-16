@@ -21,8 +21,10 @@ IMPORTANT:
 """
 # - Focus on reliability: ensure the PoV consistently triggers the crash
 
+# TODO: This should provide the round dirs of path exploration phase.
+CTA_useful_testcase_and_cov_template = """## PREVIOUS PoV GENERATION PROGRESS
 
-CTA_useful_testcase_and_cov_template = """The following test cases were generated during path exploration and successfully reached closer to the vulnerability (but failed to trigger the crash). 
+The following test cases were generated during path exploration and successfully reached closer to the vulnerability (but failed to trigger the crash). 
 Each test case is accompanied by its coverage record:
 
 {testcase_and_cov_paths}
@@ -35,8 +37,8 @@ Use the `read_file` tool to examine these files and synthesize their insights in
 """
 
 # **Coverage Analysis Configuration:**
-CTA_previous_roundir_template = """
-**Previous Round Artifacts:**
+CTA_previous_roundir_template = """## PREVIOUS ROUND ARTIFACTS
+
 The previous round (iteration {previous_iteration}) artifacts are stored in directory:
 `{previous_round_dir}`
 
@@ -70,19 +72,13 @@ Actual repository path: {actual_repo_path}
 
 **TARGET PoV FILE PATH**: {target_pov_path}
 
-VULNERABILITY INFORMATION:
-
 {vulnerability_info}
-
-ROOT CAUSE ANALYSIS:
 
 {root_cause_analysis}
 
-PREVIOUS PoV GENERATION PROGRESS:
-
 {previous_pov_gen_progress}
 
-YOUR TASK:
+# YOUR TASK
 
 1. **Analyze all available information**:
    - Review the vulnerability type, root cause, and call trace
@@ -125,8 +121,16 @@ YOUR TASK:
    - What specific vulnerability condition does this PoV target?
    - Why should this PoV successfully trigger the crash?
 
----
-EXAMPLES:
+IMPORTANT:
+- Use provided tools (e.g., `ast_grep_search_function`) to read source code at critical points if needed to refine your PoV
+- **CRITICAL**: You MUST ensure the PoV file exists at the TARGET PoV FILE PATH before your final response!
+- This is your final attempt - make it count by leveraging ALL available information
+- Focus on reproducing the crash over code path exploration.
+- The PoV file should contain ONLY the input data for the target program (not a script or code)
+
+Generate the final PoV now and write it to the target file path.
+
+## EXAMPLES
 
 **Example 1 - Text-based (Ruby interpreter like mruby):**
 ```
@@ -165,14 +169,4 @@ print(f"Generated PoV at {{output_path}}")
 # Step 2: Execute the script
 execute_bash(command="python3 /workspace/triggering/round1/gen_testcase_round1.py", working_dir="/workspace/triggering/round1")
 ```
----
-
-IMPORTANT:
-- Use provided tools (e.g., `ast_grep_search_function`) to read source code at critical points if needed to refine your PoV
-- **CRITICAL**: You MUST ensure the PoV file exists at the TARGET PoV FILE PATH before your final response!
-- This is your final attempt - make it count by leveraging ALL available information
-- Focus on reproducing the crash over code path exploration.
-- The PoV file should contain ONLY the input data for the target program (not a script or code)
-
-Generate the final PoV now and write it to the target file path.
 """

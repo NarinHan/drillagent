@@ -717,9 +717,10 @@ class VulnInfo:
     def format_output(self, skip_rca_result=False) -> str:
         # Returns the basic vulnerability information as a formatted string. Including crash trace and allocation/free traces.
         lines = []
-        lines.append("=" * 80)
-        lines.append("VULNERABILITY ANALYSIS RESULTS")
-        lines.append("=" * 80)
+        # lines.append("=" * 80)
+        lines.append("## VULNERABILITY ANALYSIS RESULTS")
+        lines.append("")
+        # lines.append("=" * 80)
         # Section 1: Vulnerability Details
         lines.append("[VULNERABILITY DETAILS]")
         lines.append(f"  Vuln Type:              {self.vuln_type if self.vuln_type else 'N/A'}")
@@ -778,22 +779,26 @@ class VulnInfo:
                     lines.append(f"  {line.strip()}")
         # Section 4: Root Cause Analysis
         if self.root_cause and not skip_rca_result:
-            lines.append("\n[ROOT CAUSE ANALYSIS]")
+            # lines.append("\n[ROOT CAUSE ANALYSIS]")
             # Handle multi-line root cause descriptions
             root_cause_lines = self.root_cause.split('\n') # all lines
             # first 20 lines for simplicity (update: should not limit here, full details needed)
             # root_cause_lines = root_cause_lines[:20] #
             # root_cause_lines.append("...") if len(self.root_cause.split('\n')) > 20 else None #
             for rc_line in root_cause_lines:
-                if rc_line.strip():
+                if not rc_line.strip(): continue # skip empty lines
+                if rc_line.startswith("## "):
+                    lines.append(f"{rc_line}")
+                else:
                     lines.append(f"  {rc_line}")
         # Section 5: Critical Steps (if available)
         # if self.critical_steps and len(self.critical_steps) > 0:
         #     lines.append("\n[CRITICAL STEPS]")
         #     for idx, step in enumerate(self.critical_steps, 1):
         #         lines.append(f"  {idx}. {step}")
-        lines.append("=" * 80)
-        # print('\n'.join(lines))
+        
+        # lines.append("=" * 80)
+        # lines.append("")
         return '\n'.join(lines)
 
     def get_full_root_cause(self) -> str:

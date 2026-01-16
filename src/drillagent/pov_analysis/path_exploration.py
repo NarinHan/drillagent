@@ -37,6 +37,8 @@ class PathExplorationAgent:
         # The outermost-loop counters:
         self.max_exp_iterations = 8
         self.current_exp_iteration = 0
+        # Control test case generation turns.
+        self.max_generation_turns = 15 # 10 or 15 or 20
 
         # Fields for coverage collection
         repo_path = self.drill_agent.config.target_repo_path
@@ -58,7 +60,7 @@ class PathExplorationAgent:
 
     def run(self) -> None:
         # Run the path exploration process to generate test cases that can reach the vulnerable function.
-        self.logger.info("  [PathExplorationAgent] Starting path exploration analysis...")
+        self.logger.info(f"  [PathExplorationAgent] Starting path exploration analysis... (tools num: {len(self.tools_for_generation)})")
 
         # Clear all the previous roundN directories if exist
         for i in range(1, self.max_exp_iterations+1+4):
@@ -70,7 +72,7 @@ class PathExplorationAgent:
         previous_feedback = None # From coverage feedback analysis
         for iteration in range(1, self.max_exp_iterations + 1):
             print("\n")
-            self.logger.info(f"  [PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
+            self.logger.info(f"[PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
             # Prepare: Create roundN subdirectory and clear its contents
@@ -158,14 +160,12 @@ class PathExplorationAgent:
         # 1. Get vulnerability information. If previous_feedback is provided, include it in the prompt to guide the LLM with coverage information.
         # 2. Use LLMInterface to generate test case (with tools and multi-turn interaction).
         # 3. Extract testcase content from LLM response.
-        print("")
-        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep1: Generating test case...")
+        self.logger.info(f"  [PathExplorationAgent] Step1: Generating test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
-        max_generation_turns = 15 # 10 or 15 or 20
 
         # Substep 1: Construct the prompt for test case generation
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
-        vuln_info_str += "\n" + self.drill_agent.vulnerability_info.get_full_root_cause()
+        vuln_info_str += "\n\n" + self.drill_agent.vulnerability_info.get_full_root_cause()
 
         # Build feedback section if we have previous iteration results
         feedback_section = ""
@@ -219,15 +219,16 @@ class PathExplorationAgent:
         # Substep 2: Use LLMInterface for automatic tool calling and conversation management
         self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
         try:
-            result = self.drill_agent.low_cost_llm.run_agent_loop(
+            # FIXED: We should not use cheaper model here, gpt-5-mini prefers to invoke only one tool call each time...
+            result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,
                 tools=self.tools_for_generation, # When generating test case, LLM is encouraged to use tools
                 system_prompt=PEA_system_prompt,
-                max_iterations=max_generation_turns, # tunable parameter
+                max_iterations=self.max_generation_turns, # tunable parameter
                 temperature=0.7,  # Higher temperature for creative test case generation
                 max_tokens=30720,
-                # How run_agent_loop ends the interaction is also problematic. Maybe a `finish` tool is needed?
-                continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information."
+                continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information." + \
+                  "If you already generated the file, call `finish` tool to end the process."
             )
 
             if not result['success']:
@@ -252,8 +253,7 @@ class PathExplorationAgent:
             matching_files = glob.glob(search_pattern)
             if not matching_files:
                 raise RuntimeError(
-                    f"Test case file was not created. Expected: {test_case_path} or {test_case_path}.* "
-                    f"LLM may have failed to use write_file tool."
+                    f"Test case file was not created. Expected: {test_case_path}"
                 )
             # Update the path using the first matching file (should only be one)
             test_case_path = matching_files[0]
@@ -270,7 +270,7 @@ class PathExplorationAgent:
     def _execute_test_case(self, command: str) -> Tuple[int, str]: # No LLM needed
         # Execute the program with llvm-cov instrumentation, return exit code and output.
         print("")
-        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep2: Executing test case...")
+        self.logger.info(f"  [PathExplorationAgent] Step2: Executing test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
 
         # Substep 1: Set environment variable to generate profraw file
@@ -330,7 +330,7 @@ class PathExplorationAgent:
         # 2. Query coverage using self.llvm_cov_utils.get_multi_functions_coverage()
         # 3. Format and return the coverage information as a string for analysis
         print("")
-        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep3: Collecting coverage feedback...")
+        self.logger.info(f"  [PathExplorationAgent] Step3: Collecting coverage feedback...")
         assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!" # Should never happen
 
         # Check if we have a valid call trace
@@ -453,34 +453,20 @@ class PathExplorationAgent:
         if not first_uncovered_frame:
             self.logger.info(f"  [PathExplorationAgent] All callsites in the call trace have been covered!!!!!")
 
-        # 2026.01.03: We don't hard-encode detailed function coverage results here.
-        # # If we found an uncovered callsite, get detailed function coverage for branch-level analysis
-        # if first_uncovered_frame:
-        #     try:
-        #         # Get detailed line-by-line coverage for the uncovered function
-        #         abs_file_path = os.path.abspath(os.path.join(repo_path, first_uncovered_frame['file_path']))
-        #         detailed_func_cov_data = self.llvm_cov_utils.get_detailed_function_coverage(
-        #             file_path=abs_file_path,
-        #             function_name=first_uncovered_frame['function_name']
-        #         )
-        #         self.logger.info(f"  [PathExplorationAgent] Retrieved detailed coverage for '{first_uncovered_frame['function_name']}'")
-        #     except Exception as e:
-        #         self.logger.warning(f"  [PathExplorationAgent] Failed to get detailed function coverage for '{first_uncovered_frame['function_name']}': {e}")
-        #         detailed_func_cov_data = None
+        # 2026.01.03: We don't hard-encode detailed function coverage results (detailed_func_cov_data) here.
+        # Let LLM find it by itself if needed.
 
         # If first_uncovered_frame is still None here, it means all callsites are covered!
         return sorted_frames, first_uncovered_frame, detailed_func_cov_data
 
     def _format_coverage_feedback(self, sorted_cov_frames: List[Dict], first_uncovered_frame: Dict|None, detailed_func_cov_data: str|None) -> str:
         output_lines = [
-            "=" * 80,
-            f"COVERAGE FEEDBACK - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
-            "=" * 80,
+            f"### COVERAGE FEEDBACK - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
             ""
         ]
 
         # Add detailed frame-by-frame coverage information
-        output_lines.append("Function-Level Frame-by-Frame Coverage (from caller to callee):") #####
+        output_lines.append("Function-Level Coarse-Grained Coverage (from caller to callee):")
 
         for i, frame in enumerate(sorted_cov_frames, 1):
             seq_num = frame['sequence_num']
@@ -505,32 +491,32 @@ class PathExplorationAgent:
             # output_lines.append(f"     Function: {func_exec_status} (count: {func_exec_count})")
 
             # Mark if this is the first uncovered callsite
-            if first_uncovered_frame and frame['sequence_num'] == first_uncovered_frame['sequence_num']:
-                output_lines.append(f"     >>> FIRST UNCOVERED CALLSITE <<<")
+            # if first_uncovered_frame and frame['sequence_num'] == first_uncovered_frame['sequence_num']:
+            #     output_lines.append(f"     >>> FIRST UNCOVERED CALLSITE <<<")
 
             # output_lines.append("")
 
         # Add detailed line-by-line coverage for the first uncovered callsite
-        if first_uncovered_frame:
-            output_lines.append("-" * 80)
-            output_lines.append(f"Line-Level First Un-executed Callsite:") #####
-            output_lines.append(f"  Function: #{first_uncovered_frame['sequence_num']} {first_uncovered_frame['function_name']}")
-            output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (the un-executed line in the func body)")
+        # if first_uncovered_frame:
+        #     output_lines.append("-" * 80)
+        #     output_lines.append(f"Line-Level First Un-executed Callsite:") #####
+        #     output_lines.append(f"  Function: #{first_uncovered_frame['sequence_num']} {first_uncovered_frame['function_name']}")
+        #     output_lines.append(f"  Location: {first_uncovered_frame['file_path']}:{first_uncovered_frame.get('line_number', 'N/A')} (the un-executed line in the func body)")
+        #     output_lines.append("")
             # output_lines.append(f"    Based on the provided call trace, determine which callee was not invoked here and explain why it was not called.")
-            output_lines.append("")
             # if detailed_func_cov_data: # Add the detailed coverage output directly
             #     output_lines.append("Function Body Code with Coverage:")
             #     output_lines.append("  - The leftmost column shows the source code line numbers.)")
             #     output_lines.append("  - The middle column shows the execution counts.")
             #     output_lines.append("  - The rightmost column contains the source code.")
             #     output_lines.append(detailed_func_cov_data)
-        else:
-            output_lines.append("-" * 80)
-            output_lines.append(f"Line-Level First Un-executed Callsite: (if any)") #####
-            output_lines.append("  All callsites in the call trace have been covered!")
-            output_lines.append("")
+        # else:
+        #     output_lines.append("")
+        #     output_lines.append(f"Line-Level First Un-executed Callsite: (if any)") #####
+        #     output_lines.append("  All callsites in the call trace have been covered!")
+        #     output_lines.append("")
 
-        output_lines.append("=" * 80)
+        # output_lines.append("=" * 80)
         formatted_output = '\n'.join(output_lines)
 
         self.logger.info(f"  [PathExplorationAgent] Formatted coverage feedback!")
@@ -542,13 +528,13 @@ class PathExplorationAgent:
     ) -> Tuple:
         # For input parameters, `sorted_cov_frames` contains most of the information we need.
         print("")
-        self.logger.info(f"  [PathExplorationAgent] [Round {self.current_exp_iteration}] Substep4: Analyzing coverage feedback...")
+        self.logger.info(f"  [PathExplorationAgent] Step4: Analyzing coverage feedback...")
         
         # Aggregate basic execution and coverage info
         basic_info = [
-            "=" * 80,
-            f"BASIC EXECUTION INFO - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
-            "=" * 80,
+            # "=" * 80,
+            f"### BASIC EXECUTION INFO - Iteration {self.current_exp_iteration}/{self.max_exp_iterations}",
+            # "=" * 80,
             f"Exit code: {exit_code}\n"
             f"Execution output:\n{exec_output}\n"
         ]

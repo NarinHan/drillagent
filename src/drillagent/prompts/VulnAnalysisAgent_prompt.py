@@ -12,7 +12,6 @@ When using tools and generating paths, please adhere to the following guidelines
 When exploring the codebase, use efficient commands like ls, find, grep, etc. with appropriate filters to minimize unnecessary operations.
 
 EFFICIENCY TIP: You can call multiple tools in a single response. When you need to read several related source files (e.g., to understand a call chain), call `read_file` multiple times (<= 5) in one turn rather than reading them one by one across multiple turns. This saves iterations and gives you more context at once.
-
 """
 
 
@@ -22,10 +21,13 @@ VAA_sanitizer_extraction_prompt = """You are analyzing a sanitizer report to ext
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Sanitizer Report:
+# SANITIZER REPORT
+
 ```
 {sanitizer_report}
 ```
+
+# YOUR TASK
 
 Your task is to extract the following information from the sanitizer report:
 
@@ -95,10 +97,13 @@ VAA_call_trace_transform_prompt = """You are transforming a raw call trace from 
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Raw Call Trace:
+# RAW CALL TRACE
+
 ```
 {raw_call_trace}
 ```
+
+# YOUR TASK
 
 Your task is to parse this call trace and extract structured information for each frame.
 
@@ -167,12 +172,15 @@ VAA_call_trace_linenum_refine_prompt = """You are refining the line number for a
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current Stack Frame (with potentially inaccurate line number):
+# CURRENT STACK FRAME INFO
+Function call-site location: (with potentially inaccurate line number)
 ```json
 {current_frame_json}
 ```
 
-Callee Function Name: {callee_function_name}
+Callee function name: {callee_function_name}
+
+# YOUR TASK
 
 Your task is to verify and adjust the line number for this frame by examining the actual source code.
 
@@ -227,13 +235,14 @@ VAA_harness_refine_prompt = """You are refining a harness command to accurately 
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Current harness command: 
-(may contain absolute path prefix not existing in the local machine, need to be refined)
+# RAW HARNESS COMMAND
+
 ```
 {harness_command}
 ```
+(may contain absolute path prefix not existing in the local machine, need to be refined)
 
-Your tasks:
+# YOUR TASK
 
 1. **Extract and infer the binary_path**: The path RELATIVE to the repository root
    - You can refer to the provided harness command to infer the path. Or read README doc to find the built binary program location.
@@ -272,6 +281,8 @@ Respond in the following JSON format ONLY:
     "input_file_suffix": ".ext or empty string"
 }}
 
+## EXAMPLES
+
 Example 1 (with file suffix):
 If harness is: "/src/njs/build/njs /testcase/poc.js"
 And repo is: "/home/ubuntu/PoV/Repos/njs"
@@ -291,7 +302,6 @@ Then output should be:
     "refined_harness_command": "/home/ubuntu/PoV/Repos/program/bin/parser <path/to/testcase> -o ./result.log",
     "input_file_suffix": ""
 }}
-
 """
 
 # Some of the prompt contents are removed to handle the code repo that has not been compiled yet, since VulnAnalysis may be earlier than Instrumentation check.
@@ -312,7 +322,8 @@ VAA_root_cause_analysis_prompt = """You are performing root cause analysis for a
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-Vulnerability Information:
+# VULNERABILITY INFORMATION
+
 - Vuln Type: {vuln_type}
 - Crash Location: {crash_location}
 - Crash Function: {crash_function}
@@ -339,6 +350,8 @@ Command to trigger the vulnerability crash:
 {free_trace}
 ```
 
+# YOUR TASK
+
 Your task is to explain the ROOT CAUSE of this vulnerability:
 
 1. Examine the source code at the crash location.
@@ -357,7 +370,6 @@ Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUS
 - Why it occurs (the root cause)
 - What code pattern or logic flaw enables it
 - Explain what conditions trigger it!
-
 """
 
 

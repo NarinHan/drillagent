@@ -802,27 +802,27 @@ class LLMInterface:
                     current_prompt = (
                         "CRITICAL: This is your FINAL iteration. Make sure you will give a complete answer.\n\n"
                         "Theoretically, you should no longer perform tool calls.\n"
-                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration."
+                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration. "
                         "You can:\n"
                         "1. Use write_file to generate the target file (or a Python script that generates it)\n"
                         "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
-                        "**Note that** this is your LAST response, and you won't be able to view the tool results!\n\n"
+                        "**Note that** this is your LAST response, and you won't be able to view the tool results!"
                     )
                 elif next_iteration == max_iterations - 1:
                     # Next iteration is second-to-last: warn this is the last chance to use all tools
                     current_prompt = (
-                        "IMPORTANT: This is your second-to-last iteration (maybe your LAST chance to call tools). "
-                        "After this iteration, you will need to provide your final answer based on all available context. "
-                        "Use tools wisely if needed, or provide your final answer now if you have enough information.\n\n"
+                        "IMPORTANT: This is your second-to-last iteration (maybe your LAST chance to call tools).\n"
+                        "After this iteration, you will need to provide your final answer based on all available context.\n"
+                        "Use tools wisely if needed, or provide your final answer now if you have enough information.\n"
                         # "You can still use any tools in this iteration, but in the next iteration you will only be able to use write_file and execute_bash.\n\n"
-                        "(If you are asked to generate a testcase or PoV file, conduct generation operations now!)\n\n"
+                        "- If you are asked to generate a testcase or PoV file, conduct generation operations now!\n"
                         f"{continuation_prompt}"
                     )
                 else:
                     # Normal continuation
                     current_prompt = continuation_prompt
 
-            # Max iterations reached
+            # Max iterations reached (without finish tool detected)
             result = {
                 'success': False,
                 'final_response': text_response,

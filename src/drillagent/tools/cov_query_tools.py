@@ -5,9 +5,10 @@ from typing import Dict, Any, Optional
 
 from .basic_tools import AgentTool
 
-# TODO: Read LLM log to see if FuncLineCovTool is used properly.
-# When use this agent tool, we assume that there is already a *.profdata file.
+# TODO: After reading LLM log, It seems that we should let LLM use BashTool to use llvm-cov command, instead of using FuncLineCovTool.
+# TIP: gpt-5-mini seems don't know how to use this tool well.
 class FuncLineCovTool(AgentTool):
+    # When use this agent tool, we assume that there is already a *.profdata file.
     """
     Tool for retrieving detailed line-by-line coverage for a specific function.
     Uses llvm-cov show command to display execution counts and source code.
@@ -96,6 +97,7 @@ class FuncLineCovTool(AgentTool):
             - source_file_path: str the resolved file path (if provided)
             - error: str error message if failed
         """
+        print(f"[FuncLineCovTool] Coverage query for function '{function_name}' ") # DEBUG
         try:
             # Use the binary_path from initialization
             binary_path = self.binary_path

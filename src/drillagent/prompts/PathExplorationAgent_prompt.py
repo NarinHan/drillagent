@@ -19,7 +19,7 @@ IMPORTANT:
 # Template for providing previous execution feedback to guide LLM
 # TODO: This should be modified...
 PEA_feedback_results_template = """
-EXECUTION FEEDBACK FROM PREVIOUS ITERATION:
+## EXECUTION FEEDBACK FROM PREVIOUS ITERATION
 
 After executing previous test case (from iteration {loop_progress}), the program output and coverage information are as follows.
 
@@ -31,7 +31,8 @@ Then, you should focus on the following tasks with the above observations and an
 
 # Template for providing previous round directory to guide LLM
 PEA_previous_roundir_template = """
-**Previous Round Artifacts:**
+## PREVIOUS ROUND ARTIFACTS
+
 The previous round (iteration {previous_iteration}) artifacts are stored in directory:
 `{previous_round_dir}`
 
@@ -62,15 +63,13 @@ PEA_testcase_generation_prompt = """You are generating a test case to trigger a 
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
 
-**TARGET TEST CASE FILE PATH**: {target_testcase_path}
-
-VULNERABILITY INFORMATION:
+**Target Test Case File Path**: {target_testcase_path}
 
 {vulnerability_info}
 
 {feedback_section}
 
-YOUR TASK:
+# YOUR TASK
 
 1. **Analyze the vulnerability**:
    - Understand the vulnerability type and what conditions can trigger it
@@ -106,8 +105,19 @@ YOUR TASK:
    - What input pattern did you generate and why?
    - How does it aim to reach/trigger the vulnerability?
 
----
-EXAMPLES:
+IMPORTANT:
+- You should use provided tools to read related source code if needed, and then generate the test case.
+  - Mainly use `ast_grep_search_function` tool to read function implementations that are relevant to the vulnerability and call trace.
+  - You can also use `read_file` tool to read code if there is no function name. (you are encouraged to read more than one line)
+- **CRITICAL**: You MUST ensure the test case file exists at the TARGET TEST CASE FILE PATH before your final response!
+- If it is already the final turn, ensure you write/generate the test case file in this turn!!!
+- The test case file should contain ONLY the input data for the target program (not a script or code)
+- Focus on generating input that reaches the vulnerable code path first
+- You can refine the input in subsequent rounds based on coverage feedback
+
+Generate the test case now and write it to the target file path.
+
+## EXAMPLES
 
 **Example 1 - Text-based (JavaScript interpreter like njs):**
 ```
@@ -145,17 +155,5 @@ print(f"Generated testcase at {{output_path}}")
 # Step 2: Execute the script
 execute_bash(command="python3 /workspace/round1/gen_testcase_round1.py", working_dir="/workspace/round1")
 ```
----
 
-IMPORTANT:
-- You should use provided tools to read related source code if needed, and then generate the test case.
-  - Mainly use `ast_grep_search_function` tool to read function implementations that are relevant to the vulnerability and call trace.
-  - You can also use `read_file` tool to read code if there is no function name. (you are encouraged to read more than one line)
-- **CRITICAL**: You MUST ensure the test case file exists at the TARGET TEST CASE FILE PATH before your final response!
-- If it is already the final turn, ensure you write/generate the test case file in this turn!!!
-- The test case file should contain ONLY the input data for the target program (not a script or code)
-- Focus on generating input that reaches the vulnerable code path first
-- You can refine the input in subsequent rounds based on coverage feedback
-
-Generate the test case now and write it to the target file path.
 """
