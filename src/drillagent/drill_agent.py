@@ -38,7 +38,7 @@ class DrillAgent:
         self.cve_id       = config.cve_id
         self.work_dir   = self.config.work_dir
         self.output_dir = self.config.output_dir
-        self.iteration = 0 ##
+        self.cache_dir = os.path.join(self.config.work_dir, "cache_drillagent")
         self.errors = []
 
         # LLM interfaces (We use different LLMs for different sub-tasks to optimize cost and performance)
@@ -201,12 +201,14 @@ class DrillAgent:
                 if not res:
                     self.logger.error("Instrumentation phase failed, cannot proceed further.")
                     return self._generate_report()
-
-            # Initialize coverage analysis tools now that we have binary_path
+            
+            # Phase 2.5:
+            # Initialize coverage analysis tools now that we have binary_path file generated.
+            self._update_actual_binary_path(self.config.target_repo_path)
             try:
                 binary_abs_path = os.path.join(
                     self.config.target_repo_path,
-                    self.vulnerability_info.binary_path # obtained from two phases ago
+                    self.vulnerability_info.actual_binary_path
                 )
                 self.cov_tools = [
                     FuncLineCovTool(self.config.target_repo_path, binary_abs_path)
@@ -299,9 +301,15 @@ class DrillAgent:
             checkout_gitrepo_commit(repo_path, self.config.base_commit)
             self.logger.info("✓ Checked out Base commit!")
 
-        target_repo_path   = self.config.target_repo_path
-        saninstr_repo_path = self.config.saninstr_repo_path
-        binary_relative_path = self.vulnerability_info.binary_path
+        # Prepare related paths
+        target_repo_path    = self.config.target_repo_path
+        saninstr_repo_path  = self.config.saninstr_repo_path
+        bin_rel_path        = self.vulnerability_info.binary_path  
+        actual_bin_rel_path = self.vulnerability_info.actual_binary_path
+        if len(actual_bin_rel_path) > 0: # We have reliable actual binary path from previous cache!
+            binary_relative_path = actual_bin_rel_path
+        else:
+            binary_relative_path = bin_rel_path
 
         # Substep 1: check if instrumented binary already exists (currently two types, llvm-cov and sanitizer)
         if check_saninstr_binary_exists(saninstr_repo_path, binary_relative_path) \
@@ -337,10 +345,21 @@ class DrillAgent:
             result_san = self.sanitizer_agent.run()
             if result_san['success']:
                 self.logger.info(f"✓ \"{self.project_name}\" sanitizer instrumentation completed.")
-                self.logger.info(f"    Binary path: {saninstr_repo_path}/{result_san.get('instrumented_binary')}")
+                # self.logger.info(f"    Binary path: {saninstr_repo_path}/{result_san.get('instrumented_binary')}")
             else:
                 self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
                 self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
+                exit(1) # For debug
+                return False
+            
+            # After the compilation, verify if the sanitizer-instrumented actual binary is qualified.
+            self._update_actual_binary_path(saninstr_repo_path)
+            actual_bin_rel_path = self.vulnerability_info.actual_binary_path # Update local variable
+            if check_saninstr_binary_exists(saninstr_repo_path, actual_bin_rel_path):
+                self.logger.info(f"Created qualified sanitizer-instrumented binary! \n{33*' '}{saninstr_repo_path}/{actual_bin_rel_path}")
+            else:
+                self.logger.error(f"  Failed to create qualified sanitizer-instrumented binary at expected path: \n{saninstr_repo_path}/{actual_bin_rel_path}")
+                self.errors.append(f"Sanitizer instrumentation failed: Qualified binary not found after build.")
                 exit(1) # For debug
                 return False
 
@@ -352,13 +371,24 @@ class DrillAgent:
             result = self.coverage_agent.run()
             if result['success']:
                 self.logger.info(f"✓ \"{self.project_name}\" coverage instrumentation completed.")
-                self.logger.info(f"    Binary path: {target_repo_path}/{result.get('instrumented_binary')}")
+                # self.logger.info(f"    Binary path: {target_repo_path}/{result.get('instrumented_binary')}")
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
                 exit(2) # For debug
                 return False
-
+            
+            # After the compilation, verify if the coverage-instrumented binary is qualified.
+            self._update_actual_binary_path(target_repo_path)
+            actual_bin_rel_path = self.vulnerability_info.actual_binary_path # Update local variable
+            if check_llvmcov_binary_exists(target_repo_path, actual_bin_rel_path):
+                self.logger.info(f"Created qualified coverage-instrumented binary! \n{33*' '}{target_repo_path}/{actual_bin_rel_path}")
+            else:
+                self.logger.error(f"  Failed to create qualified coverage-instrumented binary at expected path: \n{target_repo_path}/{actual_bin_rel_path}")
+                self.errors.append(f"Coverage instrumentation failed: Qualified binary not found after build.")
+                exit(2) # For debug
+                return False
+        
         self.logger.info("✓ Instrumentation phase completed")
         return True
 
@@ -418,7 +448,6 @@ class DrillAgent:
             if final_pov:
                 self.logger.info(f"  ✓ Final PoV successfully generated and validated!")
                 self.logger.info(f"  - PoV path: {final_pov['saved_pov_path']}")
-                # self.logger.info(f"  - Found at iteration: {final_pov['iteration']}")
                 self.crash_inputs.append(final_pov['saved_pov_path'])
             else:
                 self.logger.warning(f"  ✗ No valid PoV generated after {self.crash_agent.current_trigger_iteration} iterations")
@@ -429,6 +458,21 @@ class DrillAgent:
             self.errors.append(f"Crash triggering failed: {e}")
 
         self.logger.info("✓ Crash triggering analysis completed")
+
+    def _update_actual_binary_path(self, target_repo_path: str) -> None:
+        # IMPORTANT: This should only be called AFTER basic vuln analysis and the compilation.
+        if len(self.vulnerability_info.actual_binary_path) == 0: # Examine if we already have the reliable actual binary path from cache.
+            program_abs_path = os.path.join(target_repo_path, self.vulnerability_info.binary_path)
+            if is_text_file(program_abs_path): # Examine if the "binary_path" is actually a text script file.
+                self.logger.info(f"Detected that binary_path points to a text script file. Attempting to find the real binary...")
+                # # Inner logic will finish the cache update and setting.
+                actual_bin_path = self.vuln_agent.find_actual_binary_path(target_repo_path, entry_program_path=program_abs_path)
+                self.vulnerability_info.actual_binary_path = actual_bin_path
+            else:
+                self.vulnerability_info.actual_binary_path = self.vulnerability_info.binary_path # necessary
+            self.logger.info(f"✓ Entry program and actual binary path: \n{36*' '+self.vulnerability_info.binary_path} \n{36*' '+self.vulnerability_info.actual_binary_path}")
+        else:
+            pass # do nothing
 
     def _generate_report(self) -> Dict[str, Any]:
         """Generate final analysis report"""
@@ -474,5 +518,4 @@ class DrillAgent:
 #     phase: str = "initialized"  # initialized, instrumented, analyzing, exploring, completed
 #     crash_inputs: List[str] = field(default_factory=list)
 #     pov_candidates: List[Dict] = field(default_factory=list)
-#     iteration: int = 0
 

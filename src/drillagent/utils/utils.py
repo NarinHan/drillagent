@@ -44,7 +44,6 @@ def is_binary_file(file_path: str) -> bool:
     except Exception:
         return False
 
-# TODO: Handle text script wrapper situations. Use Tmp compromise for now.
 def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str) -> bool:
     # Check if a binary exists and contains LLVM coverage instrumentation
     # Returns True if binary exists and contains __llvm_profile symbols, False otherwise
@@ -54,10 +53,6 @@ def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str
     if not binary_path.exists():
         # print(f"Target binary does not exist: {binary_path}")
         return False
-    
-    # Tmp compromise
-    if is_text_file(str(binary_path)):
-        return True
 
     # Check if binary contains LLVM coverage symbols
     try:
@@ -70,7 +65,7 @@ def check_llvmcov_binary_exists(actual_repo_path: str, binary_relative_path: str
         if result.returncode == 0:
             return True
         else:
-            print(f"Target binary does not contain \"__llvm_profile\" strings: {binary_path}")
+            # print(f"Target binary does not contain \"__llvm_profile\" strings: {binary_path}")
             return False
     except Exception:
         return False
@@ -84,10 +79,6 @@ def check_saninstr_binary_exists(actual_repo_path: str, binary_relative_path: st
         # print(f"Target binary does not exist: {binary_path}")
         return False
 
-    # Tmp compromise
-    if is_text_file(str(binary_path)):
-        return True
-
     # Check if binary contains LLVM coverage symbols
     try:
         result = subprocess.run(
@@ -99,7 +90,7 @@ def check_saninstr_binary_exists(actual_repo_path: str, binary_relative_path: st
         if result.returncode == 0:
             return True
         else:
-            print(f"Target binary does not contain \"__sanitizer\" strings: {binary_path}")
+            # print(f"Target binary does not contain \"__sanitizer\" strings: {binary_path}")
             return False
     except Exception:
         return False

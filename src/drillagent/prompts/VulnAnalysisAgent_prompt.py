@@ -373,6 +373,65 @@ Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUS
 """
 
 
+# Prompt for finding actual binary path from a wrapper script
+VAA_find_actual_binary_prompt = """You are analyzing a wrapper script to find the actual ELF binary it executes.
+
+Project: {project_name}
+Repository path: {actual_repo_path}
+
+# WRAPPER SCRIPT PATH
+
+```
+{script_path}
+```
+
+# WRAPPER SCRIPT CONTENT
+
+```
+{script_content}
+```
+
+# YOUR TASK
+
+This script is a wrapper that invokes an actual ELF binary executable. Your task is to identify the path of that actual binary.
+
+Analysis steps:
+1. Read the script content carefully.
+2. Identify the command(s) that execute the actual binary program.
+   - Look for patterns like: `exec /path/to/binary`, `./binary`, `/path/to/binary "$@"`, etc.
+   - The binary is typically called with `exec`, or directly invoked as the main command.
+3. Determine the binary path:
+   - If it's a relative path in the script (e.g., `./build/program`), convert it to be relative to the repository root.
+   - If it's an absolute path, extract the portion relative to the repository root.
+   - If the script uses variables like `$DIR` or `$(dirname $0)`, resolve them based on the script's location.
+
+IMPORTANT:
+- The binary path must be RELATIVE to the repository root: {actual_repo_path}
+- Use provided tools to verify the binary file exists in the repository.
+- The binary should be an actual ELF executable, not another script.
+
+Respond in the following JSON format ONLY:
+{{
+    "actual_binary_path": "relative/path/to/binary",
+    "reasoning": "brief explanation of how you identified this binary"
+}}
+
+Example:
+If the script at `tools/run_parser.sh` contains:
+```
+#!/bin/bash
+DIR="$(dirname "$0")/.."
+exec "$DIR/build/parser" "$@"
+```
+And repository root is `/home/ubuntu/PoV/Repos/project`, then output:
+{{
+    "actual_binary_path": "build/parser",
+    "reasoning": "Script uses exec to run $DIR/build/parser where DIR resolves to repository root"
+}}
+"""
+
+
+# Useless for now
 VAA_critical_step_identification_prompt = """You are analyzing a vulnerability call trace to identify critical function call steps that are essential for triggering the vulnerability.
 
 Project: {project_name}

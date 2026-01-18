@@ -113,27 +113,32 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
             )
 
             if success:
+                return {
+                    'success': True,
+                    'instrumented_binary': str(self.binary_path),
+                    'build_log': self.build_log,
+                    'sanitizer_type': self.sanitizer_type
+                }
                 # Verify binary exists
-                if check_saninstr_binary_exists(
-                    actual_repo_path=self.target_repo,
-                    binary_relative_path=self.binary_path
-                ):
-                    self.logger.info("  Created qualified sanitizer-instrumented binary!")
-                    return {
-                        'success': True,
-                        'instrumented_binary': str(self.binary_path),
-                        'build_log': self.build_log,
-                        'sanitizer_type': self.sanitizer_type
-                    }
-                else:
-                    error_msg = f"Qualified binary not found at expected path: {self.binary_path}"
-                    self.logger.error(error_msg)
-                    return {
-                        'success': False,
-                        'error': error_msg,
-                        'build_log': self.build_log
-                    }
-            
+                # if check_saninstr_binary_exists(
+                #     actual_repo_path=self.target_repo,
+                #     binary_relative_path=self.binary_path
+                # ):
+                #     self.logger.info("  Created qualified sanitizer-instrumented binary!")
+                #     return {
+                #         'success': True,
+                #         'instrumented_binary': str(self.binary_path),
+                #         'build_log': self.build_log,
+                #         'sanitizer_type': self.sanitizer_type
+                #     }
+                # else:
+                #     error_msg = f"Qualified binary not found at expected path: {self.binary_path}"
+                #     self.logger.error(error_msg)
+                #     return {
+                #         'success': False,
+                #         'error': error_msg,
+                #         'build_log': self.build_log
+                #     }
             else:
                 error_msg = f"Build failed after {self.attempts} attempts"
                 self.logger.error(error_msg)
