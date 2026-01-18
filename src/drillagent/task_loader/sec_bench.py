@@ -273,8 +273,9 @@ class RawSecbTaskLoader:
             "mruby.cve-2018-14337", # The call trace is in other fields...
             "php.cve-2018-12882",   # Cannot be compiled...
             "liblouis.cve-2023-26768", # Cannot find the harness binary.
-            "gpac.cve-2022-2454",
-            "gpac.cve-2023-42298",
+            "gpac.cve-2023-5586",   # Only two frames have line numbers.
+            "gpac.cve-2022-2454",   # "UndefinedBehaviorSanitizer"
+            "gpac.cve-2023-42298",  # "UndefinedBehaviorSanitizer" (Don't have backtrace starting with "#")
         ] # These tasks just have no call trace. But still possible to handle.
         return instance_id in blacklist
 

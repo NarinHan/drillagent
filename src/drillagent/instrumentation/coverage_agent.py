@@ -73,7 +73,6 @@ class CoverageInstrumentAgent(BaseInstrAgent):
             # Step 2: Prepare build environment
             # Current step: 'prepare_environment'
             build_env_vars = self._prepare_environment_vars()
-            self.logger.info("Building environment prepared.")
             
             # Step 3: Execute build with retries using base class method
             # Current step: 'build'
@@ -179,32 +178,39 @@ LDFLAGS="${{LDFLAGS:-}}"
         # Use regex to avoid replacing ./configure in test conditions like [ -f ./configure ]
         
         # TODO: These patterns still have a lot of issues.
-        # Pattern 1: Configure scripts with --cc-opt and --ld-opt (like njs)
         if '--cc-opt' in modified:
+            # Configure scripts with --cc-opt and --ld-opt (like njs)
             # Only replace ./configure when it's executed (not in tests)
             modified = re.sub(
                 r'(\n\s*)(\./configure\s)',
                 r'\1CC=clang CFLAGS="$COV_FLAGS $CFLAGS" LDFLAGS="$COV_FLAGS $LDFLAGS" ./configure --cc=clang --cc-opt="$COV_FLAGS" --ld-opt="$COV_FLAGS" ',
                 modified
             )
-        # Pattern 2: Plain configure without special flags
         elif './configure' in modified and '--cc-opt' not in modified:
+            # Plain configure without special flags
             # Only replace ./configure when it's executed (not in tests)
             modified = re.sub(
                 r'(\n\s*)(\./configure)(\s|$)',
                 r'\1CC=clang CXX=clang++ CFLAGS="$COV_FLAGS $CFLAGS" CXXFLAGS="$COV_FLAGS $CXXFLAGS" LDFLAGS="$COV_FLAGS $LDFLAGS" ./configure\3',
                 modified
             )
-        # Pattern 3: CMake builds
+        elif 'autogen.sh' in modified and './configure' not in modified:
+            # autogen.sh without explicit configure - inject flags before autogen.sh
+            modified = re.sub(
+                r'(\n\s*)(\./autogen\.sh)(\s|$)',
+                r'\1CC=clang CXX=clang++ CFLAGS="$COV_FLAGS $CFLAGS" CXXFLAGS="$COV_FLAGS $CXXFLAGS" LDFLAGS="$COV_FLAGS $LDFLAGS" \2\3',
+                modified
+            )
         elif 'cmake' in modified.lower():
+            # CMake builds
             # Only replace cmake when it's a command (not in tests)
             modified = re.sub(
                 r'(\n\s*)(cmake\s)',
                 r'\1CC=clang CXX=clang++ cmake -DCMAKE_C_FLAGS="$COV_FLAGS $CFLAGS" -DCMAKE_CXX_FLAGS="$COV_FLAGS $CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$COV_FLAGS $LDFLAGS" ',
                 modified
             )
-        # Pattern 4: Rake/minirake builds
         elif re.search(r'(mini)?rake', modified.lower()):
+            # Rake/minirake builds
             # For rake builds: insert exports before the first rake command
             # This handles all rake formats: ./rake, minirake, rake clean, rake all, etc.
             self.logger.debug("Detected Rake/minirake build, injecting coverage flags")
@@ -224,8 +230,8 @@ LDFLAGS="${{LDFLAGS:-}}"
             else:
                 self.logger.warning("Could not find rake command to inject coverage flags")
 
-        # Pattern 5: Direct make without configure
         else:
+            # Direct make without configure
             # Ensure CC/CXX and flags are exported before make
             if 'make' in modified and 'export CC' not in modified:
                 # Insert exports before first make command

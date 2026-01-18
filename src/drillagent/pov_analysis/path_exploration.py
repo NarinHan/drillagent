@@ -71,7 +71,7 @@ class PathExplorationAgent:
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
         previous_feedback = None # From coverage feedback analysis
         for iteration in range(1, self.max_exp_iterations + 1):
-            print("\n")
+            print("")
             self.logger.info(f"[PathExplorationAgent] Iteration {iteration}/{self.max_exp_iterations}")
             self.current_exp_iteration = iteration
 
@@ -238,8 +238,9 @@ class PathExplorationAgent:
 
             response = result.get('final_response', '')
             self.logger.info(f"  [PathExplorationAgent] LLM completed in {result.get('iterations', 'N/A')} iteration(s)")
-            if response:
-                self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
+            if response: # 2026.01.17: Mute for output simplicity
+                self.logger.debug(f"  [PathExplorationAgent] LLM Response: ... (omitted)")
+            #     self.logger.debug(f"  [PathExplorationAgent] LLM Response: {response[:500]}...")
         except Exception as e:
             self.logger.warning(f"  [PathExplorationAgent] Exception during LLM agent loop: {e}")
             # Don't raise error here - continue to Step 3 to check if the file was still generated
