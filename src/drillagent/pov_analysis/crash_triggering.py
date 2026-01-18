@@ -39,8 +39,9 @@ class CrashTriggerAgent:
         ## Mapping from iteration number to a dict including: "testcase_path", "profdata_path".
         self.generated_candidates = {i: {} for i in range(1, self.max_trigger_iterations + 1)}  
         ## The final PoV that successfully triggers a crash.
-        self.final_pov = None
-        ## final_pov['saved_pov_path']: The path where the final validated PoV is saved in output_dir.
+        self.final_pov = None    ## final_pov['saved_pov_path']: The path where the final validated PoV is saved in output_dir.
+        ## Similar to final_pov, but for variant crashes.
+        self.variants_povs = [] 
 
         # Init the LLVM coverage util. Set the profdata_path later after each execution.
         repo_path = self.drill_agent.config.target_repo_path
@@ -62,15 +63,23 @@ class CrashTriggerAgent:
         if path_agent is not None:
             # Check if we already have a crash input
             if path_agent.crash_input_pov is not None:
-                if self.drill_agent.validate_pov(path_agent.crash_command):
-                    self.logger.info("  [CrashTriggerAgent] Valid crash input found from path exploration phase! Using it as final PoV.")
-                    # Save the crash input as final PoV
-                    crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
-                    assert crash_pov_path is not None, "Crash input PoV path from PathExplorationAgent not found!"
-                    self._record_final_pov(path_agent.crash_input_pov, crash_pov_path)
-                    return
+                cur_crash_type, is_valid = self.drill_agent.validate_pov(path_agent.crash_command)
+                if is_valid:
+                    PEA_pov_data = path_agent.crash_input_pov
+                    PEA_pov_data['crash_type'] = cur_crash_type
+                    if cur_crash_type == self.drill_agent.gt_crash_type:
+                        # Save the crash input as final PoV
+                        self.logger.info(f"  [CrashTriggerAgent] Valid crash input found from path exploration phase! Crash: {cur_crash_type}")
+                        crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
+                        self._record_final_pov(PEA_pov_data, crash_pov_path)
+                        return
+                    else:
+                        # Unexpected sanitizer crash is also valuable to us.
+                        self.logger.info(f"  [CrashTriggerAgent] *** Variant PoV found from path exploration phase! Crash: {cur_crash_type} (expect {self.drill_agent.gt_crash_type}) ***")
+                        self._record_variant_pov(PEA_pov_data, crash_pov_path)
+                        self.logger.info("  [CrashTriggerAgent] Proceeding with crash triggering attempts to craft target-type PoV...")
                 else:
-                    self.logger.info("  [CrashTriggerAgent] Crash input from path exploration did not validate successfully. Proceeding with crash triggering attempts...")
+                    self.logger.info("  [CrashTriggerAgent] Crash input from path exploration failed to pass validation. Proceeding with crash triggering attempts...")
             else:
                 self.logger.info("  [CrashTriggerAgent] Starting crash triggering attempts...")
 
@@ -118,19 +127,27 @@ class CrashTriggerAgent:
 
                 # Step 3: Validate PoV (using sanitizer-instrumented binary if available).
                 # If valid PoV found, save it and stop
-                if self.drill_agent.validate_pov(command):
-                    self.logger.info(f"  [CrashTriggerAgent] *** Valid PoV found at iteration {iteration}! ***")
-                    # Save the final PoV to output directory
+                cur_crash_type, is_valid = self.drill_agent.validate_pov(command)
+                if is_valid:
                     pov_data = {
                         'testcase_path': abs_test_case_path,
                         'exit_code': exit_code,
                         'exec_output': exec_output,
                         'iteration': iteration,
-                        'max_iterations': self.max_trigger_iterations
+                        'max_iterations': self.max_trigger_iterations,
+                        'crash_type': cur_crash_type
                     }
-                    self._record_final_pov(pov_data, pov_path)
-                    break
-                else: # validation failed
+                    if cur_crash_type == self.drill_agent.gt_crash_type:
+                        # Save the qualified final PoV to output directory.
+                        self.logger.info(f"  [CrashTriggerAgent] *** Valid PoV found at iteration {iteration}! Crash: {cur_crash_type} ***")
+                        self._record_final_pov(pov_data, pov_path)
+                        break
+                    else:
+                        # Unexpected sanitizer crash is also valuable to us.
+                        self.logger.info(f"  [CrashTriggerAgent] *** Variant PoV found at iteration {iteration}! Crash: {cur_crash_type} (expect {self.drill_agent.gt_crash_type}) ***")
+                        self._record_variant_pov(pov_data, pov_path)
+                        continue  # Crash type mismatch, continue crafting qualified PoV
+                else:
                     self.logger.info(f"  [CrashTriggerAgent] PoV at iteration {iteration} did not trigger crash, continuing...")
 
             except Exception as e:
@@ -321,15 +338,14 @@ class CrashTriggerAgent:
         Returns:
             The path where the final PoV is saved
         """
+        assert pov_path is not None, f"Crash input PoV path ({pov_path}) not found!"
         # Generate timestamp and filename for the final PoV
         timestamp = datetime.now().strftime("%y%m%d-%H%M")
         final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"
         final_pov_path = os.path.join(self.drill_agent.output_dir, final_pov_filename)
 
-        # Create output directory if it doesn't exist
-        os.makedirs(self.drill_agent.output_dir, exist_ok=True)
-
         # Copy the PoV file to the output directory
+        os.makedirs(self.drill_agent.output_dir, exist_ok=True)
         shutil.copy(pov_path, final_pov_path)
 
         # Update the final_pov record with all necessary information
@@ -337,5 +353,26 @@ class CrashTriggerAgent:
         self.final_pov['saved_pov_path'] = final_pov_path
 
         self.logger.info(f"  [CrashTriggerAgent] Final PoV saved to: {final_pov_path}")
-
         return final_pov_path
+
+    def _record_variant_pov(self, pov_data: Dict[str, Any], pov_path: str) -> str:
+        """
+        Record and save the PoV with unexpected sanitizer crash to the output directory.
+        """
+        assert pov_path is not None, f"Crash input PoV path ({pov_path}) not found!"
+        # Generate timestamp and filename for the final PoV
+        timestamp = datetime.now().strftime("%y%m%d-%H%M")
+        cur_pov_filename = f"variant-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"
+        cur_pov_path = os.path.join(self.drill_agent.output_dir, cur_pov_filename)
+
+        # Copy the PoV file to the output directory
+        os.makedirs(self.drill_agent.output_dir, exist_ok=True)
+        shutil.copy(pov_path, cur_pov_path)
+
+        # Update the final_pov record with all necessary information
+        tmp_pov_data = pov_data.copy()
+        tmp_pov_data['saved_pov_path'] = cur_pov_path
+        self.variants_povs.append(tmp_pov_data)
+
+        self.logger.info(f"  [CrashTriggerAgent] Variant PoV saved to: {cur_pov_path}")
+        return cur_pov_path

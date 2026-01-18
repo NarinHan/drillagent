@@ -902,7 +902,17 @@ class LLMInterface:
         Returns:
             True if the model doesn't support temperature, False otherwise
         """
-        # List of models that don't support temperature
+        model_name_lower = self.model_name.lower()
+
+        # Models containing these keywords don't support custom temperature
+        unsupported_keywords = [
+            "chat-latest",  # e.g., gpt-4.1-chat-latest only supports temperature=1
+        ]
+        for keyword in unsupported_keywords:
+            if keyword in model_name_lower:
+                return True
+
+        # Specific models that don't support temperature
         unsupported_models = [
             "gpt-5-mini",
             "gpt-5-mini-2025-08-07",
@@ -910,10 +920,8 @@ class LLMInterface:
             "o4-mini-2025-04-16",
             # Add more models here as needed
         ]
-
-        # Check if the current model is in the unsupported list
         for unsupported_model in unsupported_models:
-            if unsupported_model.lower() in self.model_name.lower():
+            if unsupported_model.lower() in model_name_lower:
                 return True
 
         return False

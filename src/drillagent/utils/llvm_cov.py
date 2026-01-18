@@ -80,7 +80,7 @@ class LLVMCovUtils:
             RuntimeError: If profile data is not set or is empty
         """
         if not self.profdata_path:
-            raise RuntimeError("Profile data not set. Call update_profile_data() first.")
+            raise RuntimeError("Profile data not set. Call update_profile_data() first")
         if self.is_profile_empty:
             raise RuntimeError("Profile data is empty. Cannot query coverage from empty profile.")
         if self._coverage_data is None:

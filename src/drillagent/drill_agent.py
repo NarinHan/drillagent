@@ -2,7 +2,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
@@ -65,6 +65,7 @@ class DrillAgent:
 
         # Final analysis results
         self.crash_inputs = [] # Real PoV inputs that trigger the vulnerability
+        self.gt_crash_type = get_sanitizer_crash_type(self.config.sanitizer_report) if self.config.sanitizer_report else "" # Expected crash answer
 
         ## Initialize logger and components
         self.logger = setup_drillagent_logger(
@@ -85,7 +86,7 @@ class DrillAgent:
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
         self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
-        self.logger.info(f"Skip instrumentation:  {self.skip_code_instrumentation}")
+        self.logger.info(f"Skip code instrumentation:  {self.skip_code_instrumentation}")
         self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
         self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
 
@@ -201,7 +202,7 @@ class DrillAgent:
                 res = self._phase_code_instrumentation()
                 if not res:
                     self.logger.error("Instrumentation phase failed, cannot proceed further.")
-                    return self._generate_report()
+                    return self.generate_report()
             
             # Phase 2.5:
             # Initialize coverage analysis tools now that we have binary_path file generated.
@@ -229,12 +230,12 @@ class DrillAgent:
 
             # Mark as completed
             self.phase = "completed"
-            return self._generate_report()
+            return self.generate_report()
 
         except Exception as e:
             self.logger.error(f"Fatal error in DrillAgent workflow: {e}", exc_info=True)
             self.errors.append(str(e))
-            return self._generate_report()
+            return self.generate_report()
 
     def _phase_vulnerability_analysis(self):
         """Phase 1: Analyze vulnerability using LLM"""
@@ -445,13 +446,19 @@ class DrillAgent:
             self.crash_agent.run()
 
             # Extract final PoV result
-            final_pov = self.crash_agent.final_pov
+            final_pov     = self.crash_agent.final_pov
+            variants_povs = self.crash_agent.variants_povs
             if final_pov:
-                self.logger.info(f"  ✓ Final PoV successfully generated and validated!")
+                self.logger.info(f"✓ Final PoV successfully generated and validated!")
                 self.logger.info(f"  - PoV path: {final_pov['saved_pov_path']}")
                 self.crash_inputs.append(final_pov['saved_pov_path'])
+            elif len(variants_povs) > 0:
+                self.logger.info(f"✓ No final PoV, but found {len(variants_povs)} variant PoVs that can trigger crashes.")
+                for idx, pov in enumerate(variants_povs):
+                    self.logger.info(f"    - Variant PoV {idx+1} path: {pov['saved_pov_path']}")
+                    self.crash_inputs.append(pov['saved_pov_path'])
             else:
-                self.logger.warning(f"  ✗ No valid PoV generated after {self.crash_agent.current_trigger_iteration} iterations")
+                self.logger.warning(f"✗ No valid PoV generated after {self.crash_agent.current_trigger_iteration} iterations")
                 self.errors.append("Crash triggering failed: No valid PoV found")
 
         except Exception as e:
@@ -475,20 +482,22 @@ class DrillAgent:
         else:
             pass # do nothing
 
-    def validate_pov(self, command: str) -> bool:
+    def validate_pov(self, command: str) -> Tuple[str, bool]:
         """
-        Validate a PoV by running it with the sanitizer-instrumented binary.
+        Validate a PoV by running it with the sanitizer-instrumented binary to see if any crash occurs.
         This method can be called by both PathExplorationAgent and CrashTriggerAgent.
 
         Args:
             command: The harness command with instantiated PoV path (using llvm-cov repo path).
 
         Returns:
-            True if PoV triggers a sanitizer error, False otherwise.
+            A tuple of (crash_type, is_valid):
+                - crash_type: The type of sanitizer crash detected (e.g., "heap-buffer-overflow"), or empty string if none.
+                - is_valid: True if PoV triggers a sanitizer error, False otherwise.
         """
         if command is None or command.strip() == "":
             self.logger.error("  [DrillAgent] No harness command provided for PoV validation.")
-            return False
+            return "", False
 
         # Replace llvm-cov repo path with sanitizer-instr repo path
         llvm_cov_repo = self.config.target_repo_path
@@ -519,20 +528,21 @@ class DrillAgent:
                     count=1
                 )
 
-        # Execute and check for sanitizer trigger
+        # Execute the test case, and check for sanitizer crash.
         self.logger.info(f"  [DrillAgent] PoV validation command: {command}")
         exit_code, exec_output = execute_command(command, env)
-        # TODO: Compare here output and the original sanitizer report to see if they match (optional).
         if detect_sanitizer_triggered(exec_output):
             self.logger.info(f"  [DrillAgent] PoV validation successful: Sanitizer error detected! Exit code: {exit_code}")
             print(exec_output)
-            return True
+            # Crash successfully triggered! Triage the crash type further.
+            cur_crash_type = get_sanitizer_crash_type(exec_output)
+            return cur_crash_type, True
         else:
             self.logger.info(f"  [DrillAgent] PoV validation: No sanitizer error detected. Exit code: {exit_code}")
 
-        return False
+        return "", False
 
-    def _generate_report(self) -> Dict[str, Any]:
+    def generate_report(self) -> Dict[str, Any]:
         """Generate final analysis report"""
         report = {
             "target_repo_path": self.config.target_repo_path,

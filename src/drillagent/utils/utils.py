@@ -294,21 +294,34 @@ def detect_sanitizer_triggered(exec_output: str) -> bool:
             return True
     return False
 
-def get_sanitizer_type(exec_output: str) -> str:
-    # Identify which sanitizer triggered the error based on execution output
-    # TODO: To be integrated into the CrashTriggerAgent. Also need to examine more types.
-    if "AddressSanitizer" in exec_output:
-        return "AddressSanitizer"
-    elif "MemorySanitizer" in exec_output:
-        return "MemorySanitizer"
+def get_sanitizer_crash_type(exec_output: str) -> str:
+    # The returned type string is used for more detailed PoV validation comparison.
+    # Five big class
+    if "heap-buffer-overflow" in exec_output:
+        return "heap-buffer-overflow"
+    elif "heap-use-after-free" in exec_output:
+        return "heap-use-after-free"
+    elif "stack-buffer-overflow" in exec_output or "stack-buffer-underflow" in exec_output or "stack-overflow" in exec_output:
+        return "stack-overflow"
+    elif "address points to the zero page" in exec_output:
+        return "address-points-to-the-zero-page"
+    elif "LeakSanitizer:" in exec_output:
+        return "memory-leak"
+    # Other sub-classes
     elif "UndefinedBehaviorSanitizer" in exec_output:
         return "UndefinedBehaviorSanitizer"
-    elif "ThreadSanitizer" in exec_output:
-        return "ThreadSanitizer"
-    elif "LeakSanitizer" in exec_output:
-        return "LeakSanitizer"
+    elif "double-free" in exec_output:
+        return "double-free"
+    elif "use-of-uninitialized-value" in exec_output:
+        return "use-of-uninitialized-value"
+    elif "global-buffer-overflow" in exec_output:
+        return "global-buffer-overflow"
+    elif "negative-size-param" in exec_output:
+        return "negative-size-param"
+    elif "SEGV" in exec_output:
+        return "segmentation-fault"
     else:
-        return "OtherSanitizer"
+        return "unknown-crash-type"
 
 def switch_ruby_version(version: str = "3.0.6") -> Tuple[bool, str]:
     # Switch the system Ruby version using rbenv and verify the change

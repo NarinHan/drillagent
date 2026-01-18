@@ -109,8 +109,9 @@ class PathExplorationAgent:
                     self._record_current_pov(test_case_path, command, exit_code, exec_output)
                     self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Triggered early stop due to segmentation fault.")
                     break
-                # Also check if current test case can trigger sanitizer crash. (optional)
-                if self.drill_agent.validate_pov(command):
+                # Also check if current test case can trigger sanitizer crash. (optional) (any crash type here is acceptable)
+                _, is_valid = self.drill_agent.validate_pov(command)
+                if is_valid:
                     self._record_current_pov(test_case_path, command, exit_code, exec_output)
                     self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Passed sanitizer validation!")
                     break
