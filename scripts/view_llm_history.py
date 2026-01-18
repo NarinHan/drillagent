@@ -52,7 +52,7 @@ def format_agent_loop_start(entry: Dict[str, Any]) -> str:
     system_prompt = entry.get("system_prompt")
 
     output = []
-    output.append("\n" + "-" * 100)
+    output.append("-" * 100)
     output.append("🤖 AGENT LOOP START")
     output.append("-" * 100)
     output.append(f"Provider: {provider} | Model: {model} | Time: {timestamp}")
@@ -61,7 +61,7 @@ def format_agent_loop_start(entry: Dict[str, Any]) -> str:
         output.append("\n### System Prompt:")
         output.append(system_prompt)
 
-    output.append("\n(Task and interactions will follow below)")
+    output.append("(Task and interactions will follow below)")
     output.append("-" * 100 + "\n")
 
     return "\n".join(output)

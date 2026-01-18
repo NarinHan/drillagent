@@ -14,9 +14,9 @@ src/drillagent/scripts/lhy_*
 scripts/lhy_*
 
 # For LLM
-openai.key
-claude.key
-gemini.key
+openai*.key
+claude*.key
+gemini*.key
 
 # For Kaitai
 kaitai_struct_formats/

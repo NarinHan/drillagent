@@ -220,6 +220,11 @@ Examples:
         action='store_true',
         help='Disable verbose output'
     )
+    parser.add_argument(
+        '--force-clear-cache',
+        action='store_true',
+        help='Force clear VulnAnalysisAgent cache before analysis (re-run from scratch)'
+    )
 
     return parser.parse_args()
 
@@ -340,7 +345,8 @@ def main():
         # Output options
         work_dir=work_dir,
         output_dir=output_dir,
-        verbose=not args.no_verbose
+        verbose=not args.no_verbose,
+        force_clear_cache=args.force_clear_cache
     )
 
     # Create output directories

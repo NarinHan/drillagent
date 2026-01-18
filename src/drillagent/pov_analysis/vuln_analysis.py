@@ -1,8 +1,10 @@
 import os
 import json
+import shutil
 import logging
 from typing import Dict, Any, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
+from drillagent.utils.utils import *
 from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_system_prompt,
     VAA_sanitizer_extraction_prompt,
@@ -10,6 +12,7 @@ from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_call_trace_linenum_refine_prompt,
     VAA_harness_refine_prompt,
     VAA_root_cause_analysis_prompt,
+    VAA_find_actual_binary_prompt,
     VAA_critical_step_identification_prompt
 )
 from drillagent.models.llm_interface import LLMInterface
@@ -32,7 +35,6 @@ class VulnAnalysisAgent:
 
         # Vulnerability information container!!!!! 
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
-        self.cache_dir = os.path.join(self.config.work_dir, "cache_drillagent")
 
     def load_from_cache(self) -> bool:
         # Load vulnerability analysis results from cache if available.
@@ -46,7 +48,7 @@ class VulnAnalysisAgent:
             else:
                 identifier = f"{project_name}_{base_commit}"
             # Construct cache file path using identifier
-            cache_filepath = os.path.join(self.cache_dir, f"vuln_info_{identifier}.json")
+            cache_filepath = os.path.join(self.drill_agent.cache_dir, f"vuln_info_{identifier}.json")
 
             # Check if cache file exists
             if not os.path.exists(cache_filepath):
@@ -58,6 +60,7 @@ class VulnAnalysisAgent:
                 return False
 
             # Read and parse cache file
+            # Note that root cause analysis results are also in the json, so no need to read "root_cause_xx.md".
             with open(cache_filepath, 'r', encoding='utf-8') as f:
                 vuln_data = json.load(f)
 
@@ -82,7 +85,7 @@ class VulnAnalysisAgent:
         # Store vulnerability analysis results to cache directory as JSON file for future use.
         try:
             # Ensure cache directory exists
-            os.makedirs(self.cache_dir, exist_ok=True)
+            os.makedirs(self.drill_agent.cache_dir, exist_ok=True)
 
             project_name = self.config.project_name
             cve_id       = self.config.cve_id
@@ -93,19 +96,19 @@ class VulnAnalysisAgent:
                 identifier = f"{project_name}_{base_commit}"
 
             # Write to cache file with pretty formatting
-            cache_filepath = os.path.join(self.cache_dir, f"vuln_info_{identifier}.json")
+            cache_filepath = os.path.join(self.drill_agent.cache_dir, f"vuln_info_{identifier}.json")
             vuln_data = self.vuln_info.to_dict()
             with open(cache_filepath, 'w', encoding='utf-8') as f:
                 json.dump(vuln_data, f, indent=2, ensure_ascii=False)
 
             # Also write root cause analysis results to a file separately for easy access.
-            root_cause_filepath = os.path.join(self.cache_dir, f"root_cause_{identifier}.md")
+            root_cause_filepath = os.path.join(self.drill_agent.cache_dir, f"root_cause_{identifier}.md")
             with open(root_cause_filepath, 'w', encoding='utf-8') as f:
                 f.write(self.vuln_info.root_cause)
 
             # Also write critical steps to a separate JSON file for easy access.
             if self.vuln_info.critical_steps:
-                critical_steps_filepath = os.path.join(self.cache_dir, f"critical_steps_{identifier}.json")
+                critical_steps_filepath = os.path.join(self.drill_agent.cache_dir, f"critical_steps_{identifier}.json")
                 with open(critical_steps_filepath, 'w', encoding='utf-8') as f:
                     json.dump(self.vuln_info.critical_steps, f, indent=2, ensure_ascii=False)
                 self.logger.info(f"  [VulnAnalysisAgent] Critical steps cached to: {critical_steps_filepath}")
@@ -115,11 +118,23 @@ class VulnAnalysisAgent:
         except Exception as e:
             self.logger.error(f"  [VulnAnalysisAgent] Failed to store cache: {e}", exc_info=True)
 
+    def clear_cache(self):
+        # Clear the entire cache directory and its contents.
+        # Called when force_clear_cache is True.
+        try:
+            tmp_dir = self.drill_agent.cache_dir
+            if os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir)
+                self.logger.info(f"  [VulnAnalysisAgent] Cleared cache directory: {tmp_dir}")
+            else:
+                self.logger.info(f"  [VulnAnalysisAgent] Cache directory does not exist: {tmp_dir}")
+        except Exception as e:
+            self.logger.error(f"  [VulnAnalysisAgent] Failed to clear cache: {e}", exc_info=True)
 
     def run(self) -> 'VulnInfo':
         # Run vulnerability analysis with a VulnInfo object returned.
         self.logger.info("  [VulnAnalysisAgent] Starting vulnerability analysis...")
-        
+
         # The analysis is based on the following basic information.
         project_name     = self.config.project_name
         actual_repo_path = self.config.target_repo_path
@@ -128,10 +143,13 @@ class VulnAnalysisAgent:
         raw_harness_command  = self.config.harness_command
         self.logger.info(f"  [VulnAnalysisAgent] Actual repo path: {actual_repo_path}")
 
-        # Before all, Try to load from cache first.
-        if self.load_from_cache():
-            self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
-            return self.vuln_info
+        # Handle force_clear_cache: delete cache files if requested (then analyze from scratch).
+        if self.config.force_clear_cache:
+            self.clear_cache()
+        # Try to examine if there is already a cached result and load from cache first.
+        elif self.load_from_cache():
+                self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
+                return self.vuln_info
         
         # Substep1: Extract basic vulnerability information (if sanitizer report is available)
         if len(sanitizer_report) > 0:
@@ -340,14 +358,14 @@ class VulnAnalysisAgent:
 
                         # Skip the innermost frame (#0) - it's the crash point, no callee to verify
                         if idx == total_frames - 1:
-                            self.logger.info(f"  Processing frame #{seq_num} ({func_name}): Innermost frame, keeping original line number")
+                            self.logger.info(f"  Processing frame #{seq_num} {func_name}: Innermost frame, keeping original line number")
                             refined_frames.append(current_frame)
                             continue
 
                         # Get callee frame (next frame in the sorted list, which has smaller sequence_num)
                         callee_frame = sorted_trace[idx + 1]
                         callee_func_name = callee_frame.get('function_name', '')
-                        self.logger.info(f"  Processing frame #{seq_num} ({func_name}) -> callee: {callee_func_name}")
+                        self.logger.info(f"  Processing frame #{seq_num} {func_name} -> callee: {callee_func_name}")
                         current_frame_json = json.dumps(current_frame, indent=2)
 
                         # Invoke low-cost LLM (faster) to refine the line number of each stack frame
@@ -525,6 +543,7 @@ class VulnAnalysisAgent:
             free_trace_str = self.vuln_info.format_trace(self.vuln_info.free_trace)
 
             # Prepare the initial prompt
+            # TODO: Maybe we can identify critical stack frames in the crash trace during root cause analysis.
             user_prompt = VAA_root_cause_analysis_prompt.format(
                 project_name=self.config.project_name,
                 actual_repo_path=self.config.target_repo_path,
@@ -568,67 +587,142 @@ class VulnAnalysisAgent:
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
             self.vuln_info.root_cause = f"Root cause analysis failed: {e}"
 
-    # TODO: This part is too simple for now, improve this identification in the future if needed (LHY).
-    def _identify_critical_steps(self):
-        # Identify critical function call steps for vulnerability triggering.
-        # LLM uses tools to read code and identify which frames are critical vs non-critical.
-        # Results are stored in a JSON file for later use.
-        try:
-            # Skip if no call trace is available
-            if not self.vuln_info.crash_trace or len(self.vuln_info.crash_trace) == 0:
-                self.logger.warning("  [VulnAnalysisAgent] No refined call trace available. Skipping critical step identification.")
-                return
+    def find_actual_binary_path(self, target_repo_path: str, entry_program_path: str) -> str:
+        """
+        Find the actual ELF binary path from a wrapper script.\n
+        Arg entry_program_path: Absolute path to the wrapper script file.\n
+        Returns Relative path to the actual ELF binary (relative to repo root).\n
+        Raises RuntimeError: If the actual binary cannot be determined or verified.
+        """
+        # Return cached result if available
+        if self.vuln_info.actual_binary_path and len(self.vuln_info.actual_binary_path) > 0:
+            return self.vuln_info.actual_binary_path
 
-            # Prepare the prompt
-            crash_trace_str = self.vuln_info.format_trace((self.vuln_info.raw_crash_trace, self.vuln_info.crash_trace))
-            initial_prompt = VAA_critical_step_identification_prompt.format(
+        self.logger.info(f"  [VulnAnalysisAgent] Finding actual binary from wrapper script: {entry_program_path}")
+
+        # Substep 1: Read the script content. Invoke LLM to analyze the script and find the actual binary.
+        if not os.path.exists(entry_program_path):
+            raise RuntimeError(f"Wrapper script not found: {entry_program_path}")
+        with open(entry_program_path, 'r', encoding='utf-8', errors='ignore') as f:
+            script_content = f.read()
+        if not script_content.strip():
+            raise RuntimeError(f"Wrapper script is empty: {entry_program_path}")
+        self.logger.info(f"  [VulnAnalysisAgent] Script content length: {len(script_content)} chars")
+
+        script_rel_path = os.path.relpath(entry_program_path, target_repo_path)
+        result = self.drill_agent.basic_llm.run_agent_loop(
+            task=VAA_find_actual_binary_prompt.format(
                 project_name=self.config.project_name,
-                actual_repo_path=self.config.target_repo_path,
-                vuln_type=self.vuln_info.vuln_type,
-                root_cause=self.vuln_info.root_cause if self.vuln_info.root_cause else "Not available",
-                refined_call_trace=crash_trace_str
-            )
+                actual_repo_path=target_repo_path,
+                script_path=script_rel_path,
+                script_content=script_content
+            ),
+            tools=self.basic_tools,
+            system_prompt=VAA_system_prompt,
+            max_iterations=5,
+            temperature=0.1,
+            max_tokens=4096,
+            continuation_prompt="Please continue analyzing the script and provide the final JSON output with the actual binary path."
+        )
 
-            # Use LLMInterface for automatic tool calling and conversation management
-            self.logger.info("    Using LLMInterface to identify critical steps...")
-            result = self.drill_agent.basic_llm.run_agent_loop(
-                task=initial_prompt,
-                tools=self.enhanced_tools,
-                system_prompt=VAA_system_prompt,
-                max_iterations=10,  # To be adjusted...
-                temperature=0.2,
-                max_tokens=8192,
-                continuation_prompt="Please continue examining the remaining frames and provide the final JSON output with critical and non-critical frames."
-            )
+        if not result['success']:
+            error_msg = result.get('error', 'Unknown error')
+            self.logger.error(f"  [VulnAnalysisAgent] LLM agent loop failed: {error_msg}")
+            raise RuntimeError(f"Failed to analyze wrapper script: {error_msg}")
 
-            if not result['success']:
-                error_msg = result.get('error', 'Unknown error')
-                self.logger.error(f"    LLM agent loop failed: {error_msg}")
-                raise RuntimeError(f"Failed to identify critical steps: {error_msg}")
+        response = result['final_response']
+        self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
 
-            response = result['final_response']
-            self.logger.info(f"    ✓ Critical step identification complete in {result['iterations']} iteration(s)")
-            self.logger.info(f"    Stop reason: {result['stop_reason']}")
-            self.logger.info(f"    LLM Response: {response[:300]}...")
+        # Substep 2: Extract the actual binary path from LLM response
+        extracted_info = LLMInterface.extract_json_from_response(response)
+        if not extracted_info:
+            raise RuntimeError("Could not extract JSON from LLM response")
+        actual_binary_path = extracted_info.get('actual_binary_path', '')
+        reasoning = extracted_info.get('reasoning', '')
+        if not actual_binary_path:
+            raise RuntimeError(f"LLM could not determine actual binary path. Reasoning: {reasoning}")
 
-            # Extract JSON from response
-            critical_steps_data = LLMInterface.extract_json_from_response(response)
-            if not critical_steps_data:
-                raise ValueError("Could not extract JSON from LLM response")
+        # self.logger.info(f"  [VulnAnalysisAgent] LLM identified binary: {actual_binary_path}")
+        # self.logger.info(f"  [VulnAnalysisAgent] Reasoning: {reasoning}")
 
-            # Store critical steps data in vuln_info
-            self.vuln_info.critical_steps = critical_steps_data
+        # Substep 3: Verify the actual binary exists and is an ELF file
+        actual_binary_abs_path = os.path.join(target_repo_path, actual_binary_path)
+        if not os.path.exists(actual_binary_abs_path):
+            raise RuntimeError(f"Actual binary not found: {actual_binary_abs_path}")
+        if not os.path.isfile(actual_binary_abs_path):
+            raise RuntimeError(f"Actual binary path is not a file: {actual_binary_abs_path}")
+        if not is_binary_file(actual_binary_abs_path):
+            raise RuntimeError(f"File is not an ELF binary: {actual_binary_abs_path}")
 
-            # Log summary
-            num_critical = len(critical_steps_data.get('critical_frames', []))
-            num_non_critical = len(critical_steps_data.get('non_critical_frames', []))
-            total_frames = len(self.vuln_info.crash_trace)
-            self.logger.info(f"    ✓ Critical step identification complete:")
-            self.logger.info(f"      Critical frames: {num_critical}/{total_frames}")
-            self.logger.info(f"      Non-critical frames: {num_non_critical}/{total_frames}")
+        self.vuln_info.actual_binary_path = actual_binary_path
+        self.logger.info(f"  [VulnAnalysisAgent] ✓ Found actual binary: {actual_binary_path}")
 
-        except Exception as e:
-            self.logger.error(f"    Failed to identify critical steps: {e}", exc_info=True)
+        # Update offline cache with the new actual_binary_path
+        self.store_to_cache()
+
+        return actual_binary_path
+
+    # TODO: This part is too simple for now, improve this identification in the future if needed (LHY).
+    # def _identify_critical_steps(self):
+    #     # Identify critical function call steps for vulnerability triggering.
+    #     # LLM uses tools to read code and identify which frames are critical vs non-critical.
+    #     # Results are stored in a JSON file for later use.
+    #     try:
+    #         # Skip if no call trace is available
+    #         if not self.vuln_info.crash_trace or len(self.vuln_info.crash_trace) == 0:
+    #             self.logger.warning("  [VulnAnalysisAgent] No refined call trace available. Skipping critical step identification.")
+    #             return
+
+    #         # Prepare the prompt
+    #         crash_trace_str = self.vuln_info.format_trace((self.vuln_info.raw_crash_trace, self.vuln_info.crash_trace))
+    #         initial_prompt = VAA_critical_step_identification_prompt.format(
+    #             project_name=self.config.project_name,
+    #             actual_repo_path=self.config.target_repo_path,
+    #             vuln_type=self.vuln_info.vuln_type,
+    #             root_cause=self.vuln_info.root_cause if self.vuln_info.root_cause else "Not available",
+    #             refined_call_trace=crash_trace_str
+    #         )
+
+    #         # Use LLMInterface for automatic tool calling and conversation management
+    #         self.logger.info("    Using LLMInterface to identify critical steps...")
+    #         result = self.drill_agent.basic_llm.run_agent_loop(
+    #             task=initial_prompt,
+    #             tools=self.enhanced_tools,
+    #             system_prompt=VAA_system_prompt,
+    #             max_iterations=10,  # To be adjusted...
+    #             temperature=0.2,
+    #             max_tokens=8192,
+    #             continuation_prompt="Please continue examining the remaining frames and provide the final JSON output with critical and non-critical frames."
+    #         )
+
+    #         if not result['success']:
+    #             error_msg = result.get('error', 'Unknown error')
+    #             self.logger.error(f"    LLM agent loop failed: {error_msg}")
+    #             raise RuntimeError(f"Failed to identify critical steps: {error_msg}")
+
+    #         response = result['final_response']
+    #         self.logger.info(f"    ✓ Critical step identification complete in {result['iterations']} iteration(s)")
+    #         self.logger.info(f"    Stop reason: {result['stop_reason']}")
+    #         self.logger.info(f"    LLM Response: {response[:300]}...")
+
+    #         # Extract JSON from response
+    #         critical_steps_data = LLMInterface.extract_json_from_response(response)
+    #         if not critical_steps_data:
+    #             raise ValueError("Could not extract JSON from LLM response")
+
+    #         # Store critical steps data in vuln_info
+    #         self.vuln_info.critical_steps = critical_steps_data
+
+    #         # Log summary
+    #         num_critical = len(critical_steps_data.get('critical_frames', []))
+    #         num_non_critical = len(critical_steps_data.get('non_critical_frames', []))
+    #         total_frames = len(self.vuln_info.crash_trace)
+    #         self.logger.info(f"    ✓ Critical step identification complete:")
+    #         self.logger.info(f"      Critical frames: {num_critical}/{total_frames}")
+    #         self.logger.info(f"      Non-critical frames: {num_non_critical}/{total_frames}")
+
+    #     except Exception as e:
+    #         self.logger.error(f"    Failed to identify critical steps: {e}", exc_info=True)
 
 @dataclass
 class VulnInfo:
@@ -648,8 +742,10 @@ class VulnInfo:
     free_trace: Tuple[str, List[Dict[str, Any]]] = field(default_factory=lambda: ("", []))       # (heap-use-after-free, double-free)
     # harness details
     refined_harness_command: str = ""  # Refined harness command
-    binary_path: str       = ""  # Relative path to the target binary
+    binary_path: str       = ""  # Relative path to the target binary. This file may be text script, but for compatibility we still call it "binary".
     input_file_suffix: str = ""  # Input file suffix (e.g., .xml, .png)
+    actual_binary_path: str = ""  # If extracted entry "binary_path" is a text script, this field is the actual binary it calls, which will be instrumented.
+                                  # Else, "actual_binary_path" will be the same as the entry program ("binary_path"), since it's already a binary executable.
     # vuln semantics
     vuln_type: str = ""  # Type of vulnerability (e.g., buffer overflow, use-after-free)
     root_cause: str = ""  # Root cause analysis result
@@ -675,6 +771,7 @@ class VulnInfo:
             'refined_harness_command': self.refined_harness_command,
             'binary_path': self.binary_path,
             'input_file_suffix': self.input_file_suffix,
+            'actual_binary_path': self.actual_binary_path,
             'vuln_type': self.vuln_type,
             'root_cause': self.root_cause,
             'critical_steps': self.critical_steps
@@ -709,16 +806,19 @@ class VulnInfo:
             refined_harness_command=data.get('refined_harness_command', ''),
             binary_path=data.get('binary_path', ''),
             input_file_suffix=data.get('input_file_suffix', ''),
+            actual_binary_path=data.get('actual_binary_path', ''),
             vuln_type=data.get('vuln_type', ''),
             root_cause=data.get('root_cause', ''),
             critical_steps=data.get('critical_steps', {}),
         )
 
     def format_output(self, skip_rca_result=False) -> str:
+        # Returns the basic vulnerability information as a formatted string. Including crash trace and allocation/free traces.
         lines = []
-        lines.append("=" * 80)
-        lines.append("VULNERABILITY ANALYSIS RESULTS")
-        lines.append("=" * 80)
+        # lines.append("=" * 80)
+        lines.append("## VULNERABILITY ANALYSIS RESULTS")
+        lines.append("")
+        # lines.append("=" * 80)
         # Section 1: Vulnerability Details
         lines.append("[VULNERABILITY DETAILS]")
         lines.append(f"  Vuln Type:              {self.vuln_type if self.vuln_type else 'N/A'}")
@@ -728,7 +828,11 @@ class VulnInfo:
         lines.append(f"  Entry Function:    {self.entry_function if self.entry_function else 'N/A'}")
         # Section 2: Harness Information
         lines.append("\n[HARNESS INFORMATION]")
-        lines.append(f"  Binary Path:       {self.binary_path if self.binary_path else 'N/A'}")
+        lines.append(f"  Entry Program Path:    {self.binary_path if self.binary_path else 'N/A'}")
+        if self.actual_binary_path:
+            lines.append(f"  Actual Binary Path:    {self.actual_binary_path}")
+        else:
+            lines.append(f"  Actual Binary Path:    (To be determined)")
         if self.refined_harness_command:
             lines.append(f"  Harness Command:")
             # Handle multi-line commands
@@ -777,22 +881,26 @@ class VulnInfo:
                     lines.append(f"  {line.strip()}")
         # Section 4: Root Cause Analysis
         if self.root_cause and not skip_rca_result:
-            lines.append("\n[ROOT CAUSE ANALYSIS]")
+            # lines.append("\n[ROOT CAUSE ANALYSIS]")
             # Handle multi-line root cause descriptions
             root_cause_lines = self.root_cause.split('\n') # all lines
             # first 20 lines for simplicity (update: should not limit here, full details needed)
             # root_cause_lines = root_cause_lines[:20] #
             # root_cause_lines.append("...") if len(self.root_cause.split('\n')) > 20 else None #
             for rc_line in root_cause_lines:
-                if rc_line.strip():
+                if not rc_line.strip(): continue # skip empty lines
+                if rc_line.startswith("## "):    # Handle section title
+                    lines.append(f"\n{rc_line}")
+                else:
                     lines.append(f"  {rc_line}")
         # Section 5: Critical Steps (if available)
         # if self.critical_steps and len(self.critical_steps) > 0:
         #     lines.append("\n[CRITICAL STEPS]")
         #     for idx, step in enumerate(self.critical_steps, 1):
         #         lines.append(f"  {idx}. {step}")
-        lines.append("=" * 80)
-        # print('\n'.join(lines))
+        
+        # lines.append("=" * 80)
+        # lines.append("")
         return '\n'.join(lines)
 
     def get_full_root_cause(self) -> str:

@@ -16,13 +16,15 @@ When generating PoVs:
 EFFICIENCY TIP: You can call multiple tools in a single response. When you need to read several related source files (e.g., to understand a call chain), call `read_file` multiple times (<= 5) in one turn rather than reading them one by one across multiple turns. This saves iterations and gives you more context at once.
 
 IMPORTANT:
-- Start with simple PoVs and avoid over-engineering. Focus on triggering the crash first.
+- Start with simple PoVs, try to grasp the essence and avoid over-engineering. Focus on triggering the crash first.
 - If previous simple test cases failed, you can increase complexity based on the feedback.
 """
 # - Focus on reliability: ensure the PoV consistently triggers the crash
 
+# TODO: This should provide the round dirs of path exploration phase.
+CTA_useful_testcase_and_cov_template = """## PREVIOUS PoV GENERATION PROGRESS
 
-CTA_useful_testcase_and_cov_template = """The following test cases were generated during path exploration and successfully reached closer to the vulnerability (but failed to trigger the crash). 
+The following test cases were generated during path exploration and successfully reached closer to the vulnerability (but failed to trigger the crash). 
 Each test case is accompanied by its coverage record:
 
 {testcase_and_cov_paths}
@@ -35,21 +37,30 @@ Use the `read_file` tool to examine these files and synthesize their insights in
 """
 
 # **Coverage Analysis Configuration:**
-CTA_coverage_config_template = """During previous round of PoV generation, the generated test case is at `{testcase_path}` (failed to trigger the crash).
+CTA_previous_roundir_template = """## PREVIOUS ROUND ARTIFACTS
 
-By executing this test case, we have obtained code coverage profile data stored in:
-- profdata_path: `{profdata_path}`
+The previous round (iteration {previous_iteration}) artifacts are stored in directory:
+`{previous_round_dir}`
 
-You are encouraged to use the `get_function_line_coverage` tool to analyze code coverage of previous execution, and synthesize the insights into your final PoV.
-Example tool call:
+This directory contains:
+- `test_{previous_iteration}.profdata`: Coverage data file from the previous execution. Use `get_function_line_coverage` tool to query specific function/line coverage from this file.
+- `testcase-round{previous_iteration}*`: The test case file(s) generated in the previous round (failed to trigger the crash).
+
+You can:
+1. Use `execute_bash` with `ls {previous_round_dir}` to see all files in this directory.
+2. Use `read_file` tool to examine the previous test case content and understand what approach was tried.
+3. Use `get_function_line_coverage` tool with the profdata file to query detailed coverage information for specific functions.
+
+Example `get_function_line_coverage` tool call for coverage analysis:
 {{
-    "profdata_path": "path/to/xxx.profdata",
+    "profdata_path": "{previous_round_dir}/test_{previous_iteration}.profdata",
     "function_name": "target_function_name",
     "source_file_path": "relative/path/to/file.c"  // optional, can be omitted to search all files
 }}
 
-Note: The binary path is already configured in the tool. You only need to provide profdata_path, function_name, and optionally source_file_path.
+Learn from the previous test case structure and coverage results, then improve upon it to trigger the crash.
 """
+
 
 # Core prompt for this phase.
 # Use `previous_pov_gen_progress` to provide previous execution feedback.
@@ -61,19 +72,13 @@ Actual repository path: {actual_repo_path}
 
 **TARGET PoV FILE PATH**: {target_pov_path}
 
-VULNERABILITY INFORMATION:
-
 {vulnerability_info}
-
-ROOT CAUSE ANALYSIS:
 
 {root_cause_analysis}
 
-PREVIOUS PoV GENERATION PROGRESS:
-
 {previous_pov_gen_progress}
 
-YOUR TASK:
+# YOUR TASK
 
 1. **Analyze all available information**:
    - Review the vulnerability type, root cause, and call trace
@@ -116,8 +121,16 @@ YOUR TASK:
    - What specific vulnerability condition does this PoV target?
    - Why should this PoV successfully trigger the crash?
 
----
-EXAMPLES:
+IMPORTANT:
+- Use provided tools (e.g., `ast_grep_search_function`) to read source code at critical points if needed to refine your PoV
+- **CRITICAL**: You MUST ensure the PoV file exists at the TARGET PoV FILE PATH before your final response!
+- This is your final attempt - make it count by leveraging ALL available information
+- Focus on reproducing the crash over code path exploration.
+- The PoV file should contain ONLY the input data for the target program (not a script or code)
+
+Generate the final PoV now and write it to the target file path.
+
+## EXAMPLES
 
 **Example 1 - Text-based (Ruby interpreter like mruby):**
 ```
@@ -156,14 +169,4 @@ print(f"Generated PoV at {{output_path}}")
 # Step 2: Execute the script
 execute_bash(command="python3 /workspace/triggering/round1/gen_testcase_round1.py", working_dir="/workspace/triggering/round1")
 ```
----
-
-IMPORTANT:
-- Use provided tools (e.g., `ast_grep_search_function`) to read source code at critical points if needed to refine your PoV
-- **CRITICAL**: You MUST ensure the PoV file exists at the TARGET PoV FILE PATH before your final response!
-- This is your final attempt - make it count by leveraging ALL available information
-- Focus on reproducing the crash over code path exploration.
-- The PoV file should contain ONLY the input data for the target program (not a script or code)
-
-Generate the final PoV now and write it to the target file path.
 """

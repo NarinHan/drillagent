@@ -62,7 +62,7 @@ class AgentConfig:
     # 
     work_dir: str = "./workspace" # Including: Intermidiate results in each round and cache dir.
     output_dir: str = "./output"  # Including: Final PoV inputs and analysis logs.
-    force_clear_cache: bool = False # TODO: Manage VulnAnalysisAgent cache. 
+    force_clear_cache: bool = False # If True, clear VulnAnalysisAgent cache before analysis. 
     verbose: bool = False
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 

@@ -5,24 +5,26 @@ from typing import Dict, Any, Optional
 
 from .basic_tools import AgentTool
 
-
+# TODO: After reading LLM log, It seems that we should let LLM use BashTool to use llvm-cov command, instead of using FuncLineCovTool.
+# TIP: gpt-5-mini seems don't know how to use this tool well.
 class FuncLineCovTool(AgentTool):
+    # When use this agent tool, we assume that there is already a *.profdata file.
     """
     Tool for retrieving detailed line-by-line coverage for a specific function.
     Uses llvm-cov show command to display execution counts and source code.
     """
 
-    def __init__(self, repo_path: str, binary_path: str, llvm_cov_path: str = "llvm-cov"):
+    def __init__(self, repo_path: str, binary_abs_path: str, llvm_cov_path: str = "llvm-cov"):
         """
         Initialize FuncLineCovTool.
 
         Args:
             repo_path: Absolute path to the repository root
-            binary_path: Absolute path to the instrumented binary (FIXED for entire session)
+            binary_abs_path: Absolute path to the instrumented binary (FIXED for entire session)
             llvm_cov_path: Path to llvm-cov executable (default: "llvm-cov")
         """
         self.repo_path = Path(repo_path).resolve()
-        self.binary_path = os.path.abspath(binary_path)
+        self.binary_path = os.path.abspath(binary_abs_path)
         self.llvm_cov_path = llvm_cov_path
 
         if not self.repo_path.exists():
@@ -30,7 +32,7 @@ class FuncLineCovTool(AgentTool):
         if not self.repo_path.is_dir():
             raise ValueError(f"Repository path is not a directory: {repo_path}")
         if not Path(self.binary_path).exists():
-            raise ValueError(f"Binary file not found: {binary_path}")
+            raise ValueError(f"Binary file not found: {binary_abs_path}")
 
     def name(self) -> str:
         return "get_function_line_coverage"
@@ -76,6 +78,7 @@ class FuncLineCovTool(AgentTool):
             },
         }
 
+    # Currently, it just run `llvm-cov` directly, without using LLVMCovUtils. 
     def execute(self, profdata_path: str, function_name: str,
                 source_file_path: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -94,6 +97,7 @@ class FuncLineCovTool(AgentTool):
             - source_file_path: str the resolved file path (if provided)
             - error: str error message if failed
         """
+        print(f"[FuncLineCovTool] Coverage query for function '{function_name}' ") # DEBUG
         try:
             # Use the binary_path from initialization
             binary_path = self.binary_path
