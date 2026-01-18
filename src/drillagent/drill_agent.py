@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
@@ -473,6 +474,63 @@ class DrillAgent:
             self.logger.info(f"✓ Entry program and actual binary path: \n{36*' '+self.vulnerability_info.binary_path} \n{36*' '+self.vulnerability_info.actual_binary_path}")
         else:
             pass # do nothing
+
+    def validate_pov(self, command: str) -> bool:
+        """
+        Validate a PoV by running it with the sanitizer-instrumented binary.
+        This method can be called by both PathExplorationAgent and CrashTriggerAgent.
+
+        Args:
+            command: The harness command with instantiated PoV path (using llvm-cov repo path).
+
+        Returns:
+            True if PoV triggers a sanitizer error, False otherwise.
+        """
+        if command is None or command.strip() == "":
+            self.logger.error("  [DrillAgent] No harness command provided for PoV validation.")
+            return False
+
+        # Replace llvm-cov repo path with sanitizer-instr repo path
+        llvm_cov_repo = self.config.target_repo_path
+        saninstr_repo = self.config.saninstr_repo_path
+        if llvm_cov_repo in command:
+            command = command.replace(llvm_cov_repo, saninstr_repo)
+        else:
+            raise RuntimeError("Cannot map llvm-cov repo path to sanitizer-instr repo path in command.")
+
+        # Set ASAN options
+        env = os.environ.copy()
+        env['ASAN_OPTIONS'] = 'use_sigaltstack=0:hard_rss_limit_mb=12000'
+        # Handle existing ASAN_OPTIONS in command
+        if "ASAN_OPTIONS=" in command:
+            prefix = env['ASAN_OPTIONS'].rstrip(':')
+            if 'ASAN_OPTIONS="' in command:
+                command = re.sub(
+                    r'ASAN_OPTIONS="([^"]*)"',
+                    r'ASAN_OPTIONS="' + prefix + r':\1"',
+                    command,
+                    count=1
+                )
+            else:
+                command = re.sub(
+                    r'ASAN_OPTIONS=([^\s]+)',
+                    r'ASAN_OPTIONS=' + prefix + r':\1',
+                    command,
+                    count=1
+                )
+
+        # Execute and check for sanitizer trigger
+        self.logger.info(f"  [DrillAgent] PoV validation command: {command}")
+        exit_code, exec_output = execute_command(command, env)
+        # TODO: Compare here output and the original sanitizer report to see if they match (optional).
+        if detect_sanitizer_triggered(exec_output):
+            self.logger.info(f"  [DrillAgent] PoV validation successful: Sanitizer error detected! Exit code: {exit_code}")
+            print(exec_output)
+            return True
+        else:
+            self.logger.info(f"  [DrillAgent] PoV validation: No sanitizer error detected. Exit code: {exit_code}")
+
+        return False
 
     def _generate_report(self) -> Dict[str, Any]:
         """Generate final analysis report"""

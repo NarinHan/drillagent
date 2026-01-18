@@ -102,12 +102,17 @@ class PathExplorationAgent:
                 # Exec! This will also generate a profraw/profdata file.
                 exit_code, exec_output = self._execute_test_case(command)
 
+                # Step2.5:
                 # Check segmentation fault to detect early-stop after each execution
-                ## TODO: Maybe here we can also run sanitizer-instrumented binary. (two processes synchronously will be good?)
                 found_pov = self._detect_stop_status(exit_code, exec_output)
                 if found_pov:
                     self._record_current_pov(test_case_path, command, exit_code, exec_output)
-                    self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Triggered early stop.")
+                    self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Triggered early stop due to segmentation fault.")
+                    break
+                # Also check if current test case can trigger sanitizer crash. (optional)
+                if self.drill_agent.validate_pov(command):
+                    self._record_current_pov(test_case_path, command, exit_code, exec_output)
+                    self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV found! Passed sanitizer validation!")
                     break
 
                 # Step3: Collect useful coverage feedback along the vulnerable call trace
@@ -581,10 +586,6 @@ class PathExplorationAgent:
         # Check for other interesting exit codes
         elif exit_code == -6 or exit_code == 134:  # SIGABRT
             self.logger.warning(f"  [PathExplorationAgent] Program aborted (exit code {exit_code}).")
-            # Update: Since we have sanitizer-instrumented binaries, we don't treat aborts as crashes for now.
-            # if "core dumped" in exec_output.lower() or "segmentation fault" in exec_output.lower():
-            #     self.logger.warning(f"  [PathExplorationAgent]   Core dump also detected in execution output!")
-            #     return True
 
         elif exit_code == -9 or exit_code == 137:  # SIGKILL
             self.logger.warning(f"  [PathExplorationAgent] Program killed (exit code {exit_code}).")

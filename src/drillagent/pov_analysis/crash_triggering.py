@@ -1,5 +1,4 @@
 import os
-import re
 import glob
 import shutil
 import subprocess
@@ -63,7 +62,7 @@ class CrashTriggerAgent:
         if path_agent is not None:
             # Check if we already have a crash input
             if path_agent.crash_input_pov is not None:
-                if self._validate_pov(path_agent.crash_input_pov, path_agent.crash_command):
+                if self.drill_agent.validate_pov(path_agent.crash_command):
                     self.logger.info("  [CrashTriggerAgent] Valid crash input found from path exploration phase! Using it as final PoV.")
                     # Save the crash input as final PoV
                     crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
@@ -118,17 +117,17 @@ class CrashTriggerAgent:
                 exit_code, exec_output = self._execute_pov_candidate(command)
 
                 # Step 3: Validate PoV (using sanitizer-instrumented binary if available).
-                pov_data = {
-                    'testcase_path': abs_test_case_path,
-                    'exit_code': exit_code,
-                    'exec_output': exec_output,
-                    'iteration': iteration,
-                    'max_iterations': self.max_trigger_iterations
-                }
                 # If valid PoV found, save it and stop
-                if self._validate_pov(pov_data, command):
+                if self.drill_agent.validate_pov(command):
                     self.logger.info(f"  [CrashTriggerAgent] *** Valid PoV found at iteration {iteration}! ***")
                     # Save the final PoV to output directory
+                    pov_data = {
+                        'testcase_path': abs_test_case_path,
+                        'exit_code': exit_code,
+                        'exec_output': exec_output,
+                        'iteration': iteration,
+                        'max_iterations': self.max_trigger_iterations
+                    }
                     self._record_final_pov(pov_data, pov_path)
                     break
                 else: # validation failed
@@ -310,69 +309,6 @@ class CrashTriggerAgent:
         self.logger.info (f"  [CrashTriggerAgent] Command exit code: {exit_code}")
         self.logger.debug(f"  [CrashTriggerAgent] Command execution output:\n{exec_output[:500]}")
         return exit_code, exec_output
-
-    def _validate_pov(self, pov_data: Dict, command: str) -> bool:
-        # Validate the generated PoV by checking if it can violate the memory sanitizer as expected.
-        # pov_data: dict containing 'testcase_path', 'exit_code', 'exec_output', etc.
-        # Returns True if PoV is valid (triggers crash), False otherwise
-
-        if not pov_data:
-            self.logger.warning("  [CrashTriggerAgent] No PoV data provided for validation")
-            return False
-
-        # Extract information from pov_data
-        # exit_code = pov_data.get('exit_code', 0)
-        # exec_output = pov_data.get('exec_output', '')
-        # testcase_path = pov_data.get('testcase_path', '')
-        # self.logger.info(f"  [CrashTriggerAgent] Validating PoV: {testcase_path}")
-        # self.logger.info(f"  [CrashTriggerAgent] Exit code: {exit_code}")
-
-        # Use llvm-cov instrumented program cmds as basis, but replace repo path to sanitizer-instr repo path.
-        if command is None or command.strip() == "":
-            self.logger.error("  [CrashTriggerAgent] No harness command provided for PoV validation.")
-            return False
-        
-        llvm_cov_repo = self.drill_agent.config.target_repo_path
-        saninstr_repo = self.drill_agent.config.saninstr_repo_path
-        if llvm_cov_repo in command:
-            command = command.replace(llvm_cov_repo, saninstr_repo) # We want to execute the program in sanitizer-instr repo.
-        else:
-            self.logger.error("  [CrashTriggerAgent] TODO: Cannot map llvm-cov repo path to sanitizer-instr repo path in command.")
-            return False
-
-        # Disable the use of alternate signal stack (only for mruby?) and limit memory usage for ASAN.
-        env = os.environ.copy()
-        env['ASAN_OPTIONS'] = 'use_sigaltstack=0:hard_rss_limit_mb=12000' # Options ref: https://github.com/google/sanitizers/wiki/SanitizerCommonFlags
-        if "ASAN_OPTIONS=" in command:
-            prefix = env['ASAN_OPTIONS'].rstrip(':')
-            if "ASAN_OPTIONS=" in command:
-                if 'ASAN_OPTIONS="' in command: # Handle double quotation marks
-                    command = re.sub(
-                        r'ASAN_OPTIONS="([^"]*)"',
-                        r'ASAN_OPTIONS="' + prefix + r':\1"',
-                        command,
-                        count=1
-                    )
-                else:
-                    command = re.sub(
-                        r'ASAN_OPTIONS=([^\s]+)',
-                        r'ASAN_OPTIONS=' + prefix + r':\1',
-                        command,
-                        count=1
-                    )
-
-        # Execute the PoV using sanitizer-instrumented binary, and check if the sanitizer is triggered.
-        self.logger.info(f"  [CrashTriggerAgent] Validation exec command: {command}")
-        exit_code, exec_output = execute_command(command, env)
-        if detect_sanitizer_triggered(exec_output):
-            # TODO: Compare here output and the original sanitizer report to see if they match (optional).
-            self.logger.info(f"  [CrashTriggerAgent] PoV validation successful: Sanitizer error detected! Exit code: {exit_code}")
-            print(exec_output)
-            return True
-        else:
-            self.logger.info(f"  [CrashTriggerAgent] PoV validation: No sanitizer error detected. Exit code: {exit_code}")
-
-        return False
 
     def _record_final_pov(self, pov_data: Dict[str, Any], pov_path: str) -> str:
         """

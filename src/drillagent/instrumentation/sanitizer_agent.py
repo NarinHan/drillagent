@@ -180,7 +180,7 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
 
         # Initialize flags to empty if they might be used in expansions
         # TODO: Maybe we just add the SAN_FLAGS at the beginning of CFLAGS/CXXFLAGS directly? Duplicate may not cause error.
-        modified = f'''#!/bin/bash -eu
+        modified = f'''#!/bin/bash -e
 # Sanitizer instrumentation flags ({self.sanitizer_type})
 SAN_FLAGS="{san_flags}"
 CFLAGS="${{CFLAGS:-}}"

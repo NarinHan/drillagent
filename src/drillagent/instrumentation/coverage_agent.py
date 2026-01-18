@@ -64,6 +64,10 @@ class CoverageInstrumentAgent(BaseInstrAgent):
             basic_build_cmds = self.drill_agent.config.build_sh
             if not basic_build_cmds:
                 raise ValueError("No build commands found in instrumentation config")
+            # Replace "set -eu" with "set -e" (don't be that strict)
+            basic_build_cmds = re.sub(r'set\s+-eu', 'set -e', basic_build_cmds)
+            # Replace "cd /src/mruby" with ""
+            basic_build_cmds = re.sub(r'cd\s+/src/\S+', '', basic_build_cmds)
             
             # Step 1: Inject coverage flags into build commands
             # Current step: 'prepare_build'
@@ -106,7 +110,6 @@ class CoverageInstrumentAgent(BaseInstrAgent):
                 #         'coverage_flags': self.coverage_flags
                 #     }
                 # else:
-                #     # TODO: If we can not find the qualified binary according to the path from VulnAnalysis, we may need to search the repo more smartly.
                 #     error_msg = 'No __llvm_profile symbols found in binary'
                 #     self.logger.error(f"Coverage instrumentation test failed: {error_msg}")
                 #     return {
@@ -155,8 +158,7 @@ class CoverageInstrumentAgent(BaseInstrAgent):
         cov_flags = ' '.join(self.coverage_flags)
         
         # Initialize flags to empty if they might be used in expansions
-        # TODO: "#!/bin/bash -eu" will duplicate. 
-        modified = f'''#!/bin/bash -eu
+        modified = f'''#!/bin/bash -e
 # Coverage instrumentation flags
 COV_FLAGS="{cov_flags}"
 CFLAGS="${{CFLAGS:-}}"
