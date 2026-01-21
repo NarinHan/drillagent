@@ -199,9 +199,14 @@ class CrashTriggerAgent:
             # Provide previous round directory to guide LLM
             previous_round_dir = self._get_round_dir(self.current_trigger_iteration - 1)
             if os.path.exists(previous_round_dir):
+                # Get coverage-instrumented binary path
+                vuln_info = self.drill_agent.vulnerability_info
+                bin_rel_path = vuln_info.actual_binary_path or vuln_info.binary_path
+                cov_binary_path = os.path.join(self.config.target_repo_path, bin_rel_path)
                 previous_progress = CTA_previous_roundir_template.format(
                     previous_iteration=self.current_trigger_iteration - 1,
-                    previous_round_dir=previous_round_dir
+                    previous_round_dir=previous_round_dir,
+                    cov_binary_path=cov_binary_path
                 )
             else:
                 previous_progress = "Previous round directory not found. Generate PoV based on current knowledge."
@@ -324,7 +329,7 @@ class CrashTriggerAgent:
             self.logger.error(f"  [CrashTriggerAgent] Expected profraw file not found: {profraw_path}")
 
         self.logger.info (f"  [CrashTriggerAgent] Command exit code: {exit_code}")
-        self.logger.debug(f"  [CrashTriggerAgent] Command execution output:\n{exec_output[:500]}")
+        self.logger.debug(f"  [CrashTriggerAgent] Command execution output:\n{exec_output}")
         return exit_code, exec_output
 
     def _record_final_pov(self, pov_data: Dict[str, Any], pov_path: str) -> str:

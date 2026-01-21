@@ -197,9 +197,14 @@ class PathExplorationAgent:
                 previous_round_dir = self._get_round_dir(self.current_exp_iteration - 1)
                 if os.path.exists(previous_round_dir):
                     self.logger.info(f"  [PathExplorationAgent] Adding previous round dir path to prompt: {previous_round_dir}")
+                    # Get coverage-instrumented binary path
+                    vuln_info = self.drill_agent.vulnerability_info
+                    bin_rel_path = vuln_info.actual_binary_path or vuln_info.binary_path
+                    cov_binary_path = os.path.join(self.config.target_repo_path, bin_rel_path)
                     feedback_section += "\n" + PEA_previous_roundir_template.format(
                         previous_iteration=self.current_exp_iteration - 1,
-                        previous_round_dir=previous_round_dir
+                        previous_round_dir=previous_round_dir,
+                        cov_binary_path=cov_binary_path
                     )
         else: # e.g., previous_feedback is None
             feedback_section = ""

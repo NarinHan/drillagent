@@ -43,17 +43,31 @@ This directory contains:
 You can:
 1. Use `execute_bash` with `ls {previous_round_dir}` to see all files in this directory.
 2. Use `read_file` tool to examine the previous test case content and understand what content was crafted and executed.
-3. Use `get_function_line_coverage` tool with the profdata file to query detailed coverage information for specific functions or lines.
+3. Use `coverage_query` tool with llvm-cov command to query detailed coverage information for specific functions or lines.
 
-Example `get_function_line_coverage` tool call for coverage analysis:
+**Coverage Query Tool Usage:**
+The `coverage_query` tool executes llvm-cov commands. The command MUST start with `llvm-cov`.
+
+Command format:
+```
+llvm-cov show <binary> [source_file] -instr-profile=<profdata> [options]
+```
+
+Common options:
+- `--name-regex=^func_name$`: Show coverage for a specific function (use regex anchors for exact match)
+- `--show-line-counts`: Show execution counts for each line
+
+Example `coverage_query` tool call:
 {{
-    "profdata_path": "{previous_round_dir}/test_{previous_iteration}.profdata",
-    "function_name": "target_function_name",
-    "source_file_path": "relative/path/to/file.c"  // optional, can be omitted to search all files
+    "command": "llvm-cov show {cov_binary_path} [source files] -instr-profile={previous_round_dir}/test_{previous_iteration}.profdata --name-regex=^target_function_name$"
 }}
 
+**Coverage Output Format:**
+- Lines with `N|` show execution count N (N=0 means NOT executed/uncovered)
+- Focus on uncovered lines (0|) near the vulnerability to understand what conditions are missing
+
 Learn from the previous test case structure and coverage results, then improve upon it.
-- IMPORTANT: You should use `get_function_line_coverage` tool more to figure out which critical line in the vulnerable call trace was not executed yet.
+- IMPORTANT: You should use `coverage_query` tool more to figure out which critical line in the vulnerable call trace was not executed yet.
 """
 
 

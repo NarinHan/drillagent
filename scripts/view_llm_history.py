@@ -139,8 +139,8 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
 
     # Tool results
     if tool_results and tool_calls:
-        # Filter to only show results for get_function_line_coverage
-        whilelist_tools = ["get_function_line_coverage"]
+        # Filter to only show results for coverage_query
+        whilelist_tools = ["coverage_query"]
         coverage_results = []
         for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
             tool_name = tool_call.get("name", "unknown")
@@ -153,11 +153,6 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
                 result_str = str(result)
                 # Don't truncate coverage results - show them in full
                 output.append(f"  [Call #{i+1}] {result_str}")
-        # else:
-        #     # Show summary for other tools
-        #     non_coverage_count = len([tc for tc in tool_calls if tc.get("name") != "get_function_line_coverage"])
-        #     if non_coverage_count > 0:
-        #         output.append(f"\n### 📤 Tool Results: {non_coverage_count} other tool results (hidden)")
 
     # Stop reason and usage
     output.append(f"\n### ⏹️  Stop Reason: {stop_reason}")

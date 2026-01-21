@@ -13,7 +13,7 @@ from drillagent.pov_analysis.path_exploration import PathExplorationAgent
 from drillagent.pov_analysis.crash_triggering import CrashTriggerAgent
 from drillagent.utils.utils import *
 from drillagent.tools.basic_tools import *
-from drillagent.tools.cov_query_tools import FuncLineCovTool
+from drillagent.tools.cov_query_tools import FunctionCovTool
 from drillagent.tools.ast_grep_tools import AstGrepFunctionSearchTool
 from drillagent.utils.logging import init_llm_history_log, log_phase_separator, setup_drillagent_logger
 from drillagent.utils.log_converter import convert_llm_history_to_text
@@ -102,7 +102,6 @@ class DrillAgent:
                 FinishTool()
             ]
             self.logger.info(f"✓ Agent basic tools initialized: {len(self.basic_tools)} tools available")
-            # Note: cov_tools will be initialized after vulnerability analysis when binary_path becomes available.
         except Exception as e:
             self.logger.error(f"Failed to initialize agent basic tools: {e}")
 
@@ -112,8 +111,19 @@ class DrillAgent:
                 AstGrepFunctionSearchTool(self.config.target_repo_path)
             ]
             self.logger.info(f"✓ ast-grep tools initialized: {len(self.ast_grep_tools)} tools available")
+            for tool in self.ast_grep_tools: print("  "+tool.name()) # debug
         except Exception as e:
             self.logger.error(f"Failed to initialize ast-grep tools: {e}")
+
+        # Initialize coverage query tools for LLM
+        try:
+            self.cov_tools = [
+                FunctionCovTool(self.config.target_repo_path)
+            ]
+            self.logger.info(f"✓ Coverage query tools initialized: {len(self.cov_tools)} tools available")
+            for tool in self.cov_tools: print("  "+tool.name()) # debug
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize coverage query tools: {e}")
 
         # Initialize new LLMInterface instances
         # We use different models for different sub-tasks to optimize cost and performance
@@ -203,22 +213,6 @@ class DrillAgent:
                 if not res:
                     self.logger.error("Instrumentation phase failed, cannot proceed further.")
                     return self.generate_report()
-            
-            # Phase 2.5:
-            # Initialize coverage analysis tools now that we have binary_path file generated.
-            self._update_actual_binary_path(self.config.target_repo_path)
-            try:
-                binary_abs_path = os.path.join(
-                    self.config.target_repo_path,
-                    self.vulnerability_info.actual_binary_path
-                )
-                self.cov_tools = [
-                    FuncLineCovTool(self.config.target_repo_path, binary_abs_path)
-                ]
-                self.logger.info(f"✓ Coverage agent tools initialized: {len(self.cov_tools)} tools available")
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize coverage agent tools: {e}")
-                self.cov_tools = []  # Keep empty list to avoid errors
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:

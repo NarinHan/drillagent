@@ -166,7 +166,7 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
         text=True,
         check=True
     )
-    print(f"✓ Successfully checked out commit: {base_commit[:12]}...")
+    # print(f"✓ Successfully checked out commit: {base_commit[:12]}...")
     # if result.stdout:
     #     print(f"Git checkout output: {result.stdout.strip()}")
     
@@ -179,7 +179,7 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
         text=True,
         check=True
     )
-    print("✓ Successfully updated git submodules")
+    # print("✓ Successfully updated git submodules")
     if result.stdout:
         print(f"Submodule output: {result.stdout.strip()}")
 
@@ -192,10 +192,10 @@ def clean_gitrepo(actual_repo_path: str):
         text=True,
         timeout=60
     )
-    if clean_result.returncode == 0:
-        print("✓ Build artifacts cleaned")
-    else:
-        print("make clean failed or not available (this is OK if no Makefile exists)")
+    # if clean_result.returncode == 0:
+    #     print("✓ Build artifacts cleaned")
+    # else:
+    #     print("make clean failed or not available (this is OK if no Makefile exists)")
     
     # Reset git repository state - discard all local changes
     # print("Resetting git repository state...")
@@ -206,7 +206,7 @@ def clean_gitrepo(actual_repo_path: str):
         text=True,
         check=True
     )
-    print("✓ Git repository reset to HEAD")
+    # print("✓ Git repository reset to HEAD")
     
     # Clean untracked files and directories
     print("Cleaning untracked files...")
