@@ -107,11 +107,10 @@ class LLVMCovUtils:
         Returns:
             Dictionary containing:
             - is_executed: Whether function was executed
-            - covered_lines: List of covered line numbers
-            - uncovered_lines: List of uncovered line numbers
             - execution_count: Execution count
             - regions_covered: Number of covered regions
             - regions_total: Total number of regions
+            - filenames: List of filenames associated with the function
         """
         coverage_data = self._get_coverage_data()
         file_path = os.path.abspath(file_path)
@@ -150,9 +149,9 @@ class LLVMCovUtils:
         Get coverage details for multiple functions in batch.
         This is more efficient than calling get_function_coverage() multiple times.
         Args:
-            function_with_filepath_list: List of (function_name, file_path) tuples
+            function_with_filepath_list: List of (file_path, function_name) tuples
         Returns:
-            Dictionary  mapping (function_name, file_path) to coverage info dict containing:
+            Dictionary mapping (file_path, function_name) to coverage info dict containing:
             - is_executed: Whether function was executed
             - execution_count: Execution count
             - regions_covered: Number of covered regions
@@ -160,18 +159,18 @@ class LLVMCovUtils:
             - filenames: List of filenames associated with the function
             - found: Whether the function was found in coverage data
         Example:
-            >>> functions = [('main', '/path/to/main.c'), ('foo', '/path/to/foo.c')]
+            >>> functions = [('/path/to/main.c', 'main'), ('/path/to/foo.c', 'foo')]
             >>> results = cov_utils.get_multi_functions_coverage(functions)
-            >>> print(results[('main', '/path/to/main.c')]['is_executed'])
+            >>> print(results[('/path/to/main.c', 'main')]['is_executed'])
         """
         # Get coverage data once for all functions
         coverage_data = self._get_coverage_data()
 
         # Convert input list to set for faster lookup and normalize file paths
         target_functions = {}
-        for func_name, file_path in function_with_filepath_list:
+        for file_path, func_name in function_with_filepath_list:
             abs_file_path = os.path.abspath(file_path)
-            target_functions[(func_name, abs_file_path)] = {
+            target_functions[(abs_file_path, func_name)] = {
                 'found': False,
                 'is_executed': False,
                 'execution_count': 0,
@@ -188,7 +187,7 @@ class LLVMCovUtils:
 
             # Check if this function matches any target
             for abs_file_path in abs_filenames:
-                key = (function_name, abs_file_path)
+                key = (abs_file_path, function_name)
                 if key in target_functions:
                     # Found a match - get the file_id for the target file
                     file_id = abs_filenames.index(abs_file_path)
@@ -394,11 +393,13 @@ class LLVMCovUtils:
 
 
 
-    def generate_full_report(self) -> str:
+    def generate_full_report(self, max_lines: int = 40) -> str:
         """
         Generate coverage summary report (a human-readable big table).
+        Args:
+            max_lines: Maximum number of lines to return (default: 40)
         Returns:
-            Coverage report string
+            Coverage report string, truncated if exceeds max_lines
         """
         cmd = [
             self.llvm_cov_path,
@@ -409,6 +410,15 @@ class LLVMCovUtils:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"llvm-cov command failed: {result.stderr}")
+
+        # Truncate output if exceeds max_lines
+        lines = result.stdout.splitlines()
+        if len(lines) > max_lines:
+            truncated_lines = lines[:max_lines]
+            omitted_count = len(lines) - max_lines
+            truncated_lines.append(f"... ({omitted_count} lines omitted)")
+            return '\n'.join(truncated_lines)
+        # If not exceeding max_lines, return full output
         return result.stdout
 
     def generate_html_report(self, output_dir: str) -> str:

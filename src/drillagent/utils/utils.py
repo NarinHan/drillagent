@@ -269,6 +269,23 @@ def execute_command(command: str, env: dict = None) -> Tuple[int, str]:
         return -1, "[ERROR] Command execution timed out."
     except Exception as e:
         return -1, f"[ERROR] Command execution failed: {str(e)}"
+    
+def list_directory(path: str) -> Tuple[int, str]:
+    # List files in a directory and return exit code and output
+    try:
+        result = subprocess.run(
+            ['ls', '-lh', path],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        exit_code = result.returncode
+        output = result.stdout + result.stderr
+        return exit_code, output
+    except subprocess.TimeoutExpired:
+        return -1, "[ERROR] Directory listing timed out."
+    except Exception as e:
+        return -1, f"[ERROR] Directory listing failed: {str(e)}"
 
 def detect_sanitizer_triggered(exec_output: str) -> bool:
     if "AddressSanitizer failed to allocate" in exec_output:

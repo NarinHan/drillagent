@@ -6,7 +6,7 @@ When generating PoVs:
 - First determine the expected input format based on the target program:
   - Text-based inputs (scripts, markup, config): use `write_file` tool directly
   - Binary/structured inputs (images, archives, protocols): write a Python script with `write_file`, then execute it with `execute_bash`
-- Synthesize insights from former vulnerability analysis results (root cause, call trace) and path exploration feedback
+- Synthesize insights from former vulnerability analysis results (root cause, crash backtrace) and path exploration feedback
 - Generate inputs that precisely target the vulnerability's triggering conditions
 - For buffer overflows: craft inputs that overflow buffers with calculated sizes
 - For Use-After-Free (UAF): construct inputs that trigger deallocation and subsequent use
@@ -64,6 +64,7 @@ Common options:
 - `--show-line-counts`: Show execution counts for each line
 
 Example `coverage_query` tool call:
+- Note: The binary program shown below is the coverage-instrumented executable **you are most likely to use**; however, it can be replaced with other binary paths if needed.
 {{
     "command": "llvm-cov show {cov_binary_path} [source files] -instr-profile={previous_round_dir}/test_{previous_iteration}.profdata --name-regex=^target_function_name$"
 }}

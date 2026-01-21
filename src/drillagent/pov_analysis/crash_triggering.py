@@ -44,9 +44,10 @@ class CrashTriggerAgent:
         self.variants_povs = [] 
 
         # Init the LLVM coverage util. Set the profdata_path later after each execution.
-        repo_path = self.drill_agent.config.target_repo_path
-        binary_relative_path = self.drill_agent.vulnerability_info.binary_path
-        binary_abs_path = os.path.abspath(os.path.join(repo_path, binary_relative_path))
+        binary_abs_path = os.path.abspath(os.path.join(
+            self.drill_agent.config.target_repo_path, 
+            self.drill_agent.vulnerability_info.actual_binary_path # Must use actual binary here!
+        ))
         self.llvm_cov_utils = LLVMCovUtils(binary_abs_path=binary_abs_path)
 
     def run(self) -> None:
@@ -250,11 +251,14 @@ class CrashTriggerAgent:
                 self.logger.warning(f"  [CrashTriggerAgent] LLM agent loop did not complete successfully: {error_msg}")
                 # Don't raise error here - continue to Substep 3 to check if the file was still generated
 
-            response = result.get('final_response', '')
             self.logger.info(f"  [CrashTriggerAgent] LLM completed in {result.get('iterations', 'N/A')} iteration(s)")
             self.logger.info(f"  [CrashTriggerAgent] Stop reason: {result.get('stop_reason', 'N/A')}")
+            response = result.get('final_response', '')
             if response:
                 self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
+            # Show the current round directory contents.
+            _, output = list_directory(round_dir)
+            self.logger.debug(f"  [CrashTriggerAgent] ls -lh {round_dir}:\n{output}")
         except Exception as e:
             self.logger.warning(f"  [CrashTriggerAgent] Exception during LLM agent loop: {e}")
             # Don't raise error here - continue to Substep 3 to check if the file was still generated
@@ -312,6 +316,9 @@ class CrashTriggerAgent:
             stderr = result.stderr
             # Merge stdout and stderr as exec_output
             exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
+            # Show the current round directory contents.
+            _, output = list_directory(round_dir)
+            self.logger.debug(f"  [CrashTriggerAgent] ls -lh {round_dir}:\n{output}")
         except subprocess.TimeoutExpired as e:
             self.logger.warning(f"  [CrashTriggerAgent] Command execution timeout after 30s")
             exit_code = -1
