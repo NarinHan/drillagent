@@ -84,7 +84,7 @@ class PathExplorationAgent:
                     os.remove(item_path)
                 elif os.path.isdir(item_path):
                     shutil.rmtree(item_path)
-            self.logger.debug(f"  [PathExplorationAgent] Created and cleared round directory: {round_dir}")
+            # self.logger.debug(f"  [PathExplorationAgent] Created and cleared round directory: {round_dir}")
             
             # FIXED: clear_data should also be called to avoid memory leak!!! (conservative operation)
             if self.llvm_cov_utils:
@@ -164,7 +164,6 @@ class PathExplorationAgent:
             self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV successfully generated during path exploration!")
 
     def _get_round_dir(self, round_num: int) -> str:
-        # assert os.path.exists(self.drill_agent.work_dir), "DrillAgent work_dir does not exist!!!"
         # By default, work_dir is a relative path (./workspace). So round_dir is also relative.
         return os.path.join(self.drill_agent.work_dir, f"round{round_num}") 
 
@@ -174,25 +173,27 @@ class PathExplorationAgent:
         round_dir = self._get_round_dir(self.current_exp_iteration)
 
         # Substep 1: Construct the task prompt for test case generation
-        # 1.1. Get vulnerability information string (vuln basic info + root cause)
+        # 1.1. Get vulnerability information string (basic vuln info + vuln root cause)
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
-        vuln_info_str += "\n\n" + self.drill_agent.vulnerability_info.get_full_root_cause()
+        root_cause_str = self.drill_agent.vulnerability_info.get_full_root_cause()
 
         # 1.2. Construct the instructions on previous round directory to guide LLM review last attempt.
         previous_roundir_section = "N/A"
         if self.current_exp_iteration > 1:
-            self.logger.info(f"  [PathExplorationAgent] Adding previous round dir path to prompt: {previous_round_dir}")
             previous_round_dir = self._get_round_dir(self.current_exp_iteration - 1)
-            assert os.path.exists(previous_round_dir), f"Previous round dir does not exist: {previous_round_dir}!"
-            # Get coverage-instrumented binary path
-            vuln_info = self.drill_agent.vulnerability_info
-            bin_rel_path = vuln_info.actual_binary_path or vuln_info.binary_path
-            cov_binary_path = os.path.join(self.config.target_repo_path, bin_rel_path)
-            previous_roundir_section = "\n" + PEA_previous_roundir_template.format(
-                previous_iteration=self.current_exp_iteration - 1,
-                previous_round_dir=previous_round_dir,
-                cov_binary_path=cov_binary_path
-            )
+            self.logger.info(f"  [PathExplorationAgent] Adding previous round dir path to prompt: {previous_round_dir}")
+            if os.path.exists(previous_round_dir):
+                # Get coverage-instrumented binary path
+                vuln_info = self.drill_agent.vulnerability_info
+                bin_rel_path = vuln_info.actual_binary_path or vuln_info.binary_path
+                cov_binary_path = os.path.join(self.config.target_repo_path, bin_rel_path)
+                previous_roundir_section = "\n" + PEA_previous_roundir_template.format(
+                    previous_iteration=self.current_exp_iteration - 1,
+                    previous_round_dir=previous_round_dir,
+                    cov_binary_path=cov_binary_path
+                )
+            else:
+                self.logger.warning(f"  [PathExplorationAgent] Previous round directory does not exist: {previous_round_dir}. Skip previous_roundir_section.")
 
         # 1.3. Construct coverage feedback section if we have previous iteration results.
         cov_feedback_section = "N/A"
@@ -209,14 +210,14 @@ class PathExplorationAgent:
             self.logger.debug(f"  [PathExplorationAgent] Using file suffix from vulnerability info: {file_suffix}")
 
         # Format the unified task prompt. (now root cause is included in vuln_info_str)
-        loop_progress=f"{self.current_exp_iteration - 1}/{self.max_exp_iterations}",
         user_prompt = PEA_testcase_generation_prompt.format(
-            loop_progress=loop_progress,
+            loop_progress=f"{self.current_exp_iteration - 1}/{self.max_exp_iterations}",
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
             target_testcase_path=abs_test_case_path, # Target file path for LLM to write into.
             # Designed context sections
             vulnerability_info=vuln_info_str,                 # Necessary
+            root_cause_analysis=root_cause_str,               # Necessary
             previous_roundir_section=previous_roundir_section, # If this is empty, prompt will still work fine.
             cov_feedback_section=cov_feedback_section          # If this is empty, prompt will still work fine.
         )
@@ -329,7 +330,8 @@ class PathExplorationAgent:
         try:
             # Here we should already have llvm profraw file in current round directory.
             self.llvm_cov_utils.update_profile_data(profraw_path) # Transform profraw to profdata internally, but the JSON _coverage_data will be lazy-loaded.
-            self.logger.info(f"  [PathExplorationAgent] Current cov profdata file at: {self.llvm_cov_utils.profdata_path}")
+            if os.path.exists(self.llvm_cov_utils.profdata_path):
+                self.logger.info(f"  [PathExplorationAgent] Current cov profdata file at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to convert profraw to profdata: {e}")
@@ -459,12 +461,13 @@ class PathExplorationAgent:
         cov_feedback = '\n'.join(cov_feedback)
 
         # Aggregate basic execution and coverage info
-        formatted_cov_info = basic_info + '\n' + cov_feedback
+        formatted_cov_info = basic_info + '\n' + cov_feedback + "\n"
 
         # Store the collected coverage data into roundN dir.
         round_dir = self._get_round_dir(self.current_exp_iteration)
         with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
             f.write(formatted_cov_info)
+            f.write(f"Overall Coverage Report:\n{cov_report}") # For debug
         
         print(formatted_cov_info)
         print(f"Overall Coverage Report:\n{cov_report}") # For debug

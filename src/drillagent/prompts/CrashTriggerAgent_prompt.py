@@ -21,22 +21,23 @@ IMPORTANT:
 """
 # - Focus on reliability: ensure the PoV consistently triggers the crash
 
+# For the 1st round
 # TODO: This should provide the round dirs of path exploration phase.
-CTA_useful_testcase_and_cov_template = """## PREVIOUS PoV GENERATION PROGRESS
+# Each test case is accompanied by its coverage record (coverage_record.md):
+# - Which code paths were successfully explored
+# - Patterns in successful inputs that you can build upon
+# Use the `read_file` tool to examine these files and synthesize their insights into your final PoV.
+CTA_useful_testcase_and_cov_template = """## PATH EXPLORATION PROGRESS
 
-The following test cases were generated during path exploration and successfully reached closer to the vulnerability (but failed to trigger the crash). 
-Each test case is accompanied by its coverage record:
+The following test cases were generated during path exploration phase and successfully reached closer to the vulnerability crash location (but failed to trigger the crash). 
 
-{testcase_and_cov_paths}
+Review these test cases to synthesize their insights into your final PoV. 
+You may also improve upon one of the existing test cases to construct your first PoV candidate.
 
-Review these test cases and their coverage records to understand:
-- Which code paths were successfully explored
-- Patterns in successful inputs that you can build upon
-
-Use the `read_file` tool to examine these files and synthesize their insights into your final PoV.
+{testcase_file_paths}
 """
 
-# **Coverage Analysis Configuration:**
+# For later rounds
 CTA_previous_roundir_template = """## PREVIOUS ROUND ARTIFACTS
 
 The previous round (iteration {previous_iteration}) artifacts are stored in directory:
@@ -79,18 +80,21 @@ Learn from the previous test case structure and coverage results, then improve u
 
 # Core prompt for this phase.
 # Use `previous_pov_gen_progress` to provide previous execution feedback.
-# - Maximize the likelihood of triggering the crash reliably
-CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV possible.
+CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV violating memory safety.
+- This task typically requires multiple rounds of iteration. Your current high-level progress is: {loop_progress}. 
+- You are also provided with test case and execution feedback from previous attempts to help you refine and improve the test cases.
 
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
 
 **TARGET PoV FILE PATH**: {target_pov_path}
 
+# VULNERABILITY ANALYSIS CONTEXT
 {vulnerability_info}
 
 {root_cause_analysis}
 
+# HISTORICAL ATTEMPT INFORMATION
 {previous_pov_gen_progress}
 
 # YOUR TASK

@@ -205,7 +205,7 @@ class BaseInstrAgent:
             )
             success = (result.returncode == 0)
             if success:
-                self.logger.info("✓ Build completed!")
+                self.logger.info("Build completed!")
             else:
                 self.logger.error(f"✗ Build failed with exit code {result.returncode}")
                 # Log output only when failed.

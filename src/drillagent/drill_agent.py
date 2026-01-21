@@ -200,7 +200,9 @@ class DrillAgent:
         self.logger.info("=" * 60)
 
         # Checkout the base commit for the target repository is provided!
-        assert len(self.config.base_commit) == 40, "Base commit should be a valid 40-char git SHA1 hash."
+        if len(self.config.base_commit) != 40:
+            self.logger.error("Invalid base commit hash provided, cannot proceed.")
+            return self.generate_report()
 
         try:
             # Phase 1: Vulnerability Analysis
@@ -289,13 +291,12 @@ class DrillAgent:
 
         def _clean_and_checkout(repo_path: str):
             # Before compiling, clean repository and checkout target commit.
-            self.logger.info("Cleaning repository...")
             clean_gitrepo(repo_path)
             self.logger.info("✓ Cleaning finished!")
 
-            self.logger.info(f"Checking out base commit: {self.config.base_commit}")
+            # self.logger.info(f"  Checking out base commit: {self.config.base_commit}")
             checkout_gitrepo_commit(repo_path, self.config.base_commit)
-            self.logger.info("✓ Checked out Base commit!")
+            self.logger.info(f"✓ Checked out base commit: {self.config.base_commit}!")
 
         # Prepare related paths
         target_repo_path    = self.config.target_repo_path
@@ -340,7 +341,7 @@ class DrillAgent:
             self.sanitizer_agent = SanitizerInstrumentAgent(self, saninstr_repo_path, binary_relative_path)
             result_san = self.sanitizer_agent.run()
             if result_san['success']:
-                self.logger.info(f"✓ \"{self.project_name}\" sanitizer instrumentation completed.")
+                self.logger.info(f"\"{self.project_name}\" sanitizer instrumentation completed.")
                 # self.logger.info(f"    Binary path: {saninstr_repo_path}/{result_san.get('instrumented_binary')}")
             else:
                 self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
@@ -366,7 +367,7 @@ class DrillAgent:
             self.coverage_agent = CoverageInstrumentAgent(self, target_repo_path, binary_relative_path)
             result = self.coverage_agent.run()
             if result['success']:
-                self.logger.info(f"✓ \"{self.project_name}\" coverage instrumentation completed.")
+                self.logger.info(f"\"{self.project_name}\" coverage instrumentation completed.")
                 # self.logger.info(f"    Binary path: {target_repo_path}/{result.get('instrumented_binary')}")
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")

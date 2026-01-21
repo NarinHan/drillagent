@@ -65,14 +65,14 @@ Based on the runtime feedback below, your should try to figure out the actual ex
 
 
 # Core prompt for this phase.
-# ##vuln basic info
-# ##root cause
-# ##runtime execution feedback (if any)
+# ##basic vuln info
+# ##vuln root cause
+# ##runtime execution feedback      (if any)
 # ##previous round dir instructions (if any)
 # #YOUR TASK
 PEA_testcase_generation_prompt = """You are generating a test case with the goal of reaching the vulnerable function, and potentially triggering the vulnerability crash.
-This task typically requires multiple rounds of iteration. Your current high-level progress is: {loop_progress}. 
-In addition to the necessary vulnerability context, you will also receive execution feedback from the previous round to help you refine and improve the test cases.
+- This task typically requires multiple rounds of iteration. Your current high-level progress is: {loop_progress}. 
+- In addition to the necessary vulnerability context, you will also receive execution feedback from the previous round to help you refine and improve the test cases.
 
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
@@ -82,7 +82,9 @@ Actual repository path: {actual_repo_path}
 # VULNERABILITY ANALYSIS CONTEXT
 {vulnerability_info}
 
-# LAST ATTEMPT INFORMATION
+{root_cause_analysis}
+
+# HISTORICAL ATTEMPT INFORMATION
 ## PREVIOUS ROUND ARTIFACTS
 {previous_roundir_section}
 

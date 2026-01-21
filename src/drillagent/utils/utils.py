@@ -209,7 +209,7 @@ def clean_gitrepo(actual_repo_path: str):
     # print("✓ Git repository reset to HEAD")
     
     # Clean untracked files and directories
-    print("Cleaning untracked files...")
+    # print("Cleaning untracked files...")
     subprocess.run(
         ['git', 'clean', '-fdx'], # If set -x, also removes files ignored by .gitignore!
         cwd=actual_repo_path,
@@ -281,6 +281,7 @@ def list_directory(path: str) -> Tuple[int, str]:
         )
         exit_code = result.returncode
         output = result.stdout + result.stderr
+        output = output.strip()
         return exit_code, output
     except subprocess.TimeoutExpired:
         return -1, "[ERROR] Directory listing timed out."
