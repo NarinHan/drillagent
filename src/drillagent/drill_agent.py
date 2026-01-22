@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
 import re
+import json
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 from dataclasses import dataclass, field
@@ -199,39 +201,69 @@ class DrillAgent:
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
 
+        # Initialize time overhead tracking
+        time_overhead = {
+            "phase_vulnerability_analysis": 0.0,
+            "phase_code_instrumentation": 0.0,
+            "phase_path_exploration": 0.0,
+            "phase_crash_triggering": 0.0
+        }
+
         # Checkout the base commit for the target repository is provided!
         if len(self.config.base_commit) != 40:
             self.logger.error("Invalid base commit hash provided, cannot proceed.")
+            self._save_time_overhead(time_overhead)
             return self.generate_report()
 
         try:
             # Phase 1: Vulnerability Analysis
             if not self.skip_vulnerability_analysis:
+                start_time = time.time()
                 self._phase_vulnerability_analysis()
+                time_overhead["phase_vulnerability_analysis"] = time.time() - start_time
 
             # Phase 2: Code Instrumentation
             if not self.skip_code_instrumentation:
+                start_time = time.time()
                 res = self._phase_code_instrumentation()
+                time_overhead["phase_code_instrumentation"] = time.time() - start_time
                 if not res:
                     self.logger.error("Instrumentation phase failed, cannot proceed further.")
+                    self._save_time_overhead(time_overhead)
                     return self.generate_report()
 
             # Phase 3: Path Exploration with the coverage feedback
             if not self.skip_path_exploration:
+                start_time = time.time()
                 self._phase_path_exploration()
+                time_overhead["phase_path_exploration"] = time.time() - start_time
 
             # Phase 4: PoV Generation and Verification
             if not self.skip_crash_triggering:
+                start_time = time.time()
                 self._phase_crash_triggering()
+                time_overhead["phase_crash_triggering"] = time.time() - start_time
 
             # Mark as completed
             self.phase = "completed"
+            self._save_time_overhead(time_overhead)
             return self.generate_report()
 
         except Exception as e:
             self.logger.error(f"Fatal error in DrillAgent workflow: {e}", exc_info=True)
             self.errors.append(str(e))
+            self._save_time_overhead(time_overhead)
             return self.generate_report()
+
+    def _save_time_overhead(self, time_overhead: Dict[str, float]) -> None:
+        """Save time overhead for each phase to a JSON file."""
+        time_overhead_path = os.path.join(self.output_dir, "time_overhead.json")
+        try:
+            with open(time_overhead_path, 'w') as f:
+                json.dump(time_overhead, f, indent=2)
+            self.logger.info(f"Time overhead saved to {time_overhead_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save time overhead: {e}")
 
     def _phase_vulnerability_analysis(self):
         """Phase 1: Analyze vulnerability using LLM"""

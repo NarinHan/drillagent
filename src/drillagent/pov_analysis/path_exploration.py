@@ -223,7 +223,7 @@ class PathExplorationAgent:
         )
 
         # Substep 2: Use LLMInterface for automatic tool calling and conversation management
-        self.logger.info("  [PathExplorationAgent] Using LLMInterface to generate test case...")
+        self.logger.info(f"  [PathExplorationAgent] Using LLMInterface to generate test case (max rounds={self.max_generation_turns})...")
         try:
             # FIXED: We should not use cheaper model here, gpt-5-mini prefers to invoke only one tool call each time...
             result = self.drill_agent.basic_llm.run_agent_loop(

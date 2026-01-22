@@ -232,7 +232,7 @@ class CrashTriggerAgent:
         )
 
         # For crash triggering, we also provide ast-grep and coverage tools.
-        self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
+        self.logger.info(f"  [CrashTriggerAgent] Using LLMInterface to generate final PoV (max rounds={self.max_generation_turns})...")
         try:
             result = self.drill_agent.basic_llm.run_agent_loop(
                 loop_progress=f"{self.current_trigger_iteration - 1}/{self.max_trigger_iterations}",
