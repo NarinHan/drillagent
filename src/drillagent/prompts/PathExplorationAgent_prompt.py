@@ -77,6 +77,7 @@ PEA_testcase_generation_prompt = """You are generating a test case with the goal
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
 
+**Your current workspace for testcase generation**: {current_round_dir}
 **Target Test Case File Path**: {target_testcase_path}
 
 # VULNERABILITY ANALYSIS CONTEXT

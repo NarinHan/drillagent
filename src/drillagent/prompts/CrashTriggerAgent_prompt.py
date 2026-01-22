@@ -87,6 +87,7 @@ CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnera
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
 
+**Your current workspace for PoV candidate generation**: {current_round_dir}
 **TARGET PoV FILE PATH**: {target_pov_path}
 
 # VULNERABILITY ANALYSIS CONTEXT

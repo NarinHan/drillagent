@@ -307,7 +307,7 @@ class LLMInterface:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096
+        max_tokens: Optional[int] = None
     ) -> str:
         """
         Simple text generation without tools.
@@ -316,7 +316,7 @@ class LLMInterface:
             prompt: User prompt
             system_prompt: Optional system prompt
             temperature: Sampling temperature (0.0 to 1.0)
-            max_tokens: Maximum tokens to generate
+            max_tokens: Maximum tokens to generate (None = provider default)
 
         Returns:
             Generated text
@@ -333,7 +333,7 @@ class LLMInterface:
         system_prompt: Optional[str] = None,
         conversation_history: Optional[List[Dict]] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096
+        max_tokens: Optional[int] = None
     ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any], str, Optional[Dict[str, int]]]:
         """
         Generate response with tool calling support (manual mode).
@@ -347,7 +347,7 @@ class LLMInterface:
             system_prompt: Optional system instruction
             conversation_history: Previous messages for multi-turn conversation
             temperature: Sampling temperature
-            max_tokens: Max tokens to generate
+            max_tokens: Max tokens to generate (None = provider default)
 
         Returns:
             Tuple of (text_response, tool_calls, assistant_message, stop_reason, usage_stats)
@@ -373,7 +373,7 @@ class LLMInterface:
         system_prompt: Optional[str] = None,
         max_iterations: int = 10,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
         tool_executor: Optional[Callable] = None,
         continuation_prompt: str = "Continue based on the tool results.",
         on_iteration: Optional[Callable[[int, str, List[Dict]], None]] = None,
@@ -402,7 +402,7 @@ class LLMInterface:
             system_prompt: Optional system instruction
             max_iterations: Maximum number of iterations
             temperature: Sampling temperature
-            max_tokens: Max tokens **per LLM generation**
+            max_tokens: Max tokens **per LLM generation** (None = provider default)
             tool_executor: Optional custom tool executor function(tool_calls, tools) -> List[results]
                           If None, uses default executor that calls tool.execute()
             continuation_prompt: Prompt to send after tool results (not used if finish tool is called)
@@ -467,6 +467,7 @@ class LLMInterface:
             # Define tools allowed in the final iteration (for file generation and completion)
             final_iteration_allowed_tools = {'write_file', 'execute_bash', 'finish'}
 
+            # This for loop has more than 300 lines...
             for iteration in range(1, max_iterations + 1): # 1 ~ max_iterations
                 # Determine tools availability based on iteration
                 # On the last iteration, only allow write_file, execute_bash, and finish tools
@@ -929,16 +930,19 @@ class LLMInterface:
         prompt: str,
         system_prompt: Optional[str],
         temperature: float,
-        max_tokens: int
+        max_tokens: Optional[int]
     ) -> str:
         """Generate using Claude API (simple text generation)"""
         messages = [{"role": "user", "content": prompt}]
+
+        # Claude API requires max_tokens, use default if not specified
+        effective_max_tokens = max_tokens if max_tokens is not None else 4096
 
         kwargs = {
             "model": self.model_name,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
         }
 
         if system_prompt:
@@ -985,7 +989,7 @@ class LLMInterface:
         prompt: str,
         system_prompt: Optional[str],
         temperature: float,
-        max_tokens: int
+        max_tokens: Optional[int]
     ) -> str:
         """Generate using OpenAI API (simple text generation)"""
         messages = []
@@ -999,8 +1003,11 @@ class LLMInterface:
         kwargs = {
             "model": self.model_name,
             "messages": messages,
-            "max_completion_tokens": max_tokens,
         }
+
+        # Only add max_completion_tokens if specified
+        if max_tokens is not None:
+            kwargs["max_completion_tokens"] = max_tokens
 
         # Only add temperature if the model supports it
         # gpt-5-mini and similar models don't support temperature
@@ -1050,7 +1057,7 @@ class LLMInterface:
         system_prompt: Optional[str],
         conversation_history: Optional[List[Dict]],
         temperature: float,
-        max_tokens: int
+        max_tokens: Optional[int]
     ) -> Tuple[str, List[Dict], Dict, str, Optional[Dict[str, int]]]:
         """Claude-specific tool calling implementation"""
 
@@ -1061,13 +1068,16 @@ class LLMInterface:
         messages = conversation_history.copy() if conversation_history else []
         messages.append({"role": "user", "content": prompt})
 
+        # Claude API requires max_tokens, use default if not specified
+        effective_max_tokens = max_tokens if max_tokens is not None else 4096
+
         # Call Claude API with tools
         kwargs = {
             "model": self.model_name,
             "messages": messages,
             "tools": tool_schemas,
             "temperature": temperature,
-            "max_tokens": max_tokens
+            "max_tokens": effective_max_tokens
         }
 
         if system_prompt:
@@ -1156,7 +1166,7 @@ class LLMInterface:
         system_prompt: Optional[str],
         conversation_history: Optional[List[Dict]],
         temperature: float,
-        max_tokens: int
+        max_tokens: Optional[int]
     ) -> Tuple[str, List[Dict], Dict, str, Optional[Dict[str, int]]]:
         """OpenAI-specific tool calling implementation"""
 
@@ -1180,8 +1190,11 @@ class LLMInterface:
             "messages": messages,
             "tools": tool_schemas,
             "tool_choice": "auto",
-            "max_completion_tokens": max_tokens
         }
+
+        # Only add max_completion_tokens if specified
+        if max_tokens is not None:
+            kwargs["max_completion_tokens"] = max_tokens
 
         # Only add temperature if the model supports it
         # gpt-5-mini and similar models don't support temperature
@@ -1224,12 +1237,12 @@ class LLMInterface:
         tool_calls_for_api = []
         if message.tool_calls:
             for tool_call in message.tool_calls:
-                tool_calls.append({
+                tool_calls.append({         # For our internal usage
                     "id": tool_call.id,
                     "name": tool_call.function.name,
                     "arguments": json.loads(tool_call.function.arguments)
                 })
-                tool_calls_for_api.append({
+                tool_calls_for_api.append({ # For OpenAI API format
                     "id": tool_call.id,
                     "type": "function",
                     "function": {
@@ -1237,6 +1250,9 @@ class LLMInterface:
                         "arguments": tool_call.function.arguments
                     }
                 })
+        print(f"LLM tool calls: {len(tool_calls)}")  # LHY: Debug output
+        for tc in tool_calls:
+            print(f"  {tc['name']} with args {tc['arguments']}")  # LHY: Debug output
 
         # Build complete assistant message in OpenAI's official format
         assistant_message = {

@@ -37,7 +37,7 @@ class PathExplorationAgent:
         self.max_exp_iterations = 8
         self.current_exp_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 15 # 10 or 15 or 20
+        self.max_generation_turns = 10 # 10 or 15 or 20
 
         # For coverage collection
         binary_abs_path = os.path.abspath(os.path.join(
@@ -214,6 +214,7 @@ class PathExplorationAgent:
             loop_progress=f"{self.current_exp_iteration - 1}/{self.max_exp_iterations}",
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
+            current_round_dir=round_dir,
             target_testcase_path=abs_test_case_path, # Target file path for LLM to write into.
             # Designed context sections
             vulnerability_info=vuln_info_str,                 # Necessary
@@ -232,7 +233,7 @@ class PathExplorationAgent:
                 system_prompt=PEA_system_prompt,
                 max_iterations=self.max_generation_turns, # tunable parameter
                 temperature=0.7,  # Higher temperature for creative test case generation
-                max_tokens=30720,
+                # max_tokens=30720,
                 continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information. " + \
                   "If you already generated the file, call `finish` tool to end the process."
             )
@@ -272,8 +273,7 @@ class PathExplorationAgent:
         if file_size == 0:
             raise RuntimeError(f"Test case file at {test_case_path} is empty. LLM may have failed to write content.")
 
-        self.logger.info(f"  [PathExplorationAgent] Test case successfully written to: {test_case_path}")
-        self.logger.debug(f"  [PathExplorationAgent] Test case file size: {file_size} bytes")
+        self.logger.info(f"  [PathExplorationAgent] Test case successfully written to: {test_case_path} ({file_size} bytes)")
         return test_case_path
 
     def _execute_test_case(self, command: str) -> Tuple[int, str]: # No LLM needed
@@ -350,13 +350,15 @@ class PathExplorationAgent:
             cov_report = self.llvm_cov_utils.generate_full_report()
         except Exception as e:
             self.logger.warning(f"  [PathExplorationAgent] \"self.llvm_cov_utils.generate_full_report()\" {e}")
-            cov_report = "None"  # Placeholder if report generation fails
+            self.logger.warning(f"  [PathExplorationAgent] Failed to collect coverage feedback, returning empty results.")
+            cov_report = "None"   # Placeholder if report generation fails
+            return cov_report, []
 
         # Substep 2.1: Extract function frames from vulnerable call trace
         # Check if we have a valid call trace
         if not self.vuln_crash_trace or len(self.vuln_crash_trace) == 0:
-            self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available")
-            raise ValueError("No vulnerability call trace available for coverage analysis") # We assume there should be vuln_crash_trace.
+            self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available for coverage analysis, returning empty results.")
+            return "None", []
 
         # Build a list of (function_name, file_path) tuples -> valid_frames
         valid_frames: List[Tuple[Dict, Any]] = []  # Store (frame, abs_file_path) tuples for frames we'll query

@@ -31,7 +31,7 @@ class CrashTriggerAgent:
         self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 20 # 15 or 20 or 25
+        self.max_generation_turns = 15 # 15 or 20 or 25
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
@@ -225,7 +225,9 @@ class CrashTriggerAgent:
         user_prompt = CTA_final_pov_generation_prompt.format(
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
-            target_pov_path=abs_pov_path,  # Add target path for LLM to write to
+            current_round_dir=round_dir,
+            target_pov_path=abs_pov_path,  # Target file path for LLM to write into.
+            # Designed context sections
             vulnerability_info=vuln_info_str,   # Including vuln type, call trace, etc.
             root_cause_analysis=root_cause_str, # Markdown format content
             previous_pov_gen_progress=previous_progress # 🤔
@@ -241,7 +243,7 @@ class CrashTriggerAgent:
                 system_prompt=CTA_system_prompt,
                 max_iterations=self.max_generation_turns,
                 temperature=0.7,  # Higher temperature for creative PoV generation
-                max_tokens=30720,
+                # max_tokens=30720,
                 continuation_prompt="Please continue your analysis and craft the final PoV candidate after you get enough information. " + \
                   "If you already generated the file, call `finish` tool to end the process."
             )
