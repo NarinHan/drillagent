@@ -6,7 +6,7 @@ When generating PoVs:
 - First determine the expected input format based on the target program:
   - Text-based inputs (scripts, markup, config): use `write_file` tool directly
   - Binary/structured inputs (images, archives, protocols): write a Python script with `write_file`, then execute it with `execute_bash`
-- Synthesize insights from former vulnerability analysis results (root cause, call trace) and path exploration feedback
+- Synthesize insights from former vulnerability analysis results (root cause, crash backtrace) and path exploration feedback
 - Generate inputs that precisely target the vulnerability's triggering conditions
 - For buffer overflows: craft inputs that overflow buffers with calculated sizes
 - For Use-After-Free (UAF): construct inputs that trigger deallocation and subsequent use
@@ -21,42 +21,58 @@ IMPORTANT:
 """
 # - Focus on reliability: ensure the PoV consistently triggers the crash
 
+# For the 1st round
 # TODO: This should provide the round dirs of path exploration phase.
-CTA_useful_testcase_and_cov_template = """## PREVIOUS PoV GENERATION PROGRESS
+# Each test case is accompanied by its coverage record (coverage_record.md):
+# - Which code paths were successfully explored
+# - Patterns in successful inputs that you can build upon
+# Use the `read_file` tool to examine these files and synthesize their insights into your final PoV.
+CTA_useful_testcase_and_cov_template = """## PATH EXPLORATION PROGRESS
 
-The following test cases were generated during path exploration and successfully reached closer to the vulnerability (but failed to trigger the crash). 
-Each test case is accompanied by its coverage record:
+The following test cases were generated during path exploration phase and successfully reached closer to the vulnerability crash location (but failed to trigger the crash). 
 
-{testcase_and_cov_paths}
+Review these test cases to synthesize their insights into your final PoV. 
+You may also improve upon one of the existing test cases to construct your first PoV candidate.
 
-Review these test cases and their coverage records to understand:
-- Which code paths were successfully explored
-- Patterns in successful inputs that you can build upon
-
-Use the `read_file` tool to examine these files and synthesize their insights into your final PoV.
+{testcase_file_paths}
 """
 
-# **Coverage Analysis Configuration:**
+# For later rounds
 CTA_previous_roundir_template = """## PREVIOUS ROUND ARTIFACTS
 
 The previous round (iteration {previous_iteration}) artifacts are stored in directory:
 `{previous_round_dir}`
 
 This directory contains:
-- `test_{previous_iteration}.profdata`: Coverage data file from the previous execution. Use `get_function_line_coverage` tool to query specific function/line coverage from this file.
+- `test_{previous_iteration}.profdata`: Coverage data file from the previous execution. Use `coverage_query` tool to query specific function/line coverage from this file.
 - `testcase-round{previous_iteration}*`: The test case file(s) generated in the previous round (failed to trigger the crash).
 
 You can:
 1. Use `execute_bash` with `ls {previous_round_dir}` to see all files in this directory.
 2. Use `read_file` tool to examine the previous test case content and understand what approach was tried.
-3. Use `get_function_line_coverage` tool with the profdata file to query detailed coverage information for specific functions.
+3. Use `coverage_query` tool with llvm-cov command to query detailed coverage information for specific functions.
 
-Example `get_function_line_coverage` tool call for coverage analysis:
+**Coverage Query Tool Usage:**
+The `coverage_query` tool executes llvm-cov commands. The command MUST start with `llvm-cov`.
+
+Command format:
+```
+llvm-cov show <binary> [source_file] -instr-profile=<profdata> [options]
+```
+
+Common options:
+- `--name-regex=^func_name$`: Show coverage for a specific function (use regex anchors for exact match)
+- `--show-line-counts`: Show execution counts for each line
+
+Example `coverage_query` tool call:
+- Note: The binary program shown below is the coverage-instrumented executable **you are most likely to use**; however, it can be replaced with other binary paths if needed.
 {{
-    "profdata_path": "{previous_round_dir}/test_{previous_iteration}.profdata",
-    "function_name": "target_function_name",
-    "source_file_path": "relative/path/to/file.c"  // optional, can be omitted to search all files
+    "command": "llvm-cov show {cov_binary_path} [source files] -instr-profile={previous_round_dir}/test_{previous_iteration}.profdata --name-regex=^target_function_name$"
 }}
+
+**Coverage Output Format:**
+- Lines with `N|` show execution count N (N=0 means NOT executed/uncovered)
+- Focus on uncovered lines (0|) near the vulnerability to understand what conditions are missing
 
 Learn from the previous test case structure and coverage results, then improve upon it to trigger the crash.
 """
@@ -64,18 +80,21 @@ Learn from the previous test case structure and coverage results, then improve u
 
 # Core prompt for this phase.
 # Use `previous_pov_gen_progress` to provide previous execution feedback.
-# - Maximize the likelihood of triggering the crash reliably
-CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV possible.
+CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV violating memory safety.
+- This task typically requires multiple rounds of iteration. Your current high-level progress is: {loop_progress}. 
+- You are also provided with test case and execution feedback from previous attempts to help you refine and improve the test cases.
 
 Vulnerable Project Name: {project_name}
 Actual repository path: {actual_repo_path}
 
 **TARGET PoV FILE PATH**: {target_pov_path}
 
+# VULNERABILITY ANALYSIS CONTEXT
 {vulnerability_info}
 
 {root_cause_analysis}
 
+# HISTORICAL ATTEMPT INFORMATION
 {previous_pov_gen_progress}
 
 # YOUR TASK

@@ -166,7 +166,7 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
         text=True,
         check=True
     )
-    print(f"✓ Successfully checked out commit: {base_commit[:12]}...")
+    # print(f"✓ Successfully checked out commit: {base_commit[:12]}...")
     # if result.stdout:
     #     print(f"Git checkout output: {result.stdout.strip()}")
     
@@ -179,7 +179,7 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
         text=True,
         check=True
     )
-    print("✓ Successfully updated git submodules")
+    # print("✓ Successfully updated git submodules")
     if result.stdout:
         print(f"Submodule output: {result.stdout.strip()}")
 
@@ -192,10 +192,10 @@ def clean_gitrepo(actual_repo_path: str):
         text=True,
         timeout=60
     )
-    if clean_result.returncode == 0:
-        print("✓ Build artifacts cleaned")
-    else:
-        print("make clean failed or not available (this is OK if no Makefile exists)")
+    # if clean_result.returncode == 0:
+    #     print("✓ Build artifacts cleaned")
+    # else:
+    #     print("make clean failed or not available (this is OK if no Makefile exists)")
     
     # Reset git repository state - discard all local changes
     # print("Resetting git repository state...")
@@ -206,10 +206,10 @@ def clean_gitrepo(actual_repo_path: str):
         text=True,
         check=True
     )
-    print("✓ Git repository reset to HEAD")
+    # print("✓ Git repository reset to HEAD")
     
     # Clean untracked files and directories
-    print("Cleaning untracked files...")
+    # print("Cleaning untracked files...")
     subprocess.run(
         ['git', 'clean', '-fdx'], # If set -x, also removes files ignored by .gitignore!
         cwd=actual_repo_path,
@@ -269,6 +269,24 @@ def execute_command(command: str, env: dict = None) -> Tuple[int, str]:
         return -1, "[ERROR] Command execution timed out."
     except Exception as e:
         return -1, f"[ERROR] Command execution failed: {str(e)}"
+    
+def list_directory(path: str) -> Tuple[int, str]:
+    # List files in a directory and return exit code and output
+    try:
+        result = subprocess.run(
+            ['ls', '-lh', path],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        exit_code = result.returncode
+        output = result.stdout + result.stderr
+        output = output.strip()
+        return exit_code, output
+    except subprocess.TimeoutExpired:
+        return -1, "[ERROR] Directory listing timed out."
+    except Exception as e:
+        return -1, f"[ERROR] Directory listing failed: {str(e)}"
 
 def detect_sanitizer_triggered(exec_output: str) -> bool:
     if "AddressSanitizer failed to allocate" in exec_output:

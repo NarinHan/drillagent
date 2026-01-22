@@ -365,7 +365,7 @@ Use the provided tools (mainly `ast_grep_search_function`, supplemented by `read
 - All the relative file paths are based on the repository root: {actual_repo_path}
 - Some source file line numbers may be inaccurate (i.e., target code line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion. You may need to read a few lines above the provided line number, and use the callee function name in the next stack frame to pinpoint the correct call-site code snippet!!
 
-Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE ANALYSIS" and covering:
+Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE" and covering:
 - What the vulnerability is
 - Why it occurs (the root cause)
 - What code pattern or logic flaw enables it

@@ -130,8 +130,8 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
 
     # Tool results
     if tool_results and tool_calls:
-        # Filter to only show results for get_function_line_coverage
-        whilelist_tools = ["get_function_line_coverage"]
+        # Filter to only show results for coverage_query
+        whilelist_tools = ["coverage_query"]
         coverage_results = []
         for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
             tool_name = tool_call.get("name", "unknown")

@@ -259,6 +259,7 @@ class RawSecbTaskLoader:
         # Returns True if the instance_id is among the blacklist!
         blacklist = [
             "gpac.cve-2023-3012",
+            "gpac.cve-2023-5586",   # Only two frames have line numbers.
             "imagemagick.cve-2018-6405",
             "matio.cve-2019-9032",
             "matio.cve-2019-9035",
@@ -269,11 +270,7 @@ class RawSecbTaskLoader:
             "libarchive.cve-2019-11463"
         ] # These 9 tasks are very weird in SEC-bench!
         blacklist += [
-            "mruby.cve-2022-1201",  # The stack frames are all in one line.
-            "mruby.cve-2018-14337", # The call trace is in other fields...
             "php.cve-2018-12882",   # Cannot be compiled...
-            "liblouis.cve-2023-26768", # Cannot find the harness binary.
-            "gpac.cve-2023-5586",   # Only two frames have line numbers.
             "gpac.cve-2022-2454",   # "UndefinedBehaviorSanitizer"
             "gpac.cve-2023-42298",  # "UndefinedBehaviorSanitizer" (Don't have backtrace starting with "#")
         ] # These tasks just have no call trace. But still possible to handle.

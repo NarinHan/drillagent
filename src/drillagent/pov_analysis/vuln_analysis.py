@@ -742,7 +742,7 @@ class VulnInfo:
     free_trace: Tuple[str, List[Dict[str, Any]]] = field(default_factory=lambda: ("", []))       # (heap-use-after-free, double-free)
     # harness details
     refined_harness_command: str = ""  # Refined harness command
-    binary_path: str       = ""  # Relative path to the target binary. This file may be text script, but for compatibility we still call it "binary".
+    binary_path: str       = ""  # Relative path to the target program. It may be text script, but for compatibility we still call it "binary". # TODO: rename.
     input_file_suffix: str = ""  # Input file suffix (e.g., .xml, .png)
     actual_binary_path: str = ""  # If extracted entry "binary_path" is a text script, this field is the actual binary it calls, which will be instrumented.
                                   # Else, "actual_binary_path" will be the same as the entry program ("binary_path"), since it's already a binary executable.
@@ -815,10 +815,8 @@ class VulnInfo:
     def format_output(self, skip_rca_result=False) -> str:
         # Returns the basic vulnerability information as a formatted string. Including crash trace and allocation/free traces.
         lines = []
-        # lines.append("=" * 80)
-        lines.append("## VULNERABILITY ANALYSIS RESULTS")
+        lines.append("## BASIC VULNERABILITY INFO")
         lines.append("")
-        # lines.append("=" * 80)
         # Section 1: Vulnerability Details
         lines.append("[VULNERABILITY DETAILS]")
         lines.append(f"  Vuln Type:              {self.vuln_type if self.vuln_type else 'N/A'}")
@@ -879,6 +877,7 @@ class VulnInfo:
             for line in free_trace_str.split('\n'):
                 if line.strip():
                     lines.append(f"  {line.strip()}")
+        
         # Section 4: Root Cause Analysis
         if self.root_cause and not skip_rca_result:
             # lines.append("\n[ROOT CAUSE ANALYSIS]")
@@ -889,7 +888,7 @@ class VulnInfo:
             # root_cause_lines.append("...") if len(self.root_cause.split('\n')) > 20 else None #
             for rc_line in root_cause_lines:
                 if not rc_line.strip(): continue # skip empty lines
-                if rc_line.startswith("## "):    # Handle section title
+                if rc_line.startswith("## "):    # Handle section title "## VULNERABILITY ROOT CAUSE"
                     lines.append(f"\n{rc_line}")
                 else:
                     lines.append(f"  {rc_line}")
@@ -899,8 +898,6 @@ class VulnInfo:
         #     for idx, step in enumerate(self.critical_steps, 1):
         #         lines.append(f"  {idx}. {step}")
         
-        # lines.append("=" * 80)
-        # lines.append("")
         return '\n'.join(lines)
 
     def get_full_root_cause(self) -> str:

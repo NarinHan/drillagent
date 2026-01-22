@@ -424,7 +424,7 @@ class LLMInterface:
             - final_response: str - final text response from LLM (or finish tool message)
             - iterations: int - number of iterations used
             - conversation: ConversationManager - full conversation history
-            - stop_reason: str - why the agent stopped:
+            - stop_reason: str - why the agent stopped: (LHY: This content is from LLM provider response)
                 * 'finish_tool_true' - finish tool called with task_completed=true
                 * 'finish_tool_false' - finish tool called with task_completed=false
                 * 'finish_tool_partial' - finish tool called with task_completed=partial
@@ -432,7 +432,7 @@ class LLMInterface:
                 * 'max_iterations' - reached iteration limit
                 * 'rate_limit_error'/'timeout_error'/'llm_error' - various errors
             - task_completed: Optional[str] - 'true'/'false'/'partial' (only when finish tool used)
-            - error: Optional[str] - error message if failed
+            - error: Optional[str] - error message if failed (LHY: This content is from our own handling)
             - usage_stats: Dict - token usage statistics for this call only
         """
         # Save old stats and create fresh stats for this call to ensure isolation
@@ -669,7 +669,7 @@ class LLMInterface:
                             'iterations': iteration,
                             'conversation': conversation,
                             'stop_reason': stop_reason,
-                            'error': "Response truncated (max_tokens reached)",
+                            'error': "Response truncated (token limit reached)", # due to output limit or context window limit
                             'usage_stats': self.usage_stats.to_dict()
                         }
                         # Log agent loop end
@@ -681,7 +681,7 @@ class LLMInterface:
                                     final_response=text_response,
                                     iterations=iteration,
                                     stop_reason=stop_reason,
-                                    error="Response truncated (max_tokens reached)"
+                                    error="Response truncated (token limit reached)"
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -1163,6 +1163,7 @@ class LLMInterface:
         tool_schemas = [tool.to_openai_schema() for tool in tools]
 
         # Build messages
+        # Containing: system prompt, conversation history, user prompt.
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -1206,6 +1207,12 @@ class LLMInterface:
                 'completion_tokens': response.usage.completion_tokens,
                 'total_tokens': response.usage.total_tokens
             })
+            # Output response.usage for debugging
+            print(json.dumps({
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }, indent=2))
 
         # Get stop_reason from response (OpenAI calls it finish_reason)
         stop_reason = response.choices[0].finish_reason if response.choices else "unknown"
@@ -1243,6 +1250,7 @@ class LLMInterface:
         # Log the interaction if output_dir is configured
         if self.output_dir:
             try:
+                # Currently, we don't log conversation_history for simplicity. But such content is sent to LLMs during interaction.
                 log_llm_interaction(
                     output_dir=self.output_dir,
                     interaction_data={
@@ -1252,7 +1260,7 @@ class LLMInterface:
                         "user_prompt": prompt,
                         "assistant_response": text_response,
                         "tool_calls": tool_calls,
-                        "stop_reason": stop_reason,
+                        "stop_reason": stop_reason, # This is from LLM provider response
                         "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
                     }
                 )
