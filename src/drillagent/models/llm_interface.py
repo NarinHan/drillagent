@@ -79,7 +79,8 @@ class UsageStats:
     total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    api_calls: int = 0
+    api_calls:  int = 0
+    tool_calls: int = 0 # TODO
 
     def update(self, usage_data: Optional[Dict] = None):
         """Update stats from API response usage data"""
@@ -301,17 +302,6 @@ class LLMInterface:
                     "openai package not found. Install it with: pip install openai"
                 )
 
-        # Usage tracking
-        self.usage_stats = UsageStats()
-
-    def get_usage_stats(self) -> Dict[str, int]:
-        """Get API usage statistics"""
-        return self.usage_stats.to_dict()
-
-    def reset_usage_stats(self) -> None:
-        """Reset usage statistics"""
-        self.usage_stats = UsageStats()
-
     def generate(
         self,
         prompt: str,
@@ -344,7 +334,7 @@ class LLMInterface:
         conversation_history: Optional[List[Dict]] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096
-    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any], str]:
+    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any], str, Optional[Dict[str, int]]]:
         """
         Generate response with tool calling support (manual mode).
 
@@ -360,11 +350,12 @@ class LLMInterface:
             max_tokens: Max tokens to generate
 
         Returns:
-            Tuple of (text_response, tool_calls, assistant_message, stop_reason)
+            Tuple of (text_response, tool_calls, assistant_message, stop_reason, usage_stats)
             - text_response: LLM's textual reasoning/response
             - tool_calls: List of tool calls [{"id": "...", "name": "...", "arguments": {...}}, ...]
             - assistant_message: Complete assistant message in official API format
             - stop_reason: Why the generation stopped (e.g., "end_turn", "max_tokens", "tool_use", "stop")
+            - usage_stats: Token usage for this call (prompt_tokens, completion_tokens, total_tokens)
         """
         if self.provider == "claude":
             return self._generate_with_tools_claude(
@@ -433,11 +424,10 @@ class LLMInterface:
                 * 'rate_limit_error'/'timeout_error'/'llm_error' - various errors
             - task_completed: Optional[str] - 'true'/'false'/'partial' (only when finish tool used)
             - error: Optional[str] - error message if failed (LHY: This content is from our own handling)
-            - usage_stats: Dict - token usage statistics for this call only
+            - usage_stats: Dict - token usage statistics for this agent loop only
         """
-        # Save old stats and create fresh stats for this call to ensure isolation
-        old_stats = self.usage_stats
-        self.usage_stats = UsageStats()
+        # Create local usage stats to track this agent loop's token consumption
+        loop_usage_stats = UsageStats()
 
         # Log agent loop start if output_dir is configured
         if self.output_dir:
@@ -490,7 +480,7 @@ class LLMInterface:
                 while retry_count <= max_retries:
                     try:
                         # Call LLM with tools
-                        text_response, tool_calls, assistant_message, stop_reason = self.generate_with_tools(
+                        text_response, tool_calls, assistant_message, stop_reason, call_usage = self.generate_with_tools(
                             prompt=current_prompt, # prepared before for-loop or at the end of for-loop
                             tools=current_tools,
                             system_prompt=system_prompt,
@@ -498,6 +488,10 @@ class LLMInterface:
                             temperature=temperature,
                             max_tokens=max_tokens
                         )
+
+                        # Accumulate usage stats for this agent loop
+                        if call_usage:
+                            loop_usage_stats.update(call_usage)
 
                         # Success - break retry loop
                         break
@@ -513,7 +507,7 @@ class LLMInterface:
                                 'conversation': conversation,
                                 'stop_reason': 'rate_limit_error',
                                 'error': f"Rate limit exceeded: {e}",
-                                'usage_stats': self.usage_stats.to_dict()
+                                'usage_stats': loop_usage_stats.to_dict()
                             }
                             # Log agent loop end
                             if self.output_dir:
@@ -524,7 +518,8 @@ class LLMInterface:
                                         final_response=text_response,
                                         iterations=iteration,
                                         stop_reason='rate_limit_error',
-                                        error=f"Rate limit exceeded: {e}"
+                                        error=f"Rate limit exceeded: {e}",
+                                        usage_stats=loop_usage_stats.to_dict()
                                     )
                                 except Exception as log_err:
                                     self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -547,7 +542,7 @@ class LLMInterface:
                                 'conversation': conversation,
                                 'stop_reason': 'timeout_error',
                                 'error': f"Request timed out: {e}",
-                                'usage_stats': self.usage_stats.to_dict()
+                                'usage_stats': loop_usage_stats.to_dict()
                             }
                             # Log agent loop end
                             if self.output_dir:
@@ -558,7 +553,8 @@ class LLMInterface:
                                         final_response=text_response,
                                         iterations=iteration,
                                         stop_reason='timeout_error',
-                                        error=f"Request timed out: {e}"
+                                        error=f"Request timed out: {e}",
+                                        usage_stats=loop_usage_stats.to_dict()
                                     )
                                 except Exception as log_err:
                                     self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -578,7 +574,7 @@ class LLMInterface:
                             'conversation': conversation,
                             'stop_reason': 'llm_error',
                             'error': str(e),
-                            'usage_stats': self.usage_stats.to_dict()
+                            'usage_stats': loop_usage_stats.to_dict()
                         }
                         # Log agent loop end
                         if self.output_dir:
@@ -589,7 +585,8 @@ class LLMInterface:
                                     final_response=text_response,
                                     iterations=iteration,
                                     stop_reason='llm_error',
-                                    error=str(e)
+                                    error=str(e),
+                                    usage_stats=loop_usage_stats.to_dict()
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -605,7 +602,7 @@ class LLMInterface:
                             'conversation': conversation,
                             'stop_reason': 'unexpected_error',
                             'error': str(e),
-                            'usage_stats': self.usage_stats.to_dict()
+                            'usage_stats': loop_usage_stats.to_dict()
                         }
                         # Log agent loop end
                         if self.output_dir:
@@ -616,7 +613,8 @@ class LLMInterface:
                                     final_response=text_response,
                                     iterations=iteration,
                                     stop_reason='unexpected_error',
-                                    error=str(e)
+                                    error=str(e),
+                                    usage_stats=loop_usage_stats.to_dict()
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -645,7 +643,7 @@ class LLMInterface:
                             'iterations': iteration,
                             'conversation': conversation,
                             'stop_reason': stop_reason,
-                            'usage_stats': self.usage_stats.to_dict()
+                            'usage_stats': loop_usage_stats.to_dict()
                         }
                         # Log agent loop end
                         if self.output_dir:
@@ -655,7 +653,8 @@ class LLMInterface:
                                     success=True,
                                     final_response=text_response,
                                     iterations=iteration,
-                                    stop_reason=stop_reason
+                                    stop_reason=stop_reason,
+                                    usage_stats=loop_usage_stats.to_dict()
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -670,7 +669,7 @@ class LLMInterface:
                             'conversation': conversation,
                             'stop_reason': stop_reason,
                             'error': "Response truncated (token limit reached)", # due to output limit or context window limit
-                            'usage_stats': self.usage_stats.to_dict()
+                            'usage_stats': loop_usage_stats.to_dict()
                         }
                         # Log agent loop end
                         if self.output_dir:
@@ -681,7 +680,8 @@ class LLMInterface:
                                     final_response=text_response,
                                     iterations=iteration,
                                     stop_reason=stop_reason,
-                                    error="Response truncated (token limit reached)"
+                                    error="Response truncated (token limit reached)",
+                                    usage_stats=loop_usage_stats.to_dict()
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -695,7 +695,7 @@ class LLMInterface:
                             'iterations': iteration,
                             'conversation': conversation,
                             'stop_reason': stop_reason,
-                            'usage_stats': self.usage_stats.to_dict()
+                            'usage_stats': loop_usage_stats.to_dict()
                         }
                         # Log agent loop end
                         if self.output_dir:
@@ -705,7 +705,8 @@ class LLMInterface:
                                     success=True,
                                     final_response=text_response,
                                     iterations=iteration,
-                                    stop_reason=stop_reason
+                                    stop_reason=stop_reason,
+                                    usage_stats=loop_usage_stats.to_dict()
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -772,7 +773,7 @@ class LLMInterface:
                             'conversation': conversation,
                             'stop_reason': f'finish_tool_{task_completed}',
                             'task_completed': task_completed,
-                            'usage_stats': self.usage_stats.to_dict()
+                            'usage_stats': loop_usage_stats.to_dict()
                         }
 
                         # Add error info if task was not completed
@@ -787,7 +788,8 @@ class LLMInterface:
                                     success=success,
                                     final_response=finish_message,
                                     iterations=iteration,
-                                    stop_reason=f'finish_tool_{task_completed}'
+                                    stop_reason=f'finish_tool_{task_completed}',
+                                    usage_stats=loop_usage_stats.to_dict()
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
@@ -830,7 +832,7 @@ class LLMInterface:
                 'conversation': conversation,
                 'stop_reason': 'max_iterations',
                 'error': f"Max iterations ({max_iterations}) reached without completion",
-                'usage_stats': self.usage_stats.to_dict()
+                'usage_stats': loop_usage_stats.to_dict()
             }
             # Log agent loop end
             if self.output_dir:
@@ -841,19 +843,15 @@ class LLMInterface:
                         final_response=text_response,
                         iterations=max_iterations,
                         stop_reason='max_iterations',
-                        error=f"Max iterations ({max_iterations}) reached without completion"
+                        error=f"Max iterations ({max_iterations}) reached without completion",
+                        usage_stats=loop_usage_stats.to_dict()
                     )
                 except Exception as log_err:
                     self.logger.warning(f"Failed to log agent loop end: {log_err}")
             return result
 
         finally:
-            # Restore and merge stats - accumulate usage from this call into the global stats
-            old_stats.total_tokens += self.usage_stats.total_tokens
-            old_stats.prompt_tokens += self.usage_stats.prompt_tokens
-            old_stats.completion_tokens += self.usage_stats.completion_tokens
-            old_stats.api_calls += self.usage_stats.api_calls
-            self.usage_stats = old_stats
+            pass  # No cleanup needed - usage stats are local to this function
 
     def _default_tool_executor(
         self,
@@ -948,13 +946,14 @@ class LLMInterface:
 
         response = self.client.messages.create(**kwargs)
 
-        # Track usage
+        # Capture this call's usage stats
+        current_call_usage = None
         if hasattr(response, 'usage'):
-            self.usage_stats.update({
+            current_call_usage = {
                 'input_tokens': response.usage.input_tokens,
                 'output_tokens': response.usage.output_tokens,
                 'total_tokens': response.usage.input_tokens + response.usage.output_tokens
-            })
+            }
 
         # Get response text and stop reason
         text_response = response.content[0].text
@@ -973,7 +972,7 @@ class LLMInterface:
                         "assistant_response": text_response,
                         "tool_calls": [],  # No tool calls for simple generation
                         "stop_reason": stop_reason,
-                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                        "usage_stats": current_call_usage
                     }
                 )
             except Exception as e:
@@ -1010,13 +1009,14 @@ class LLMInterface:
 
         response = self.client.chat.completions.create(**kwargs)
 
-        # Track usage
+        # Capture this call's usage stats
+        current_call_usage = None
         if hasattr(response, 'usage') and response.usage:
-            self.usage_stats.update({
+            current_call_usage = {
                 'prompt_tokens': response.usage.prompt_tokens,
                 'completion_tokens': response.usage.completion_tokens,
                 'total_tokens': response.usage.total_tokens
-            })
+            }
 
         # Get response text and stop reason
         text_response = response.choices[0].message.content
@@ -1035,7 +1035,7 @@ class LLMInterface:
                         "assistant_response": text_response,
                         "tool_calls": [],  # No tool calls for simple generation
                         "stop_reason": stop_reason,
-                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                        "usage_stats": current_call_usage
                     }
                 )
             except Exception as e:
@@ -1051,7 +1051,7 @@ class LLMInterface:
         conversation_history: Optional[List[Dict]],
         temperature: float,
         max_tokens: int
-    ) -> Tuple[str, List[Dict], Dict, str]:
+    ) -> Tuple[str, List[Dict], Dict, str, Optional[Dict[str, int]]]:
         """Claude-specific tool calling implementation"""
 
         # Convert tools to Claude's schema
@@ -1085,13 +1085,14 @@ class LLMInterface:
             else:
                 raise LLMError(f"Claude API error: {e}")
 
-        # Track usage
+        # Capture this call's usage stats
+        current_call_usage = None
         if hasattr(response, 'usage'):
-            self.usage_stats.update({
+            current_call_usage = {
                 'input_tokens': response.usage.input_tokens,
                 'output_tokens': response.usage.output_tokens,
                 'total_tokens': response.usage.input_tokens + response.usage.output_tokens
-            })
+            }
 
         # Get stop_reason from response
         stop_reason = response.stop_reason if hasattr(response, 'stop_reason') else "unknown"
@@ -1140,13 +1141,13 @@ class LLMInterface:
                         "assistant_response": text_response,
                         "tool_calls": tool_calls,
                         "stop_reason": stop_reason,
-                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                        "usage_stats": current_call_usage
                     }
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to log LLM interaction: {e}")
 
-        return text_response, tool_calls, assistant_message, stop_reason
+        return text_response, tool_calls, assistant_message, stop_reason, current_call_usage
 
     def _generate_with_tools_openai(
         self,
@@ -1156,7 +1157,7 @@ class LLMInterface:
         conversation_history: Optional[List[Dict]],
         temperature: float,
         max_tokens: int
-    ) -> Tuple[str, List[Dict], Dict, str]:
+    ) -> Tuple[str, List[Dict], Dict, str, Optional[Dict[str, int]]]:
         """OpenAI-specific tool calling implementation"""
 
         # Convert tools to OpenAI's schema
@@ -1200,19 +1201,16 @@ class LLMInterface:
             else:
                 raise LLMError(f"OpenAI API error: {e}")
 
-        # Track usage
+        # Capture this call's usage stats
+        current_call_usage = None
         if hasattr(response, 'usage') and response.usage:
-            self.usage_stats.update({
+            current_call_usage = {
                 'prompt_tokens': response.usage.prompt_tokens,
                 'completion_tokens': response.usage.completion_tokens,
                 'total_tokens': response.usage.total_tokens
-            })
-            # Output response.usage for debugging
-            print(json.dumps({
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }, indent=2))
+            }
+            # LHY: Output response.usage for debugging
+            print(json.dumps(current_call_usage, indent=2))
 
         # Get stop_reason from response (OpenAI calls it finish_reason)
         stop_reason = response.choices[0].finish_reason if response.choices else "unknown"
@@ -1220,6 +1218,7 @@ class LLMInterface:
         # Parse response
         message = response.choices[0].message
         text_response = message.content or ""
+        print(f"LLM raw response content: {len(text_response)} chars.")  # LHY: Debug output
 
         tool_calls = []
         tool_calls_for_api = []
@@ -1260,14 +1259,14 @@ class LLMInterface:
                         "user_prompt": prompt,
                         "assistant_response": text_response,
                         "tool_calls": tool_calls,
-                        "stop_reason": stop_reason, # This is from LLM provider response
-                        "usage_stats": self.usage_stats.to_dict() if hasattr(self, 'usage_stats') else None
+                        "stop_reason": stop_reason,
+                        "usage_stats": current_call_usage
                     }
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to log LLM interaction: {e}")
 
-        return text_response, tool_calls, assistant_message, stop_reason
+        return text_response, tool_calls, assistant_message, stop_reason, current_call_usage
 
     # ==================== Utility Static Methods ====================
 

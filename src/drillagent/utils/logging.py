@@ -223,7 +223,8 @@ def log_agent_loop_end(
     final_response: str,
     iterations: int,
     stop_reason: str,
-    error: Optional[str] = None
+    error: Optional[str] = None,
+    usage_stats: Optional[Dict[str, int]] = None
 ) -> None:
     """
     Log the end of an agent loop.
@@ -235,6 +236,7 @@ def log_agent_loop_end(
         iterations: Number of iterations used
         stop_reason: Why the agent stopped
         error: Optional error message
+        usage_stats: Optional usage statistics for this agent loop
     """
     log_file = Path(output_dir) / "llm_history.json"
 
@@ -251,7 +253,8 @@ def log_agent_loop_end(
         "final_response": final_response,
         "iterations": iterations,
         "stop_reason": stop_reason,
-        "error": error
+        "error": error,
+        "usage_stats": usage_stats
     }
 
     log_data["interactions"].append(agent_loop_entry)

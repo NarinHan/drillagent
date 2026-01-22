@@ -233,7 +233,7 @@ class PathExplorationAgent:
                 max_iterations=self.max_generation_turns, # tunable parameter
                 temperature=0.7,  # Higher temperature for creative test case generation
                 max_tokens=30720,
-                continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information." + \
+                continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information. " + \
                   "If you already generated the file, call `finish` tool to end the process."
             )
 
