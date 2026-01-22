@@ -8,6 +8,7 @@ workspace/
 test_output/
 gt_povs/
 success_povs/
+tmp*
 
 # For debug
 src/drillagent/scripts/lhy_*

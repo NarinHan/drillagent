@@ -71,6 +71,8 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
                 raise ValueError("No build commands found in config")
             # Replace "set -eu" with "set -e" (don't be that strict)
             basic_build_cmds = re.sub(r'set\s+-eu', 'set -e', basic_build_cmds)
+            # Comment out "make install" lines (we don't want to install)
+            basic_build_cmds = re.sub(r'^(\s*)(make install)', r'\1#\2', basic_build_cmds, flags=re.MULTILINE)
             # Replace "cd /src/mruby" with ""
             basic_build_cmds = re.sub(r'cd\s+/src/\S+', '', basic_build_cmds)
 

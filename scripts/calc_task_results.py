@@ -90,6 +90,7 @@ def print_results(results: dict):
     # print(f"Success rate: {len(successful) / total * 100:.1f}%" if total > 0 else "N/A")
     print()
 
+    successful_tasks_str = ""
     if successful:
         print("-" * 80)
         print("SUCCESSFUL TASKS:")
@@ -99,6 +100,7 @@ def print_results(results: dict):
             print(f"  POV file: {task['pov_path']}")
             print(f"  Created:  {task['created_time']}")
             print()
+            successful_tasks_str += f"{task['task_name']},"
 
     # if failed:
     #     print()
@@ -109,10 +111,12 @@ def print_results(results: dict):
     #         print(f"  - {task_name}")
 
     print()
+    print("All successful tasks: " + successful_tasks_str)
     print("=" * 80)
 
 
 def main():
+    # USAGE: python3 scripts/calc_task_results.py [./test_output/output]
     parser = argparse.ArgumentParser(
         description="Calculate task results by checking for successful POV files."
     )

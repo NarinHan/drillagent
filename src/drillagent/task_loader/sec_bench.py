@@ -462,34 +462,19 @@ class RawSecbTaskLoader:
                 res[instance_id] = task
         return res
 
-    def get_overlapping_solved_tasks(self) -> Dict[str, SecbTask]:
-        assert len(self.cve_tasks)==200, "Please load all 200 SEC-bench tasks first."
-        # Get tasks that were successfully solved by both OpenHands and SWEA.
-        overlapping_instances = [
-            "exiv2.cve-2017-17669",
-            "gpac.cve-2023-0819",
-            "gpac.cve-2023-4758",
-            "imagemagick.cve-2017-11539",
-            "imagemagick.cve-2017-12644",
-            "imagemagick.cve-2017-18022",
-            "imagemagick.cve-2018-5246",
-            "imagemagick.cve-2019-13306",
-            "libplist.cve-2017-5545",
-            "libsndfile.cve-2018-19432",
-            "matio.cve-2020-19497",
-            "njs.cve-2022-27007",
-            "openjpeg.cve-2016-7445",
-            "openjpeg.cve-2017-14041",
-        ]
-        # Filter the loaded tasks to only include overlapping instances
-        res = dict()
-        for instance_id, task in self.cve_tasks.items():
-            if self.is_labelled_blacklist(instance_id):
-                continue
-            if instance_id in overlapping_instances:
-                res[instance_id] = task
-        return res
+    def get_overlap_solved_tasks(self) -> Dict[str, SecbTask]:
+        """Get tasks solved by both OpenHands and SWEA (intersection)."""
+        oh_tasks = self.get_openhands_solved_tasks()
+        swea_tasks = self.get_swea_solved_tasks()
+        # Return tasks that exist in both dictionaries
+        return {k: v for k, v in oh_tasks.items() if k in swea_tasks}
 
+    def get_united_solved_tasks(self) -> Dict[str, SecbTask]:
+        """Get tasks solved by either OpenHands or SWEA (union)."""
+        oh_tasks = self.get_openhands_solved_tasks()
+        swea_tasks = self.get_swea_solved_tasks()
+        # Combine both dictionaries (union)
+        return {**oh_tasks, **swea_tasks}
 
     def print_task_summary(self, instance_id: str):
         """

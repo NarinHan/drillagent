@@ -18,6 +18,7 @@ from drillagent.prompts.CrashTriggerAgent_prompt import (
 
 from drillagent.utils.llvm_cov import LLVMCovUtils
 from drillagent.utils.utils import *
+from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
 class CrashTriggerAgent:
     # Responsible for triggering crashes based on analyzed paths
     def __init__(self, drill_agent: 'DrillAgent'):
@@ -31,7 +32,7 @@ class CrashTriggerAgent:
         self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 20 # 15 or 20 or 25
+        self.max_generation_turns = 15 # 15 or 20 or 25
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
@@ -49,6 +50,24 @@ class CrashTriggerAgent:
             self.drill_agent.vulnerability_info.actual_binary_path # Must use actual binary here!
         ))
         self.llvm_cov_utils = LLVMCovUtils(binary_abs_path=binary_abs_path)
+
+    def _accumulate_token_usage(self, result: Dict[str, Any], model_name: str) -> None:
+        usage = result.get("usage_stats") if isinstance(result, dict) else None
+        if not usage:
+            return
+        overall = getattr(self.drill_agent, "overall_token_usage", None)
+        if not overall or "CTA" not in overall:
+            return
+        input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+        output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
+        overall["CTA"].add(input_tokens=input_tokens, output_tokens=output_tokens)
+        price = MODEL_PRICE_PER_MTOK_USD.get(model_name)
+        if price:
+            cost_input = (input_tokens / 1_000_000) * price["input"]
+            cost_output = (output_tokens / 1_000_000) * price["output"]
+            overall["CTA"].add_cost(cost_input_usd=cost_input, cost_output_usd=cost_output)
+        else:
+            self.logger.warning(f"[CrashTriggerAgent] No price config for model: {model_name}")
 
     def run(self) -> None:
         self.logger.info(f"  [CrashTriggerAgent] Starting running. Checking previous path exploration results...  (tools num: {len(self.tools_for_generation)})")
@@ -223,28 +242,31 @@ class CrashTriggerAgent:
         # Substep 2: Use LLMInterface to generate the final PoV
         # Format the user prompt for PoV generation
         user_prompt = CTA_final_pov_generation_prompt.format(
+            loop_progress=f"{self.current_trigger_iteration - 1}/{self.max_trigger_iterations}",
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
-            target_pov_path=abs_pov_path,  # Add target path for LLM to write to
+            current_round_dir=round_dir,
+            target_pov_path=abs_pov_path,  # Target file path for LLM to write into.
+            # Designed context sections
             vulnerability_info=vuln_info_str,   # Including vuln type, call trace, etc.
             root_cause_analysis=root_cause_str, # Markdown format content
             previous_pov_gen_progress=previous_progress # 🤔
         )
 
         # For crash triggering, we also provide ast-grep and coverage tools.
-        self.logger.info("  [CrashTriggerAgent] Using LLMInterface to generate final PoV...")
+        self.logger.info(f"  [CrashTriggerAgent] Using LLMInterface to generate final PoV (max rounds={self.max_generation_turns})...")
         try:
             result = self.drill_agent.basic_llm.run_agent_loop(
-                loop_progress=f"{self.current_trigger_iteration - 1}/{self.max_trigger_iterations}",
                 task=user_prompt,
                 tools=self.tools_for_generation,  # Allow LLM to use tools for exploration, including write_file
                 system_prompt=CTA_system_prompt,
                 max_iterations=self.max_generation_turns,
                 temperature=0.7,  # Higher temperature for creative PoV generation
-                max_tokens=30720,
-                continuation_prompt="Please continue your analysis and craft the final PoV candidate after you get enough information." + \
+                # max_tokens=30720,
+                continuation_prompt="Please continue your analysis and craft the final PoV candidate after you get enough information. " + \
                   "If you already generated the file, call `finish` tool to end the process."
             )
+            self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')

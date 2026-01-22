@@ -209,8 +209,8 @@ class BaseInstrAgent:
             else:
                 self.logger.error(f"✗ Build failed with exit code {result.returncode}")
                 # Log output only when failed.
-                if result.stdout:
-                    self.logger.debug(f"Build stdout:\n{result.stdout}")
+                # if result.stdout:
+                #     self.logger.debug(f"Build stdout:\n{result.stdout}")
                 if result.stderr:
                     log_level = logging.DEBUG if success else logging.ERROR
                     self.logger.log(log_level, f"Build stderr:\n{result.stderr}")

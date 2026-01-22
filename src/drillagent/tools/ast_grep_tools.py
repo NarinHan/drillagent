@@ -391,7 +391,7 @@ class AstGrepFunctionSearchTool(AgentTool):
                 - line: int (start line number)
                 - column: int (start column)
                 - signature: str (function signature)
-                - source_snippet: str (formatted with line numbers, max 500 lines)
+                - source_snippet: str (formatted with line numbers, max N lines)
                 - total_lines: int (actual function length)
             - count: int (number of matches returned, max 3)
             - total_found: int (total number of matches found)
@@ -414,14 +414,14 @@ class AstGrepFunctionSearchTool(AgentTool):
         summary_lines = []
 
         for idx, match in enumerate(matches_to_process, 1):
-            # Format source snippet with line numbers (limit to first 500 lines)
+            # Format source snippet with line numbers
             source_text = match.get("text", "")
             source_lines = source_text.split("\n")
             start_line = match["line"]
 
-            # Limit to first 500 lines for readability
-            truncated = len(source_lines) > 500
-            display_lines = source_lines[:500]
+            # Limit to first 400 lines for readability
+            truncated = len(source_lines) > 400
+            display_lines = source_lines[:400]
 
             # Add line numbers
             numbered_lines = []
