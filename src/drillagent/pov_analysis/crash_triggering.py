@@ -87,10 +87,10 @@ class CrashTriggerAgent:
                 if is_valid:
                     PEA_pov_data = path_agent.crash_input_pov
                     PEA_pov_data['crash_type'] = cur_crash_type
+                    crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
                     if cur_crash_type == self.drill_agent.gt_crash_type:
                         # Save the crash input as final PoV
                         self.logger.info(f"  [CrashTriggerAgent] Valid crash input found from path exploration phase! Crash: {cur_crash_type}")
-                        crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
                         self._record_final_pov(PEA_pov_data, crash_pov_path)
                         return
                     else:
@@ -172,6 +172,7 @@ class CrashTriggerAgent:
 
             except Exception as e:
                 self.logger.error(f"  [CrashTriggerAgent] Error in iteration {iteration}: {e}", exc_info=True)
+                self.logger.info(f"  [CrashTriggerAgent] Continuing to next iteration...")
                 continue
 
         # Summary

@@ -603,7 +603,7 @@ class DrillAgent:
         exit_code, exec_output = execute_command(command, env)
         if detect_sanitizer_triggered(exec_output):
             self.logger.info(f"  [DrillAgent] PoV validation successful: Sanitizer error detected! Exit code: {exit_code}")
-            print(exec_output)
+            self.logger.info(f"  [DrillAgent] Sanitizer output:\n{exec_output}")
             # Crash successfully triggered! Triage the crash type further.
             cur_crash_type = get_sanitizer_crash_type(exec_output)
             return cur_crash_type, True

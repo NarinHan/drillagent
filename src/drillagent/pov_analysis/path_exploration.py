@@ -167,8 +167,8 @@ class PathExplorationAgent:
                 )
 
             except Exception as e:
-                self.logger.error(f"  [PathExplorationAgent] Iteration {iteration} failed with error: {e}")
-                self.logger.warning(f"  [PathExplorationAgent] Continuing to next iteration...")
+                self.logger.error(f"  [PathExplorationAgent] Iteration {iteration} failed with error: {e}", exc_info=True)
+                self.logger.info(f"  [PathExplorationAgent] Continuing to next iteration...")
                 if self.llvm_cov_utils:
                     self.llvm_cov_utils.clear_data()
                 continue # If we meet any error during generation and coverage analysis, just continue to next iteration.

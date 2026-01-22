@@ -307,13 +307,27 @@ def setup_drillagent_logger(
     # Also ensure output_dir exists for other files
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Configure root logger to INFO to avoid debug spam from third-party libs
+    # Clear existing handlers from root logger to ensure proper isolation
+    # between multiple DrillAgent instances. Without this, logging.basicConfig()
+    # would silently ignore subsequent calls since handlers already exist.
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        handler.close()
+        root_logger.removeHandler(handler)
+
+    # Clear existing handlers from DrillAgent logger as well
+    drill_logger = logging.getLogger("DrillAgent")
+    for handler in drill_logger.handlers[:]:
+        handler.close()
+        drill_logger.removeHandler(handler)
+
+    # Configure root logger with fresh handlers
     logging.basicConfig(
-        level=logging.DEBUG,  # for root logger
+        level=logging.DEBUG,
         format='[%(asctime)s] %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(str(log_path), mode='w')  # Use 'w' mode to overwrite
+            logging.FileHandler(str(log_path), mode='w')
         ]
     )
 
