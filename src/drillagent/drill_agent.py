@@ -236,7 +236,7 @@ class DrillAgent:
                 res = self._phase_code_instrumentation()
                 time_overhead["phase_code_instrumentation"] = time.time() - start_time
                 if not res:
-                    self.logger.error("Instrumentation phase failed, cannot proceed further.")
+                    self.logger.error("Instrumentation phase failed, cannot proceed without P_san and P_cov.")
                     self._save_time_overhead(time_overhead)
                     self._save_tokens_overhead()
                     return self.generate_report()
@@ -421,7 +421,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed sanitizer instrumentation: {result_san.get('error')}")
                 self.errors.append(f"Sanitizer instrumentation failed: {result_san.get('error')}")
-                exit(1) # For debug
+                # exit(1) # For debug
                 return False
             
             # After the compilation, verify if the sanitizer-instrumented actual binary is qualified.
@@ -432,7 +432,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"  Failed to create qualified sanitizer-instrumented binary at expected path: \n{saninstr_repo_path}/{actual_bin_rel_path}")
                 self.errors.append(f"Sanitizer instrumentation failed: Qualified binary not found after build.")
-                exit(1) # For debug
+                # exit(1) # For debug
                 return False
 
         # Substep 3: Build source code with coverage instrumentation
@@ -447,7 +447,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"    Failed coverage instrumentation: {result.get('error')}")
                 self.errors.append(f"Coverage instrumentation failed: {result.get('error')}")
-                exit(2) # For debug
+                # exit(2) # For debug
                 return False
             
             # After the compilation, verify if the coverage-instrumented binary is qualified.
@@ -458,7 +458,7 @@ class DrillAgent:
             else:
                 self.logger.error(f"  Failed to create qualified coverage-instrumented binary at expected path: \n{target_repo_path}/{actual_bin_rel_path}")
                 self.errors.append(f"Coverage instrumentation failed: Qualified binary not found after build.")
-                exit(2) # For debug
+                # exit(2) # For debug
                 return False
         
         self.logger.info("✓ Instrumentation phase completed")

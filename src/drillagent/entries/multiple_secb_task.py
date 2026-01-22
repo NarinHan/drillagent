@@ -178,6 +178,11 @@ Examples:
         '--instance-ids',
         help='Comma-separated list of instance IDs to run'
     )
+    task_group.add_argument(
+        '--solved-tasks',
+        action='store_true',
+        help='Run the union of get_openhands_solved_tasks and get_swea_solved_tasks'
+    )
 
     # Repository location (mutually exclusive)
     repo_group = parser.add_mutually_exclusive_group(required=True)
@@ -276,6 +281,12 @@ Examples:
         '--disable-crash-analysis',
         action='store_true',
         help='Skip Phase 4 (crash trigger analysis)'
+    )
+
+    # Task filtering
+    parser.add_argument(
+        '--skip-instance-ids',
+        help='Comma-separated list of instance IDs to skip (applied after task selection)'
     )
 
     # Other options
@@ -491,14 +502,13 @@ def main():
         )
         loader.load_cve_tasks()
         tasks = loader.get_tasks_by_project(args.project_name)
-
         if not tasks:
             print(f"✗ Error: No tasks found for project '{args.project_name}'")
             sys.exit(1)
 
         print(f"✓ Found {len(tasks)} tasks for project '{args.project_name}'")
 
-    else:
+    elif args.instance_ids:
         # Load specific instance IDs
         instance_ids = [id.strip() for id in args.instance_ids.split(',')]
         loader = RawSecbTaskLoader(
@@ -514,12 +524,36 @@ def main():
                 print(f"✗ Warning: Task '{instance_id}' not found in dataset")
             else:
                 tasks.append(task)
-
         if not tasks:
             print(f"✗ Error: None of the specified tasks were found")
             sys.exit(1)
 
         print(f"✓ Found {len(tasks)} out of {len(instance_ids)} requested tasks")
+    elif args.solved_tasks:
+        # Load union of OpenHands-solved and SWEA-solved tasks
+        loader = RawSecbTaskLoader(dataset_path=args.dataset_path)
+        loader.load_cve_tasks()
+        tasks = list(loader.get_united_solved_tasks().values())
+        if not tasks:
+            print("✗ Error: No solved tasks found")
+            sys.exit(1)
+
+        print(f"✓ Found {len(tasks)} solved tasks (OpenHands ∪ SWEA)")
+    else:
+        print("✗ Error: No task selection provided")
+        sys.exit(1)
+
+    # Filter out skipped tasks
+    if args.skip_instance_ids:
+        skip_ids = set(id.strip() for id in args.skip_instance_ids.split(','))
+        original_count = len(tasks)
+        tasks = [t for t in tasks if t.instance_id not in skip_ids]
+        skipped_count = original_count - len(tasks)
+        if skipped_count > 0:
+            print(f"✓ Skipped {skipped_count} tasks via --skip-instance-ids")
+        if not tasks:
+            print("✗ Error: All tasks were skipped")
+            sys.exit(1)
 
     # Print task list
     print("\nTasks to run:")

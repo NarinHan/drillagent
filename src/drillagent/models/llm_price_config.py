@@ -16,6 +16,11 @@ MODEL_PRICE_PER_MTOK_USD = {
 
     # OpenAI GPT-5 series
     "gpt-5.2-codex": {"input": 1.75, "output": 14.0},
+    "gpt-5.2-2025-12-11": {"input": 1.75, "output": 14.0},
     "gpt-5.1-2025-11-13": {"input": 1.25, "output": 10.0},
     "gpt-5-mini-2025-08-07": {"input": 0.25, "output": 2.0},
+
+    # OpenAI GPT-4 series
+    "gpt-4.1": {"input": 2.0, "output": 8.0},
+    "gpt-4o": {"input": 2.5, "output": 10.0},
 }

@@ -242,6 +242,7 @@ class CrashTriggerAgent:
         # Substep 2: Use LLMInterface to generate the final PoV
         # Format the user prompt for PoV generation
         user_prompt = CTA_final_pov_generation_prompt.format(
+            loop_progress=f"{self.current_trigger_iteration - 1}/{self.max_trigger_iterations}",
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
             current_round_dir=round_dir,
@@ -256,7 +257,6 @@ class CrashTriggerAgent:
         self.logger.info(f"  [CrashTriggerAgent] Using LLMInterface to generate final PoV (max rounds={self.max_generation_turns})...")
         try:
             result = self.drill_agent.basic_llm.run_agent_loop(
-                loop_progress=f"{self.current_trigger_iteration - 1}/{self.max_trigger_iterations}",
                 task=user_prompt,
                 tools=self.tools_for_generation,  # Allow LLM to use tools for exploration, including write_file
                 system_prompt=CTA_system_prompt,
