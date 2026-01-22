@@ -16,6 +16,7 @@ from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_critical_step_identification_prompt
 )
 from drillagent.models.llm_interface import LLMInterface
+from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
 
 if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
@@ -35,6 +36,24 @@ class VulnAnalysisAgent:
 
         # Vulnerability information container!!!!! 
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
+
+    def _accumulate_token_usage(self, result: Dict[str, Any], model_name: str) -> None:
+        usage = result.get("usage_stats") if isinstance(result, dict) else None
+        if not usage:
+            return
+        overall = getattr(self.drill_agent, "overall_token_usage", None)
+        if not overall or "VAA" not in overall:
+            return
+        input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+        output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
+        overall["VAA"].add(input_tokens=input_tokens, output_tokens=output_tokens)
+        price = MODEL_PRICE_PER_MTOK_USD.get(model_name)
+        if price:
+            cost_input = (input_tokens / 1_000_000) * price["input"]
+            cost_output = (output_tokens / 1_000_000) * price["output"]
+            overall["VAA"].add_cost(cost_input_usd=cost_input, cost_output_usd=cost_output)
+        else:
+            self.logger.warning(f"[VulnAnalysisAgent] No price config for model: {model_name}")
 
     def load_from_cache(self) -> bool:
         # Load vulnerability analysis results from cache if available.
@@ -226,6 +245,7 @@ class VulnAnalysisAgent:
                 max_tokens=8192,
                 continuation_prompt="Please continue extracting the vulnerability information and provide the final JSON output."
             )
+            self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
@@ -297,6 +317,7 @@ class VulnAnalysisAgent:
                 max_tokens=4096,
                 continuation_prompt="Please continue transforming the call trace and provide the final JSON output."
             )
+            self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
@@ -383,6 +404,7 @@ class VulnAnalysisAgent:
                             max_tokens=4096,
                             continuation_prompt="Please continue verifying the line number using the tools and provide the final JSON output."
                         )
+                        self._accumulate_token_usage(result, self.drill_agent.low_cost_llm.model_name)
 
                         if result['success']:
                             refined_frame = LLMInterface.extract_json_from_response(result['final_response'])
@@ -493,6 +515,7 @@ class VulnAnalysisAgent:
                 max_tokens=4096,
                 continuation_prompt="Please continue exploring the repository and provide the final JSON output with the refined harness command."
             )
+            self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
@@ -571,6 +594,7 @@ class VulnAnalysisAgent:
                 max_tokens=30720, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."
             )
+            self._accumulate_token_usage(result, self.drill_agent.reasoning_llm.model_name)
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
@@ -624,6 +648,7 @@ class VulnAnalysisAgent:
             max_tokens=4096,
             continuation_prompt="Please continue analyzing the script and provide the final JSON output with the actual binary path."
         )
+        self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
         if not result['success']:
             error_msg = result.get('error', 'Unknown error')
@@ -922,4 +947,3 @@ class VulnInfo:
         elif raw_text and len(raw_text) > 0:
             return raw_text
         return "N/A"
-

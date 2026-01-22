@@ -69,14 +69,13 @@ class DrillAgent:
         self.crash_inputs = [] # Real PoV inputs that trigger the vulnerability
         self.gt_crash_type = get_sanitizer_crash_type(self.config.sanitizer_report) if self.config.sanitizer_report else "" # Expected crash answer
 
-        ## Initialize logger and components
+        # Initialize logger and components
         self.logger = setup_drillagent_logger(
             output_dir=self.output_dir,
             target_repo_path=self.config.target_repo_path,
             cve_id=self.config.cve_id,
             verbose=self.config.verbose
         )
-
         # Initialize LLM history log (clear any previous content)
         try:
             init_llm_history_log(self.output_dir)
@@ -85,6 +84,14 @@ class DrillAgent:
             self.logger.warning(f"Failed to initialize LLM history log: {e}")
 
         self._init_components()
+
+        # Prepare token usage tracking
+        self.overall_token_usage = {
+            "VAA" : TokenUsage(),
+            # "InstrAgent" : TokenUsage(), # skipped for now
+            "PEA" : TokenUsage(),
+            "CTA" : TokenUsage()
+        }
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
         self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
@@ -221,6 +228,7 @@ class DrillAgent:
                 start_time = time.time()
                 self._phase_vulnerability_analysis()
                 time_overhead["phase_vulnerability_analysis"] = time.time() - start_time
+                self._log_phase_token_usage("VAA", "Vulnerability Analysis")
 
             # Phase 2: Code Instrumentation
             if not self.skip_code_instrumentation:
@@ -230,6 +238,7 @@ class DrillAgent:
                 if not res:
                     self.logger.error("Instrumentation phase failed, cannot proceed further.")
                     self._save_time_overhead(time_overhead)
+                    self._save_tokens_overhead()
                     return self.generate_report()
 
             # Phase 3: Path Exploration with the coverage feedback
@@ -237,22 +246,26 @@ class DrillAgent:
                 start_time = time.time()
                 self._phase_path_exploration()
                 time_overhead["phase_path_exploration"] = time.time() - start_time
+                self._log_phase_token_usage("PEA", "Path Exploration")
 
             # Phase 4: PoV Generation and Verification
             if not self.skip_crash_triggering:
                 start_time = time.time()
                 self._phase_crash_triggering()
                 time_overhead["phase_crash_triggering"] = time.time() - start_time
+                self._log_phase_token_usage("CTA", "Crash Triggering")
 
             # Mark as completed
             self.phase = "completed"
             self._save_time_overhead(time_overhead)
+            self._save_tokens_overhead()
             return self.generate_report()
 
         except Exception as e:
             self.logger.error(f"Fatal error in DrillAgent workflow: {e}", exc_info=True)
             self.errors.append(str(e))
             self._save_time_overhead(time_overhead)
+            self._save_tokens_overhead()
             return self.generate_report()
 
     def _save_time_overhead(self, time_overhead: Dict[str, float]) -> None:
@@ -264,6 +277,36 @@ class DrillAgent:
             self.logger.info(f"Time overhead saved to {time_overhead_path}")
         except Exception as e:
             self.logger.warning(f"Failed to save time overhead: {e}")
+
+    def _save_tokens_overhead(self) -> None:
+        """Save token usage for each phase to a JSON file."""
+        tokens_overhead_path = os.path.join(self.output_dir, "tokens_overhead.json")
+        try:
+            tokens_overhead = {}
+            for phase_name, usage in self.overall_token_usage.items():
+                tokens_overhead[phase_name] = {
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "total_tokens": usage.total_tokens,
+                    "cost_input_usd": usage.cost_input_usd,
+                    "cost_output_usd": usage.cost_output_usd,
+                    "cost_total_usd": usage.cost_total_usd
+                }
+            with open(tokens_overhead_path, 'w') as f:
+                json.dump(tokens_overhead, f, indent=2)
+            self.logger.info(f"Token usage saved to {tokens_overhead_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save tokens overhead: {e}")
+
+    def _log_phase_token_usage(self, phase_key: str, phase_label: str) -> None:
+        usage = self.overall_token_usage.get(phase_key)
+        if not usage:
+            return
+        self.logger.info(
+            f"[{phase_label}] Tokens used: input={usage.input_tokens}, "
+            f"output={usage.output_tokens}, total={usage.total_tokens}, "
+            f"cost=${usage.cost_total_usd:.6f}"
+        )
 
     def _phase_vulnerability_analysis(self):
         """Phase 1: Analyze vulnerability using LLM"""
@@ -606,6 +649,29 @@ class DrillAgent:
         return report
 
 
+@dataclass
+class TokenUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_input_usd: float = 0.0
+    cost_output_usd: float = 0.0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cost_total_usd(self) -> float:
+        return self.cost_input_usd + self.cost_output_usd
+
+    def add(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+
+    def add_cost(self, cost_input_usd: float = 0.0, cost_output_usd: float = 0.0) -> None:
+        self.cost_input_usd += cost_input_usd
+        self.cost_output_usd += cost_output_usd
+
 # # Not use it currently, but kept for reference.
 # @dataclass
 # class AnalysisState:
@@ -613,4 +679,3 @@ class DrillAgent:
 #     phase: str = "initialized"  # initialized, instrumented, analyzing, exploring, completed
 #     crash_inputs: List[str] = field(default_factory=list)
 #     pov_candidates: List[Dict] = field(default_factory=list)
-

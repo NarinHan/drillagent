@@ -89,6 +89,7 @@ class UsageStats:
 
         self.api_calls += 1
         self.total_tokens += usage_data.get('total_tokens', 0)
+        # Here we handle both OpenAI and Claude naming conventions
         self.prompt_tokens += usage_data.get('input_tokens', 0) or usage_data.get('prompt_tokens', 0)
         self.completion_tokens += usage_data.get('output_tokens', 0) or usage_data.get('completion_tokens', 0)
 
@@ -467,8 +468,11 @@ class LLMInterface:
             # Define tools allowed in the final iteration (for file generation and completion)
             final_iteration_allowed_tools = {'write_file', 'execute_bash', 'finish'}
 
+            # 
             # This for loop has more than 300 lines...
+            # 
             for iteration in range(1, max_iterations + 1): # 1 ~ max_iterations
+                self.logger.info(f"run_agent_loop: {iteration}/{max_iterations}...")
                 # Determine tools availability based on iteration
                 # On the last iteration, only allow write_file, execute_bash, and finish tools
                 if iteration == max_iterations:
@@ -480,7 +484,9 @@ class LLMInterface:
                 retry_count = 0
                 while retry_count <= max_retries:
                     try:
+                        # 
                         # Call LLM with tools
+                        # 
                         text_response, tool_calls, assistant_message, stop_reason, call_usage = self.generate_with_tools(
                             prompt=current_prompt, # prepared before for-loop or at the end of for-loop
                             tools=current_tools,
@@ -1223,7 +1229,7 @@ class LLMInterface:
                 'total_tokens': response.usage.total_tokens
             }
             # LHY: Output response.usage for debugging
-            print(json.dumps(current_call_usage, indent=2))
+            print(f"From OpenAI response:" + json.dumps(current_call_usage))
 
         # Get stop_reason from response (OpenAI calls it finish_reason)
         stop_reason = response.choices[0].finish_reason if response.choices else "unknown"

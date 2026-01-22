@@ -17,6 +17,7 @@ from drillagent.prompts.PathExplorationAgent_prompt import (
 )
 from drillagent.utils.llvm_cov import LLVMCovUtils
 from drillagent.utils.utils import *
+from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
 
 # 
 # Currently we assume that the PathExplorationAgent **has** usable call trace. (LHY)
@@ -57,6 +58,24 @@ class PathExplorationAgent:
 
         # Mapping from iteration number to testcase path (similar to CrashTriggerAgent.generated_candidates)
         self.generated_testcases = {}     # {iteration_num: testcase_path}
+
+    def _accumulate_token_usage(self, result: Dict[str, Any], model_name: str) -> None:
+        usage = result.get("usage_stats") if isinstance(result, dict) else None
+        if not usage:
+            return
+        overall = getattr(self.drill_agent, "overall_token_usage", None)
+        if not overall or "PEA" not in overall:
+            return
+        input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+        output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
+        overall["PEA"].add(input_tokens=input_tokens, output_tokens=output_tokens)
+        price = MODEL_PRICE_PER_MTOK_USD.get(model_name)
+        if price:
+            cost_input = (input_tokens / 1_000_000) * price["input"]
+            cost_output = (output_tokens / 1_000_000) * price["output"]
+            overall["PEA"].add_cost(cost_input_usd=cost_input, cost_output_usd=cost_output)
+        else:
+            self.logger.warning(f"[PathExplorationAgent] No price config for model: {model_name}")
 
     def run(self) -> None:
         # Run the path exploration process to generate test cases that can reach the vulnerable function.
@@ -237,6 +256,7 @@ class PathExplorationAgent:
                 continuation_prompt="Please continue exploring the repository and craft the final test case after you get enough information. " + \
                   "If you already generated the file, call `finish` tool to end the process."
             )
+            self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
