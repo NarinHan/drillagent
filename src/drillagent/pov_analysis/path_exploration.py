@@ -239,7 +239,7 @@ class PathExplorationAgent:
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
-                self.logger.warning(f"  [PathExplorationAgent] LLM agent loop did not complete successfully: {error_msg}")
+                self.logger.warning(f"  [PathExplorationAgent] LLM agent loop did not complete: {error_msg}")
                 # Don't raise error here - continue to Step 3 to check if the file was still generated
 
             self.logger.info(f"  [PathExplorationAgent] LLM completed in {result.get('iterations', 'N/A')} iteration(s)")
