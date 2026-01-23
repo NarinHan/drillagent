@@ -112,11 +112,12 @@ class CrashTriggerAgent:
                 self.useful_testcase_paths.extend(list(reversed(path_agent.history_testcases))[:remaining])
             # Ensure we have at most 3 testcases
             self.useful_testcase_paths = self.useful_testcase_paths[:3]
-            assert len(self.useful_testcase_paths) > 0, "No useful test cases found from path exploration!"
+            if len(self.useful_testcase_paths) == 0:
+                raise RuntimeError("No useful test cases found from path exploration!")
 
         # Main loop for crash triggering attempts.
         for iteration in range(1, self.max_trigger_iterations + 1):
-            print("\n" + "=" * 80)
+            self.logger.debug("\n" + "=" * 60)
             self.logger.info(f"  [CrashTriggerAgent] Iteration {iteration}/{self.max_trigger_iterations}")
             self.current_trigger_iteration = iteration
 
@@ -276,9 +277,9 @@ class CrashTriggerAgent:
 
             self.logger.info(f"  [CrashTriggerAgent] LLM completed in {result.get('iterations', 'N/A')} iteration(s)")
             self.logger.info(f"  [CrashTriggerAgent] Stop reason: {result.get('stop_reason', 'N/A')}")
-            response = result.get('final_response', '')
-            if response:
-                self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
+            # response = result.get('final_response', '')
+            # if response:
+            #     self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
             # Show the current round directory contents.
             _, output = list_directory(round_dir)
             self.logger.debug(f"  [CrashTriggerAgent] ls -lh {round_dir}:\n{output}")
@@ -373,7 +374,8 @@ class CrashTriggerAgent:
         Returns:
             The path where the final PoV is saved
         """
-        assert pov_path is not None, f"Crash input PoV path ({pov_path}) not found!"
+        if pov_path is None:
+            raise ValueError(f"Crash input PoV path ({pov_path}) not found!")
         # Generate timestamp and filename for the final PoV
         timestamp = datetime.now().strftime("%y%m%d-%H%M")
         final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"
@@ -394,7 +396,8 @@ class CrashTriggerAgent:
         """
         Record and save the PoV with unexpected sanitizer crash to the output directory.
         """
-        assert pov_path is not None, f"Crash input PoV path ({pov_path}) not found!"
+        if pov_path is None:
+            raise ValueError(f"Crash input PoV path ({pov_path}) not found!")
         # Generate timestamp and filename for the final PoV
         timestamp = datetime.now().strftime("%y%m%d-%H%M")
         cur_pov_filename = f"variant-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"

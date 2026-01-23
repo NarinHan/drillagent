@@ -178,7 +178,8 @@ class PathExplorationAgent:
         if not self.crash_input_pov:
             self.logger.info(f"  [PathExplorationAgent] Although no crash-triggering PoV generated during path exploration, we get closer ^^")
             usable_testcases = max(len(self.history_testcases), len(self.vfunc_reached_testcases))
-            assert usable_testcases >= 3, "Failed to obtain enough useful test cases during path exploration!"
+            if usable_testcases < 3:
+                raise RuntimeError("Failed to obtain enough useful test cases during path exploration!")
         else:
             self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV successfully generated during path exploration!")
 
@@ -360,9 +361,10 @@ class PathExplorationAgent:
     def _collect_coverage_feedback(self) -> Tuple[str, List[Dict]]: # No LLM needed
         # Collect function-level coverage feedback along the vulnerable crash backtrace.
         # Update: Now we only return two items.
-        print("")
+        self.logger.debug("")
         self.logger.info(f"  [PathExplorationAgent] Step3: Collecting coverage feedback...")
-        assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!" # Should never happen
+        if self.llvm_cov_utils is None:
+            raise RuntimeError("LLVMCovUtils not initialized before collecting coverage!")
 
         # Substep 1: Use `llvm-cov report` to get overall coverage summary. 
         # This is helpful for examining if we have usable coverage data at all.
@@ -428,7 +430,6 @@ class PathExplorationAgent:
 
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
         sorted_cov_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
-        # print(repr(sorted_cov_frames)) # For debug
 
         return cov_report, sorted_cov_frames
 
@@ -490,9 +491,9 @@ class PathExplorationAgent:
         with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
             f.write(formatted_cov_info)
             f.write(f"Overall Coverage Report:\n{cov_report}") # For debug
-        
-        print(formatted_cov_info)
-        print(f"Overall Coverage Report:\n{cov_report}") # For debug
+
+        self.logger.debug(f"\n{formatted_cov_info}")
+        self.logger.debug(f"Overall Coverage Report:\n{cov_report}")
         return formatted_cov_info
 
 
@@ -568,42 +569,46 @@ class PathExplorationAgent:
             self.logger.info(f"  [PathExplorationAgent] Iteration: {self.current_exp_iteration}")
             self.logger.info(f"  [PathExplorationAgent] Content size: {len(crash_input_content)} bytes")
 
-            # Print crash information to console for visibility
-            print("\n")
-            print("=" * 80)
-            print("CRASH INPUT POV DISCOVERED")
-            print("=" * 80)
-            print(f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!")
-            print(f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}")
-            print(f"Exit Code:       {exit_code}")
-            print(f"Test Case Path:  {test_case_path}")
-            print(f"Content Size:    {len(crash_input_content)} bytes")
-            print(f"\n--- Test Case Content (hex) ---")
-            # Print hex representation for binary data
+            # Log crash information for visibility
+            crash_info_lines = [
+                "",
+                "=" * 80,
+                "CRASH INPUT POV DISCOVERED",
+                "=" * 80,
+                f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!",
+                f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}",
+                f"Exit Code:       {exit_code}",
+                f"Test Case Path:  {test_case_path}",
+                f"Content Size:    {len(crash_input_content)} bytes",
+                "",
+                "--- Test Case Content (hex) ---"
+            ]
+            # Add hex representation for binary data
             hex_str = crash_input_content.hex()
-            for i in range(0, min(len(hex_str), 512), 64):  # Print first 256 bytes in hex
-                print(hex_str[i:i+64])
+            for i in range(0, min(len(hex_str), 512), 64):  # First 256 bytes in hex
+                crash_info_lines.append(hex_str[i:i+64])
             if len(hex_str) > 512:
-                print(f"... ({len(crash_input_content) - 256} more bytes)")
+                crash_info_lines.append(f"... ({len(crash_input_content) - 256} more bytes)")
 
-            # Try to print as text if it's printable
+            # Try to add text if it's printable
             try:
                 text_content = crash_input_content.decode('utf-8', errors='replace')
                 if text_content.isprintable() or '\n' in text_content:
-                    print(f"\n--- Test Case Content (text) ---")
-                    print(text_content)  # Print all!
-                    # print(text_content[:500])  # Print first 500 chars
-                    # if len(text_content) > 500:
-                    #     print(f"... ({len(text_content) - 500} more chars)")
+                    crash_info_lines.append("")
+                    crash_info_lines.append("--- Test Case Content (text) ---")
+                    crash_info_lines.append(text_content)
             except:
                 pass
 
-            print(f"\n--- Execution Output ---")
-            print(exec_output[:1000])  # Print first 1000 chars of output
+            crash_info_lines.append("")
+            crash_info_lines.append("--- Execution Output ---")
+            crash_info_lines.append(exec_output[:1000])
             if len(exec_output) > 1000:
-                print(f"... ({len(exec_output) - 1000} more chars)")
-            print("=" * 80)
-            print("\n")
+                crash_info_lines.append(f"... ({len(exec_output) - 1000} more chars)")
+            crash_info_lines.append("=" * 80)
+            crash_info_lines.append("")
+
+            self.logger.debug("\n".join(crash_info_lines))
 
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to read crash input: {e}")

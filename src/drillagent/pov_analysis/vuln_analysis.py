@@ -229,7 +229,6 @@ class VulnAnalysisAgent:
         # LLM: Using new LLMInterface with automatic agent loop
         try:
             # Use LLMInterface for automatic tool calling and conversation management
-            assert hasattr(self.drill_agent, 'basic_llm') and self.drill_agent.basic_llm is not None, "DrillAgent.basic_llm (LLMInterface) is not available!"
             self.logger.info("  [VulnAnalysisAgent] Using LLMInterface to extract sanitizer report...")
 
             result = self.drill_agent.basic_llm.run_agent_loop(
@@ -255,7 +254,7 @@ class VulnAnalysisAgent:
             response = result['final_response']
             self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
             self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
-            self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
+            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
 
             # Extract JSON from response
             extracted_info = LLMInterface.extract_json_from_response(response)
@@ -327,7 +326,7 @@ class VulnAnalysisAgent:
             response = result['final_response']
             self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
             self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
-            self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
+            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
 
             parsed_data = LLMInterface.extract_json_from_response(response)
             if not parsed_data or 'call_trace' not in parsed_data:
@@ -338,7 +337,7 @@ class VulnAnalysisAgent:
             validated_trace = []
             for entry in parsed_trace:
                 if entry.get('is_external', False):
-                    self.logger.debug(f"    ✗ Skipping external frame #{entry.get('sequence_num')}: {entry.get('function_name')} @ {entry.get('file_path')}")
+                    self.logger.debug(f"    ~ Skipping external frame #{entry.get('sequence_num')}: {entry.get('function_name')} @ {entry.get('file_path')}")
                     continue
 
                 if not entry.get('file_path'):
@@ -360,7 +359,7 @@ class VulnAnalysisAgent:
 
             # Print trace before line number adjustment (for debug)
             validated_tmp_trace = '\n'.join(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}" for e in validated_trace)
-            print(f"{trace_type.capitalize()} trace before line number adjustment:\n{validated_tmp_trace}\n")
+            self.logger.debug(f"{trace_type.capitalize()} trace before line number adjustment:\n{validated_tmp_trace}")
 
             # Substep 3: Refine line numbers using LLM with tools (from `validated_trace`) (frame-by-frame approach)
             # TODO: Only perform line number refinement for crash trace (maybe with a cache method, it is faster to do this)
@@ -430,11 +429,11 @@ class VulnAnalysisAgent:
                     self.logger.error(f"  [VulnAnalysisAgent] Failed to refine line numbers: {e}", exc_info=True)
                     self.logger.warning(f"  [VulnAnalysisAgent] Using original line numbers")
 
-                # Print trace after line number adjustment (for debug)
-                print(f"Crash trace after line number adjustment:")
-                for e in validated_trace:
-                    print(f"#{e.get('sequence_num', 'N/A')}: {e.get('function_name', 'N/A')} @ {e.get('file_path', 'N/A')}:{e.get('line_number', 'N/A')}")
-                print("")
+                # Log trace after line number adjustment (for debug)
+                trace_lines = ["Crash trace after line number adjustment:"]
+                for entry in validated_trace:
+                    trace_lines.append(f"#{entry.get('sequence_num', 'N/A')}: {entry.get('function_name', 'N/A')} @ {entry.get('file_path', 'N/A')}:{entry.get('line_number', 'N/A')}")
+                self.logger.debug("\n".join(trace_lines))
             else:
                 self.logger.info(f"  [VulnAnalysisAgent] Skipping line number refinement for {trace_type} trace")
 

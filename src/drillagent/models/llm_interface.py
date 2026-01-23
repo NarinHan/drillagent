@@ -1229,7 +1229,7 @@ class LLMInterface:
                 'total_tokens': response.usage.total_tokens
             }
             # LHY: Output response.usage for debugging
-            print(f"From OpenAI response:" + json.dumps(current_call_usage))
+            self.logger.debug(f"From OpenAI response: " + json.dumps(current_call_usage))
 
         # Get stop_reason from response (OpenAI calls it finish_reason)
         stop_reason = response.choices[0].finish_reason if response.choices else "unknown"
@@ -1237,7 +1237,7 @@ class LLMInterface:
         # Parse response
         message = response.choices[0].message
         text_response = message.content or ""
-        print(f"LLM raw response content: {len(text_response)} chars.")  # LHY: Debug output
+        # print(f"LLM raw response content: {len(text_response)} chars.")  # LHY: Debug output
 
         tool_calls = []
         tool_calls_for_api = []
@@ -1256,9 +1256,11 @@ class LLMInterface:
                         "arguments": tool_call.function.arguments
                     }
                 })
-        print(f"LLM tool calls: {len(tool_calls)}")  # LHY: Debug output
+
+        tool_call_details = ""
         for tc in tool_calls:
-            print(f"  {tc['name']} with args {tc['arguments']}")  # LHY: Debug output
+            tool_call_details += f"  {tc['name']} with args {tc['arguments']}\n"
+        self.logger.debug(f"LLM raw response content: {len(text_response)} chars. LLM tool calls: {len(tool_calls)}\n{tool_call_details}\n") # LHY: Debug output
 
         # Build complete assistant message in OpenAI's official format
         assistant_message = {

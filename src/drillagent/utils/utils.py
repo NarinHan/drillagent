@@ -180,8 +180,8 @@ def checkout_gitrepo_commit(actual_repo_path: str, base_commit: str):
         check=True
     )
     # print("✓ Successfully updated git submodules")
-    if result.stdout:
-        print(f"Submodule output: {result.stdout.strip()}")
+    # if result.stdout:
+    #     print(f"Submodule output: {result.stdout.strip()}")
 
 def clean_gitrepo(actual_repo_path: str):
     # Clean build artifacts (make clean or equivalent)

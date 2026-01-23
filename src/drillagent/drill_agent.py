@@ -203,7 +203,6 @@ class DrillAgent:
     def run(self) -> Dict[str, Any]:
         # Main orchestration workflow
         # Returns: Dict containing analysis results and generated PoVs
-        # print("")
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
@@ -343,7 +342,7 @@ class DrillAgent:
 
             # Print the formatted vulnerability analysis results
             vuln_info_str = self.vulnerability_info.format_output()
-            print(vuln_info_str)
+            self.logger.info("Vulnerability Analysis Returns:\n" + vuln_info_str)
             self.logger.info("✓ Vulnerability analysis completed")
 
         except Exception as e:
