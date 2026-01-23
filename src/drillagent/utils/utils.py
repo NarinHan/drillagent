@@ -305,6 +305,12 @@ def detect_sanitizer_triggered(exec_output: str) -> bool:
         "ThreadSanitizer",
         "LeakSanitizer",
         "sanitizer: error",
+        "stack smashing detected",
+        "stack-buffer-underflow",
+        "stack-overflow",
+        "use-of-uninitialized-value",
+        "global-buffer-overflow",
+        "negative-size-param"
         # ...
     ]
     for indicator in sanitizer_indicators:
@@ -312,6 +318,7 @@ def detect_sanitizer_triggered(exec_output: str) -> bool:
             return True
     return False
 
+# The strings of `detect_sanitizer_triggered` and `get_sanitizer_crash_type` should be updated synchronously!!
 def get_sanitizer_crash_type(exec_output: str) -> str:
     # The returned type string is used for more detailed PoV validation comparison.
     # Five big class
@@ -319,7 +326,7 @@ def get_sanitizer_crash_type(exec_output: str) -> str:
         return "heap-buffer-overflow"
     elif "heap-use-after-free" in exec_output:
         return "heap-use-after-free"
-    elif "stack-buffer-overflow" in exec_output or "stack-buffer-underflow" in exec_output or "stack-overflow" in exec_output:
+    elif "stack-buffer-overflow" in exec_output or "stack-buffer-underflow" in exec_output or "stack-overflow" in exec_output or "stack smashing detected" in exec_output:
         return "stack-overflow"
     elif "address points to the zero page" in exec_output:
         return "address-points-to-the-zero-page"

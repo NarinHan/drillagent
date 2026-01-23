@@ -309,7 +309,7 @@ class PathExplorationAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Substep 2: Execute the command with memory limit
-        self.logger.info (f"  [PathExplorationAgent] Executing command: {command} in {round_dir}")
+        self.logger.info (f"  [PathExplorationAgent] Executing command: {command}")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
@@ -343,16 +343,17 @@ class PathExplorationAgent:
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
         # Substep 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
-        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE = {profraw_path}")
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
-            self.logger.warning(f"  [PathExplorationAgent] Failed to find this profraw file!!") # Maybe the binary was not well-instrumented or the execution failed early...
+            self.logger.warning(f"  [PathExplorationAgent] Failed to find profraw file at: {profraw_path}") # Maybe the binary was not well-instrumented or the execution failed early...
             return exit_code, exec_output
+        else:
+            self.logger.info(f"  [PathExplorationAgent] Found profraw file at: {profraw_path}")
 
         try:
             # Here we should already have llvm profraw file in current round directory.
             self.llvm_cov_utils.update_profile_data(profraw_path) # Transform profraw to profdata internally, but the JSON _coverage_data will be lazy-loaded.
             if os.path.exists(self.llvm_cov_utils.profdata_path):
-                self.logger.info(f"  [PathExplorationAgent] Current cov profdata file at: {self.llvm_cov_utils.profdata_path}")
+                self.logger.info(f"  [PathExplorationAgent] Current cov profdata file found at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to convert profraw to profdata: {e}")
@@ -420,7 +421,7 @@ class PathExplorationAgent:
             else:
                 # Function not found in coverage data - maybe caused by compiler optimizations
                 # TODO: FIX: Here we meet too many failures/fallbacks!!! Jepordizes the analysis...
-                self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage: {e} for {frame['function_name']}.  Maybe caused by compiler optimizations (omitted)...")
+                self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage for {frame['function_name']}.  Maybe caused by compiler optimizations (omitted)...")
                 updated_frame.update({
                     'failed_getting_cov'   : True,
                     'func_executed'        : False,  # Placeholder values
@@ -493,7 +494,7 @@ class PathExplorationAgent:
             f.write(f"Overall Coverage Report:\n{cov_report}") # For debug
 
         self.logger.debug(f"\n{formatted_cov_info}")
-        self.logger.debug(f"Overall Coverage Report:\n{cov_report}")
+        self.logger.debug(f"Overall Coverage Report:\n{len(cov_report.split('\n'))} lines")
         return formatted_cov_info
 
 
@@ -520,7 +521,7 @@ class PathExplorationAgent:
         # Check for "segmentation fault" (crash) - this is our target!
         # Exit code 139 = 128 + 11 (SIGSEGV signal) (-11 = SIGSEGV on some systems)
         if exit_code == 139 or exit_code == -11:
-            self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
+            self.logger.warning(f"  [PathExplorationAgent] SEGMENTATION FAULT detected (exit code {exit_code})")
             return True  # Crash input pov found
 
         # Check for other interesting exit codes
@@ -564,9 +565,8 @@ class PathExplorationAgent:
             self.crash_input_pov['saved_pov_path'] = pov_output_path
 
             # Log the crash discovery
-            self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND ***")
+            self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND in PEA {self.current_exp_iteration} ***")
             self.logger.info(f"  [PathExplorationAgent] Test case: {test_case_path}")
-            self.logger.info(f"  [PathExplorationAgent] Iteration: {self.current_exp_iteration}")
             self.logger.info(f"  [PathExplorationAgent] Content size: {len(crash_input_content)} bytes")
 
             # Log crash information for visibility
@@ -591,20 +591,19 @@ class PathExplorationAgent:
                 crash_info_lines.append(f"... ({len(crash_input_content) - 256} more bytes)")
 
             # Try to add text if it's printable
-            try:
-                text_content = crash_input_content.decode('utf-8', errors='replace')
-                if text_content.isprintable() or '\n' in text_content:
-                    crash_info_lines.append("")
-                    crash_info_lines.append("--- Test Case Content (text) ---")
-                    crash_info_lines.append(text_content)
-            except:
-                pass
+            # try:
+            #     text_content = crash_input_content.decode('utf-8', errors='replace')
+            #     if text_content.isprintable() or '\n' in text_content:
+            #         crash_info_lines.append("")
+            #         crash_info_lines.append("--- Test Case Content (text) ---")
+            #         crash_info_lines.append(text_content)
+            # except:
+            #     pass
 
-            crash_info_lines.append("")
             crash_info_lines.append("--- Execution Output ---")
-            crash_info_lines.append(exec_output[:1000])
-            if len(exec_output) > 1000:
-                crash_info_lines.append(f"... ({len(exec_output) - 1000} more chars)")
+            crash_info_lines.append(exec_output[:500])
+            if len(exec_output) > 500:
+                crash_info_lines.append(f"... ({len(exec_output) - 500} more chars)")
             crash_info_lines.append("=" * 80)
             crash_info_lines.append("")
 

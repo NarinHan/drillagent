@@ -62,7 +62,7 @@ class DrillAgent:
         self.crash_agent: CrashTriggerAgent            = None
 
         # Intermediate analysis results
-        self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
+        self.vulnerability_info: VulnInfo = None # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD
 
         # Final analysis results
@@ -241,6 +241,7 @@ class DrillAgent:
                     return self.generate_report()
 
             # Phase 3: Path Exploration with the coverage feedback
+            self._update_actual_binary_path(self.config.target_repo_path) # Necessary before PEA
             if not self.skip_path_exploration:
                 start_time = time.time()
                 self._phase_path_exploration()
@@ -547,6 +548,7 @@ class DrillAgent:
                 self.vulnerability_info.actual_binary_path = actual_bin_path
             else:
                 self.vulnerability_info.actual_binary_path = self.vulnerability_info.binary_path # necessary
+                self.vuln_agent.store_to_cache() # Update cache with the actual_binary_path
             self.logger.info(f"✓ Entry program and actual binary path: \n{36*' '+self.vulnerability_info.binary_path} \n{36*' '+self.vulnerability_info.actual_binary_path}")
         else:
             pass # do nothing
@@ -608,6 +610,7 @@ class DrillAgent:
             return cur_crash_type, True
         else:
             self.logger.info(f"  [DrillAgent] PoV validation: No sanitizer error detected. Exit code: {exit_code}")
+            self.logger.info(f"  [DrillAgent] Exec validate output:\n{exec_output}")
 
         return "", False
 

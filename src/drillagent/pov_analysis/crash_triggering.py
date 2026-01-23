@@ -70,7 +70,7 @@ class CrashTriggerAgent:
             self.logger.warning(f"[CrashTriggerAgent] No price config for model: {model_name}")
 
     def run(self) -> None:
-        self.logger.info(f"  [CrashTriggerAgent] Starting running. Checking previous path exploration results...  (tools num: {len(self.tools_for_generation)})")
+        self.logger.info(f"  [CrashTriggerAgent] Starting running. (tools num: {len(self.tools_for_generation)})")
 
         # Clear all the previous roundN directories if exist
         for i in range(1, self.max_trigger_iterations+1+4):
@@ -83,6 +83,7 @@ class CrashTriggerAgent:
         if path_agent is not None:
             # Check if we already have a crash input
             if path_agent.crash_input_pov is not None:
+                self.logger.info("  [CrashTriggerAgent] Checking for previous crash input from path exploration phase...")
                 cur_crash_type, is_valid = self.drill_agent.validate_pov(path_agent.crash_command)
                 if is_valid:
                     PEA_pov_data = path_agent.crash_input_pov
@@ -296,19 +297,19 @@ class CrashTriggerAgent:
             matching_files = glob.glob(search_pattern)
             if not matching_files:
                 raise RuntimeError(
-                    f"PoV file was not created. Expected: {pov_path} or {pov_path}.* "
+                    f"PoV candidate file was not created. Expected: {pov_path} or {pov_path}.* "
                     f"LLM may have failed to use write_file tool."
                 )
             # Update the path using the first matching file (should only be one)
             pov_path = matching_files[0]
-            self.logger.info(f"  [CrashTriggerAgent] Found PoV with extension: {pov_path}")
+            self.logger.info(f"  [CrashTriggerAgent] Found PoV candidate with extension: {pov_path}")
 
         file_size = os.path.getsize(pov_path)
         if file_size == 0:
-            raise RuntimeError(f"PoV file at {pov_path} is empty. LLM may have failed to write content.")
+            raise RuntimeError(f"PoV candidate file is empty at {pov_path}. LLM may have failed to write content.")
 
         self.logger.info(f"  [CrashTriggerAgent] PoV candidate successfully written to: {pov_path}")
-        self.logger.debug(f"  [CrashTriggerAgent] PoV file size: {file_size} bytes")
+        self.logger.debug(f"  [CrashTriggerAgent] PoV candidate file size: {file_size} bytes")
         return pov_path
 
     def _execute_pov_candidate(self, command: str) -> Tuple[int, str]: # No LLM needed
@@ -322,7 +323,7 @@ class CrashTriggerAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Execute the command
-        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} (in {round_dir})")
+        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command}")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(

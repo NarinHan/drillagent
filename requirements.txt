@@ -30,3 +30,5 @@ pyyaml
 # sudo apt install autogen
 # libxls
 # sudo apt-get install -y gettext libtool autoconf automake autopoint autoconf-archive
+# upx
+# sudo apt-get install libucl-dev
