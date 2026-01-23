@@ -538,7 +538,7 @@ def main():
             print("✗ Error: No solved tasks found")
             sys.exit(1)
 
-        print(f"✓ Found {len(tasks)} solved tasks (OpenHands ∪ SWEA)")
+        print(f"✓ Found {len(tasks)} solved tasks (OpenHands + SWEA)")
     else:
         print("✗ Error: No task selection provided")
         sys.exit(1)

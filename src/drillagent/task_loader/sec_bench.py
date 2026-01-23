@@ -518,3 +518,13 @@ class SecbTaskLoader:
     # TODO: To be compatible with SEC-bench official eval process (load from docker images).
     pass
 
+
+if __name__ == "__main__":
+    # Simple test of the RawSecbTaskLoader
+    loader = RawSecbTaskLoader(dataset_path="datasets/sec-bench/CVE-instances")
+    tasks = loader.load_cve_tasks()
+    print(f"Total loaded tasks: {len(tasks)}")
+
+    for instance_id, task in tasks.items():
+        print(instance_id)
+    
