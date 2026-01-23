@@ -32,7 +32,7 @@ class CrashTriggerAgent:
         self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 15 # 15 or 20 or 25
+        self.max_generation_turns = 6 # Larger turns will cause input context explosion.
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.

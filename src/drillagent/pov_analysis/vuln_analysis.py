@@ -311,7 +311,7 @@ class VulnAnalysisAgent:
                 ),
                 tools=self.basic_tools,  # Provide tools to locate files if needed
                 system_prompt=VAA_system_prompt,
-                max_iterations=10,  # Allow a few iterations for file location
+                max_iterations=6,  # Allow a few iterations for file location
                 temperature=0.1,
                 max_tokens=4096,
                 continuation_prompt="Please continue transforming the call trace and provide the final JSON output."
@@ -588,7 +588,7 @@ class VulnAnalysisAgent:
                 task=user_prompt,
                 tools=self.enhanced_tools,  # Allow usage of enhanced code browsing tools for code exploration
                 system_prompt=VAA_system_prompt,
-                max_iterations=20,  # Allow up to 20 rounds of deep analysis
+                max_iterations=15,  # Allow up to 15 rounds of deep analysis
                 temperature=0.3,
                 max_tokens=30720, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."

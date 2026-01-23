@@ -455,8 +455,7 @@ class LLMInterface:
                 # Only one iteration allowed - can only use write_file, execute_bash, finish
                 current_prompt = (
                     "CRITICAL: You have ONLY ONE iteration to complete this task. Make sure you will give a complete answer.\n"
-                    "If you are asked to generate a testcase or PoV file. You are allowed to use the following tools: write_file, execute_bash.\n\n"
-                    "You can:\n"
+                    "If you are asked to generate a testcase or PoV file. You are allowed to use the following tools: write_file, execute_bash.\n"
                     "1. Use write_file to generate the target PoV/testcase file (or a Python script that generates it)\n"
                     "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
                     "The task is as below.\n\n"
@@ -811,9 +810,8 @@ class LLMInterface:
                     current_prompt = (
                         "CRITICAL: This is your FINAL iteration. Make sure you will give a complete answer.\n\n"
                         "Theoretically, you should no longer perform tool calls.\n"
-                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration. "
-                        "You can:\n"
-                        "1. Use write_file to generate the target file (or a Python script that generates it)\n"
+                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration. \n"
+                        "1. You can use write_file to generate the target file (or a Python script that generates it)\n"
                         "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
                         "**Note that** this is your LAST response, and you won't be able to view the tool results!"
                     )

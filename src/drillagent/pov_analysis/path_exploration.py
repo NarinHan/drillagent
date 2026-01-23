@@ -38,7 +38,7 @@ class PathExplorationAgent:
         self.max_exp_iterations = 8
         self.current_exp_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 10 # 10 or 15 or 20
+        self.max_generation_turns = 6 # Larger turns will cause input context explosion.
 
         # For coverage collection
         binary_abs_path = os.path.abspath(os.path.join(

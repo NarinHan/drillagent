@@ -1131,6 +1131,9 @@ class GetCallHierarchyTool(AgentTool):
     Given a function's location, finds all functions called by it.
     """
 
+    # Maximum output characters (to control context size)
+    MAX_OUTPUT_CHARS = 5000
+
     def __init__(self, repo_path: str, compile_commands_path: str, clangd_path: str = "clangd"):
         """
         Initialize GetCallHierarchyTool.
@@ -1254,12 +1257,32 @@ class GetCallHierarchyTool(AgentTool):
                     seen.add(key)
                     unique_callees.append(callee)
 
-            return {
+            # Apply character limit to control context size
+            total_found = len(unique_callees)
+            truncated = False
+
+            # Estimate output size and truncate if needed
+            import json
+            output_str = json.dumps(unique_callees)
+            if len(output_str) > self.MAX_OUTPUT_CHARS:
+                # Truncate by removing callees from the end until under limit
+                while unique_callees and len(json.dumps(unique_callees)) > self.MAX_OUTPUT_CHARS:
+                    unique_callees.pop()
+                truncated = True
+
+            result = {
                 "success": True,
                 "callees": unique_callees,
                 "count": len(unique_callees),
-                "message": f"Found {len(unique_callees)} unique function(s) called"
+                "message": f"Found {total_found} unique function(s) called"
             }
+
+            if truncated:
+                result["truncated"] = True
+                result["total_found"] = total_found
+                result["message"] += f" (showing {len(unique_callees)} due to output size limit)"
+
+            return result
 
         except Exception as e:
             return {

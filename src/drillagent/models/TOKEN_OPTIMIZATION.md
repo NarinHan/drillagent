@@ -389,3 +389,57 @@ self.logger.info(
 - [Anthropic Prompt Caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
 - [OpenAI Token Usage Best Practices](https://platform.openai.com/docs/guides/production-best-practices)
 - DrillAgent 日志: `/home/shared_project/issta_eval/subset-47/libxls.log`
+
+
+OpenHands的上下文管理方式：
+
+  第一层：Condenser压缩系统                                                                                                            
+                                                                                                                                       
+  在 openhands/agenthub/codeact_agent/codeact_agent.py:164-176，Agent在请求LLM之前会先对历史进行压缩：                                 
+                                                                                                                                       
+  condensed_history: list[Event] = []                                                                                                  
+  match self.condenser.condensed_history(state):                                                                                       
+      case View(events=events):                                                                                                        
+          condensed_history = events  # 使用压缩后的历史                                                                               
+                                                                                                                                       
+  OpenHands实现了7种不同的Condenser：                                                                                                  
+  ┌──────────────────────────────┬────────────────────────────────────────┐                                                            
+  │        Condenser类型         │                  作用                  │                                                            
+  ├──────────────────────────────┼────────────────────────────────────────┤                                                            
+  │ RecentEventsCondenser        │ 只保留首N个+最后M个事件，丢弃中间部分  │                                                            
+  ├──────────────────────────────┼────────────────────────────────────────┤                                                            
+  │ ObservationMaskingCondenser  │ 用<MASKED>替换旧的观察值内容           │                                                            
+  ├──────────────────────────────┼────────────────────────────────────────┤                                                            
+  │ BrowserOutputCondenser       │ 浏览器截图只保留最近1个，其他只保留URL │                                                            
+  ├──────────────────────────────┼────────────────────────────────────────┤                                                            
+  │ LLMSummarizingCondenser      │ 当事件>100时，用LLM生成结构化摘要      │                                                            
+  ├──────────────────────────────┼────────────────────────────────────────┤                                                            
+  │ AmortizedForgettingCondenser │ 简单遗忘旧事件，不做显式摘要           │                                                            
+  ├──────────────────────────────┼────────────────────────────────────────┤                                                            
+  │ LLMAttentionCondenser        │ 让LLM判断哪些事件最重要，按重要性保留  │                                                            
+  └──────────────────────────────┴────────────────────────────────────────┘                                                            
+  ---                                                                                                                                  
+  第二层：单条内容截断                                                                                                                 
+                                                                                                                                       
+  在 openhands/events/serialization/event.py 中，单个观察值超过max_message_chars（默认30,000字符）时会截断中间部分：                   
+                                                                                                                                       
+  def truncate_content(content: str, max_chars: int | None = None) -> str:                                                             
+      half = max_chars // 2                                                                                                            
+      return content[:half] + '\n[... Observation truncated ...]\n' + content[-half:]                                                  
+                                                                                                                                       
+  ---                                                                                                                                  
+  第三层：上下文窗口超限自动截断                                                                                                       
+                                                                                                                                       
+  当LLM返回ContextWindowExceededError时，如果enable_history_truncation=True（默认值），会自动截断约一半的历史。                        
+                                                                                                                                       
+  在 openhands/controller/agent_controller.py:1159-1204：                                                                              
+                                                                                                                                       
+  def _apply_conversation_window(self, events: list[Event]) -> list[Event]:                                                            
+      mid_point = max(1, len(events) // 2)                                                                                             
+      kept_events = events[mid_point:]  # 保留后半部分                                                                                 
+      # 确保第一个用户消息包含在内                                                                                                     
+      if first_user_msg not in kept_events:                                                                                            
+          kept_events = [first_user_msg] + kept_events                                                                                 
+      return kept_events                                                                                                               
+                                                                                                                                       
+  ---                       

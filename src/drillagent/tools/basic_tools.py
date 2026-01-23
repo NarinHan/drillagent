@@ -407,8 +407,8 @@ class ReadFileTool(AgentTool):
 
             hex_dump = '\n'.join(hex_lines)
 
-            # Apply byte size limit (max 32KB) to prevent overly large responses
-            MAX_CONTENT_BYTES = 32 * 1024
+            # Apply byte size limit (max 16KB) to prevent overly large responses
+            MAX_CONTENT_BYTES = 16 * 1024
             hex_dump_bytes = len(hex_dump.encode('utf-8'))
             byte_truncated = False
             if hex_dump_bytes > MAX_CONTENT_BYTES:
@@ -911,8 +911,8 @@ class BashTool(AgentTool):
         # Timeout for command execution (seconds)
         self.timeout = 30
 
-        # Maximum output length (characters)
-        self.max_output_chars = 30000
+        # Maximum output length (characters) - reduced from 30000 to control context size
+        self.max_output_chars = 10000
 
     def name(self) -> str:
         return "execute_bash"
@@ -1109,8 +1109,11 @@ class BashTool(AgentTool):
                 truncated = True
 
             # Return results (success=True even if exit_code != 0)
+            # success: indicates tool execution succeeded (not blocked, not timed out)
+            # command_success: indicates the command itself returned exit_code 0
             response = {
                 "success": True,
+                "command_success": result.returncode == 0,
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": result.returncode,
