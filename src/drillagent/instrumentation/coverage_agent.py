@@ -33,11 +33,9 @@ class CoverageInstrumentAgent(BaseInstrAgent):
         self.work_dir    = drill_agent.work_dir
         self.output_dir  = drill_agent.output_dir
         
-        # Coverage flags
-        self.coverage_flags = [
-            '-fprofile-instr-generate',
-            '-fcoverage-mapping'
-        ]
+        # Define coverage flags (separate compile and link flags)
+        self.cov_compile_flags = "-g -O0 -fprofile-instr-generate -fcoverage-mapping"
+        self.cov_link_flags = "-fprofile-instr-generate -fcoverage-mapping"
 
         # Load instrumentation config first to get project_name and repo_url
         # self.instr_config = self._load_instrumentation_config()
@@ -97,7 +95,7 @@ class CoverageInstrumentAgent(BaseInstrAgent):
                     'success': True,
                     'instrumented_binary': str(self.binary_path),
                     'build_log': self.build_log,
-                    'coverage_flags': self.coverage_flags
+                    'coverage_flags': self.cov_compile_flags
                 }
                 # Verify the binary exists and has coverage symbols
                 # if check_llvmcov_binary_exists(
@@ -156,13 +154,11 @@ class CoverageInstrumentAgent(BaseInstrAgent):
         # Step 3: Remove sanitizer flags that conflict with coverage instrumentation
         build_commands = self._remove_sanitizer_flags(build_commands)
         
-        # Define coverage flags
-        cov_flags = ' '.join(self.coverage_flags)
-        
         # Initialize flags to empty if they might be used in expansions
         modified = f'''#!/bin/bash -e
 # Coverage instrumentation flags
-COV_FLAGS="{cov_flags}"
+COV_CFLAGS="{self.cov_compile_flags}"
+COV_LDFLAGS="{self.cov_link_flags}"
 CFLAGS="${{CFLAGS:-}}"
 CXXFLAGS="${{CXXFLAGS:-}}"
 LDFLAGS="${{LDFLAGS:-}}"
@@ -170,79 +166,62 @@ LDFLAGS="${{LDFLAGS:-}}"
 {build_commands}
 '''
 
-        # Replace patterns that modify CFLAGS/CXXFLAGS to append to COV_FLAGS instead
-        # Handle: export CFLAGS="$CFLAGS -flag" -> export CFLAGS="$COV_FLAGS $CFLAGS -flag"
+        # Replace patterns that modify CFLAGS/CXXFLAGS to append to COV_CFLAGS instead
+        # Handle: export CFLAGS="$CFLAGS -flag" -> export CFLAGS="$COV_CFLAGS $CFLAGS -flag"
         modified = re.sub(
             r'export (C(?:XX)?FLAGS)="(\$\1\s+[^"]+)"',
-            r'export \1="$COV_FLAGS \2"',
+            r'export \1="$COV_CFLAGS \2"',
             modified
         )
         
-        # Replace common compiler/flag patterns to include coverage flags
-        # Use regex to avoid replacing ./configure in test conditions like [ -f ./configure ]
-        
-        # TODO: These patterns still have a lot of issues.
-        if '--cc-opt' in modified:
-            # Configure scripts with --cc-opt and --ld-opt (like njs)
-            # Only replace ./configure when it's executed (not in tests)
-            modified = re.sub(
-                r'(\n\s*)(\./configure\s)',
-                r'\1CC=clang CFLAGS="$COV_FLAGS $CFLAGS" LDFLAGS="$COV_FLAGS $LDFLAGS" ./configure --cc=clang --cc-opt="$COV_FLAGS" --ld-opt="$COV_FLAGS" ',
-                modified
-            )
-        elif './configure' in modified and '--cc-opt' not in modified:
-            # Plain configure without special flags
-            # Only replace ./configure when it's executed (not in tests)
-            modified = re.sub(
-                r'(\n\s*)(\./configure)(\s|$)',
-                r'\1CC=clang CXX=clang++ CFLAGS="$COV_FLAGS $CFLAGS" CXXFLAGS="$COV_FLAGS $CXXFLAGS" LDFLAGS="$COV_FLAGS $LDFLAGS" ./configure\3',
-                modified
-            )
-        elif 'autogen.sh' in modified and './configure' not in modified:
+        # Inject flags based on build system (using contains_in_non_comment_lines to ignore comments)
+        if contains_in_non_comment_lines(modified, 'configure'):
+            if '--cc-opt' in modified:
+                # Configure scripts with --cc-opt and --ld-opt (like njs)
+                modified = re.sub(
+                    r'(\n\s*)(\./configure\s)',
+                    r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CC=clang CFLAGS="$COV_CFLAGS $CFLAGS" LDFLAGS="$COV_LDFLAGS $LDFLAGS" ./configure --cc=clang --cc-opt="$COV_CFLAGS" --ld-opt="$COV_LDFLAGS" ',
+                    modified
+                )
+            else:
+                # Plain configure without special flags
+                modified = re.sub(
+                    r'(\n\s*)(\./configure)(\s|$)',
+                    r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CC=clang CXX=clang++ CFLAGS="$COV_CFLAGS $CFLAGS" CXXFLAGS="$COV_CFLAGS $CXXFLAGS" LDFLAGS="$COV_LDFLAGS $LDFLAGS" ./configure\3',
+                    modified
+                )
+        elif contains_in_non_comment_lines(modified, 'autogen.sh'):
             # autogen.sh without explicit configure - inject flags before autogen.sh
             modified = re.sub(
                 r'(\n\s*)(\./autogen\.sh)(\s|$)',
-                r'\1CC=clang CXX=clang++ CFLAGS="$COV_FLAGS $CFLAGS" CXXFLAGS="$COV_FLAGS $CXXFLAGS" LDFLAGS="$COV_FLAGS $LDFLAGS" \2\3',
+                r'\1CC=clang CXX=clang++ CFLAGS="$COV_CFLAGS $CFLAGS" CXXFLAGS="$COV_CFLAGS $CXXFLAGS" LDFLAGS="$COV_LDFLAGS $LDFLAGS" \2\3',
                 modified
             )
-        elif 'cmake' in modified.lower():
+        elif contains_in_non_comment_lines(modified, 'cmake'):
             # CMake builds
-            # Only replace cmake when it's a command (not in tests)
             modified = re.sub(
                 r'(\n\s*)(cmake\s)',
-                r'\1CC=clang CXX=clang++ cmake -DCMAKE_C_FLAGS="$COV_FLAGS $CFLAGS" -DCMAKE_CXX_FLAGS="$COV_FLAGS $CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$COV_FLAGS $LDFLAGS" ',
+                r'\1CC=clang CXX=clang++ cmake -DCMAKE_C_FLAGS="$COV_CFLAGS $CFLAGS" -DCMAKE_CXX_FLAGS="$COV_CFLAGS $CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$COV_LDFLAGS $LDFLAGS" ',
                 modified
             )
         elif re.search(r'(mini)?rake', modified.lower()):
             # Rake/minirake builds
-            # For rake builds: insert exports before the first rake command
-            # This handles all rake formats: ./rake, minirake, rake clean, rake all, etc.
-            self.logger.debug("Detected Rake/minirake build, injecting coverage flags")
-
-            # Find the first rake/minirake command and insert exports before it
-            # Pattern matches: rake, minirake, ./rake, ./minirake (optionally followed by arguments like clean/all)
             rake_pattern = r'(\n\s*)((?:\./)?(?:mini)?rake(?:\s+\w+)?)'
             if re.search(rake_pattern, modified, re.IGNORECASE):
                 modified = re.sub(
                     rake_pattern,
-                    r'\1export CC=clang\n\1export CXX=clang++\n\1export CFLAGS="$COV_FLAGS $CFLAGS"\n\1export CXXFLAGS="$COV_FLAGS $CXXFLAGS"\n\1export LDFLAGS="$COV_FLAGS $LDFLAGS"\n\1\2',
+                    r'\1export CC=clang\n\1export CXX=clang++\n\1export CFLAGS="$COV_CFLAGS $CFLAGS"\n\1export CXXFLAGS="$COV_CFLAGS $CXXFLAGS"\n\1export LDFLAGS="$COV_LDFLAGS $LDFLAGS"\n\1\2',
                     modified,
-                    count=1,  # Only insert before the first rake command
+                    count=1,
                     flags=re.IGNORECASE
                 )
-                self.logger.info("Injected coverage flags before rake command!!")
-            else:
-                self.logger.warning("Could not find rake command to inject coverage flags")
-
         else:
             # Direct make without configure
-            # Ensure CC/CXX and flags are exported before make
             if 'make' in modified and 'export CC' not in modified:
-                # Insert exports before first make command
                 modified = modified.replace(
                     'make',
-                    'export CC=clang CXX=clang++ CFLAGS="$COV_FLAGS $CFLAGS" CXXFLAGS="$COV_FLAGS $CXXFLAGS" LDFLAGS="$COV_FLAGS $LDFLAGS"\nmake',
-                    1  # Only replace first occurrence
+                    'export CC=clang CXX=clang++ CFLAGS="$COV_CFLAGS $CFLAGS" CXXFLAGS="$COV_CFLAGS $CXXFLAGS" LDFLAGS="$COV_LDFLAGS $LDFLAGS"\nmake',
+                    1
                 )
         
         # self.logger.debug(f"Modified build commands:\n{modified}")
@@ -385,21 +364,16 @@ LDFLAGS="${{LDFLAGS:-}}"
 
     def _prepare_environment_vars(self) -> Dict[str, str]:
         """Prepare environment variables for build
-        
+
         Returns:
             Dictionary of environment variables
         """
         env = os.environ.copy()
-        
+
         # Set compilers
         env['CC'] = 'clang'
         env['CXX'] = 'clang++'
-        
-        # Coverage flags will be set in the build script via COV_FLAGS
-        # But also set them in environment as backup
-        cov_flags_str = ' '.join(self.coverage_flags)
-        env['COVERAGE_FLAGS'] = cov_flags_str
-        
+
         return env
 
     def _coverage_fallback_fixes(self, error: str, build_commands: str) -> Optional[str]:

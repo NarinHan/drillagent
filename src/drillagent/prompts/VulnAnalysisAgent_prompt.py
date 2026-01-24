@@ -317,6 +317,7 @@ Then output should be:
 
 
 # Prompt for root cause analysis
+# TODO: This should be further improved.
 VAA_root_cause_analysis_prompt = """You are performing root cause analysis for a vulnerability.
 
 Project: {project_name}

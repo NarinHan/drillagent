@@ -218,6 +218,22 @@ def clean_gitrepo(actual_repo_path: str):
         check=True
     )
 
+def _remove_inline_comment(line: str) -> str:
+    """Remove inline comment from a shell line, handling quoted strings.
+
+    Handles single and double quotes, but not escape characters.
+    """
+    in_single_quote = False
+    in_double_quote = False
+    for i, char in enumerate(line):
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+        elif char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+        elif char == '#' and not in_single_quote and not in_double_quote:
+            return line[:i]
+    return line
+
 def contains_in_non_comment_lines(text: str, keyword: str) -> bool:
     """Check if keyword exists in non-comment lines (case-sensitive).
 
@@ -230,10 +246,12 @@ def contains_in_non_comment_lines(text: str, keyword: str) -> bool:
     """
     for line in text.split('\n'):
         stripped = line.lstrip()
-        # Skip comment lines (starting with #)
+        # Skip full comment lines (starting with #)
         if stripped.startswith('#'):
             continue
-        if keyword in line:
+        # Remove inline comments (# not inside quotes)
+        code_part = _remove_inline_comment(line)
+        if keyword in code_part:
             return True
     return False
 
