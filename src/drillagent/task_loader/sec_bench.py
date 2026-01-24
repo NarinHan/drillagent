@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import json
 import glob
 from pathlib import Path
@@ -519,12 +520,91 @@ class SecbTaskLoader:
     pass
 
 
-if __name__ == "__main__":
-    # Simple test of the RawSecbTaskLoader
-    loader = RawSecbTaskLoader(dataset_path="datasets/sec-bench/CVE-instances")
-    tasks = loader.load_cve_tasks()
-    print(f"Total loaded tasks: {len(tasks)}")
+def partition_tasks_by_repo(tasks: Dict[str, SecbTask], n_partitions: int) -> List[List[str]]:
+    """
+    Partition tasks into N groups, ensuring all tasks from the same repo
+    (project_name) are in the same partition.
 
+    Uses a greedy algorithm: sort projects by task count (descending),
+    then assign each project to the partition with the fewest tasks.
+
+    Args:
+        tasks: Dictionary mapping instance_id to SecbTask
+        n_partitions: Number of partitions to create
+
+    Returns:
+        List of N lists, each containing instance_ids for that partition
+    """
+    from collections import defaultdict
+
+    # Group tasks by project_name
+    project_to_tasks: Dict[str, List[str]] = defaultdict(list)
     for instance_id, task in tasks.items():
-        print(instance_id)
+        project_to_tasks[task.project_name].append(instance_id)
+
+    # Sort projects by task count (descending) for greedy assignment
+    sorted_projects = sorted(project_to_tasks.items(), key=lambda x: -len(x[1]))
+
+    # Initialize partitions
+    partitions: List[List[str]] = [[] for _ in range(n_partitions)]
+    partition_sizes = [0] * n_partitions
+
+    # Greedy assignment: assign each project to the partition with fewest tasks
+    for project_name, task_ids in sorted_projects:
+        # Find partition with minimum size
+        min_idx = partition_sizes.index(min(partition_sizes))
+        partitions[min_idx].extend(task_ids)
+        partition_sizes[min_idx] += len(task_ids)
+
+    return partitions
+
+
+def print_partitioned_instance_ids(n_partitions: int = 3,
+                                    dataset_path: str = "datasets/sec-bench/CVE-instances",
+                                    exclude_blacklist: bool = True):
+    """
+    Load all tasks, partition them, and print each partition as a comma-separated
+    string suitable for --instance-ids argument.
+
+    Args:
+        n_partitions: Number of partitions (default: 3)
+        dataset_path: Path to SEC-bench dataset
+        exclude_blacklist: Whether to exclude blacklisted tasks (default: True)
+    """
+    loader = RawSecbTaskLoader(dataset_path=dataset_path)
+    # 
+    # Load all tasks. We can customize loading here if needed.
+    # 
+    all_tasks = loader.load_cve_tasks()
+
+    # Optionally filter out blacklisted tasks
+    if exclude_blacklist:
+        filtered_tasks = {k: v for k, v in all_tasks.items()
+                         if not loader.is_labelled_blacklist(k)}
+    else:
+        filtered_tasks = all_tasks
+
+    print(f"\nTotal tasks: {len(filtered_tasks)} (from {len(all_tasks)} loaded)")
+    print(f"Partitioning into {n_partitions} groups...\n")
+
+    partitions = partition_tasks_by_repo(filtered_tasks, n_partitions)
+
+    # Print summary and instance_ids for each partition
+    for i, partition in enumerate(partitions):
+        # Group by project for summary
+        projects = {}
+        for instance_id in partition:
+            proj = instance_id.split('.')[0]
+            projects[proj] = projects.get(proj, 0) + 1
+
+        print(f"=== Partition {i+1} ({len(partition)} tasks) ===")
+        print(f"Projects: {dict(sorted(projects.items()))}")
+        print(f"--instance-ids \"{','.join(sorted(partition))}\"")
+        print()
+
+
+if __name__ == "__main__":
+    # Allow specifying number of partitions as command line argument
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+    print_partitioned_instance_ids(n_partitions=n)
     

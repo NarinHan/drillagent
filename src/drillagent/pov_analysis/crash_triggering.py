@@ -19,6 +19,7 @@ from drillagent.prompts.CrashTriggerAgent_prompt import (
 from drillagent.utils.llvm_cov import LLVMCovUtils
 from drillagent.utils.utils import *
 from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
+from drillagent.models import BudgetExceededError
 class CrashTriggerAgent:
     # Responsible for triggering crashes based on analyzed paths
     def __init__(self, drill_agent: 'DrillAgent'):
@@ -172,6 +173,9 @@ class CrashTriggerAgent:
                 else:
                     self.logger.info(f"  [CrashTriggerAgent] PoV at iteration {iteration} did not trigger crash, continuing...")
 
+            except BudgetExceededError:
+                # Budget exceeded - re-raise to terminate analysis
+                raise
             except Exception as e:
                 self.logger.error(f"  [CrashTriggerAgent] Error in iteration {iteration}: {e}", exc_info=True)
                 self.logger.info(f"  [CrashTriggerAgent] Continuing to next iteration...")
@@ -270,6 +274,14 @@ class CrashTriggerAgent:
                   "If you already generated the file, call `finish` tool to end the process."
             )
             self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
+
+            # Check for budget exceeded - raise exception to terminate analysis
+            if result.get('stop_reason') == 'budget_exceeded':
+                current_cost = self.drill_agent.get_current_total_cost()
+                max_budget = self.drill_agent.config.max_budget_usd
+                raise BudgetExceededError(
+                    f"Budget exceeded in CrashTriggerAgent: ${current_cost:.4f} >= ${max_budget:.2f}"
+                )
 
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')

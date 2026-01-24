@@ -50,9 +50,6 @@ Manages conversation history with automatic provider-specific formatting.
 - `add_tool_results(tool_calls, results)` - Add tool results (handles provider differences)
 - `get_messages()` - Get conversation history
 
-### UsageStats
-Tracks API usage statistics.
-
 **Tracked metrics:**
 - Total tokens
 - Prompt/completion tokens

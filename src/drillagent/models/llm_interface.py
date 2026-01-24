@@ -10,7 +10,7 @@ Key features:
 
 Usage patterns:
 1. Simple text generation:
-   llm = LLMInterface(provider="claude", model_name="claude-3-7-sonnet-20250219")
+   llm = LLMInterface(provider="claude", model_name="claude-sonnet-4-5-20250929")
    response = llm.generate(prompt="What is Python?")
 
 2. Manual tool calling (backward compatible):
@@ -73,8 +73,13 @@ class InvalidResponseError(LLMError):
     pass
 
 
+class BudgetExceededError(LLMError):
+    """Budget limit reached - analysis should be terminated"""
+    pass
+
+
 @dataclass
-class UsageStats:
+class UsageStats: # For run_agent_loop local usage
     """Track LLM API usage statistics"""
     total_tokens: int = 0
     prompt_tokens: int = 0
@@ -215,7 +220,7 @@ class LLMInterface:
 
     Example:
         # Create instance (supports multiple instances with different models)
-        llm = LLMInterface(provider="claude", model_name="claude-3-7-sonnet-20250219")
+        llm = LLMInterface(provider="claude", model_name="claude-sonnet-4-5-20250929")
 
         # Automatic agent loop (recommended)
         result = llm.run_agent_loop(
@@ -238,29 +243,32 @@ class LLMInterface:
         api_key: Optional[str] = None,
         api_key_file: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
-        output_dir: Optional[str] = None
+        output_dir: Optional[str] = None,
+        budget_checker: Optional[Callable[[], bool]] = None
     ):
         """
         Initialize LLM interface.
 
         Args:
             provider: "claude" or "openai"
-            model_name: Model name (default: claude-3-7-sonnet-20250219 or gpt-4-turbo)
+            model_name: Model name (default: claude-sonnet-4-5-20250929 or gpt-4o)
             api_key: API key string (takes precedence)
             api_key_file: Path to file containing API key
             logger: Optional logger instance
             output_dir: Optional output directory for logging LLM interactions
+            budget_checker: Optional callback that returns True if budget is exceeded
         """
         self.provider = provider.lower()
         self.logger = logger or logging.getLogger(__name__)
         self.output_dir = output_dir  # For LLM interaction logging
+        self.budget_checker = budget_checker  # Callback to check if budget exceeded
 
         # Set default model names
         if model_name is None:
             if self.provider == "claude":
-                model_name = "claude-3-7-sonnet-20250219"
+                model_name = "claude-sonnet-4-5-20250929"
             elif self.provider == "openai":
-                model_name = "gpt-4-turbo"
+                model_name = "gpt-4o"
             else:
                 raise ValueError(f"Unsupported provider: {provider}")
 
@@ -422,11 +430,25 @@ class LLMInterface:
                 * 'finish_tool_partial' - finish tool called with task_completed=partial
                 * 'end_turn'/'stop' - LLM stopped naturally without tool calls
                 * 'max_iterations' - reached iteration limit
+                * 'budget_exceeded' - budget limit reached before starting
                 * 'rate_limit_error'/'timeout_error'/'llm_error' - various errors
             - task_completed: Optional[str] - 'true'/'false'/'partial' (only when finish tool used)
             - error: Optional[str] - error message if failed (LHY: This content is from our own handling)
             - usage_stats: Dict - token usage statistics for this agent loop only
         """
+        # Check budget at the start of agent loop
+        if self.budget_checker and self.budget_checker():
+            self.logger.warning("Budget exceeded, skipping agent loop execution")
+            return {
+                'success': False,
+                'final_response': '',
+                'iterations': 0,
+                'conversation': None,
+                'stop_reason': 'budget_exceeded',
+                'error': 'Budget exceeded before starting agent loop',
+                'usage_stats': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'api_calls': 0}
+            }
+
         # Create local usage stats to track this agent loop's token consumption
         loop_usage_stats = UsageStats()
 
