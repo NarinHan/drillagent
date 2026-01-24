@@ -7,21 +7,21 @@ This module contains LLM model interfaces for different providers (Claude, OpenA
 from .llm_interface import (
     LLMInterface,
     ConversationManager,
-    UsageStats,
     LLMError,
     RateLimitError,
     TimeoutError,
     ToolExecutionError,
-    InvalidResponseError
+    InvalidResponseError,
+    BudgetExceededError
 )
 
 __all__ = [
     "LLMInterface",
     "ConversationManager",
-    "UsageStats",
     "LLMError",
     "RateLimitError",
     "TimeoutError",
     "ToolExecutionError",
-    "InvalidResponseError"
+    "InvalidResponseError",
+    "BudgetExceededError"
 ]

@@ -18,6 +18,7 @@ from drillagent.prompts.PathExplorationAgent_prompt import (
 from drillagent.utils.llvm_cov import LLVMCovUtils
 from drillagent.utils.utils import *
 from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
+from drillagent.models import BudgetExceededError
 
 # 
 # Currently we assume that the PathExplorationAgent **has** usable call trace. (LHY)
@@ -38,7 +39,7 @@ class PathExplorationAgent:
         self.max_exp_iterations = 8
         self.current_exp_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 10 # 10 or 15 or 20
+        self.max_generation_turns = 6 # Larger turns will cause input context explosion.
 
         # For coverage collection
         binary_abs_path = os.path.abspath(os.path.join(
@@ -166,9 +167,12 @@ class PathExplorationAgent:
                     cov_report, sorted_cov_frames
                 )
 
+            except BudgetExceededError:
+                # Budget exceeded - re-raise to terminate analysis
+                raise
             except Exception as e:
-                self.logger.error(f"  [PathExplorationAgent] Iteration {iteration} failed with error: {e}")
-                self.logger.warning(f"  [PathExplorationAgent] Continuing to next iteration...")
+                self.logger.error(f"  [PathExplorationAgent] Iteration {iteration} failed with error: {e}", exc_info=True)
+                self.logger.info(f"  [PathExplorationAgent] Continuing to next iteration...")
                 if self.llvm_cov_utils:
                     self.llvm_cov_utils.clear_data()
                 continue # If we meet any error during generation and coverage analysis, just continue to next iteration.
@@ -178,7 +182,8 @@ class PathExplorationAgent:
         if not self.crash_input_pov:
             self.logger.info(f"  [PathExplorationAgent] Although no crash-triggering PoV generated during path exploration, we get closer ^^")
             usable_testcases = max(len(self.history_testcases), len(self.vfunc_reached_testcases))
-            assert usable_testcases >= 3, "Failed to obtain enough useful test cases during path exploration!"
+            if usable_testcases < 3:
+                raise RuntimeError("Failed to obtain enough useful test cases during path exploration!")
         else:
             self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV successfully generated during path exploration!")
 
@@ -258,6 +263,14 @@ class PathExplorationAgent:
             )
             self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
+            # Check for budget exceeded - raise exception to terminate analysis
+            if result.get('stop_reason') == 'budget_exceeded':
+                current_cost = self.drill_agent.get_current_total_cost()
+                max_budget = self.drill_agent.config.max_budget_usd
+                raise BudgetExceededError(
+                    f"Budget exceeded in PathExplorationAgent: ${current_cost:.4f} >= ${max_budget:.2f}"
+                )
+
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
                 self.logger.warning(f"  [PathExplorationAgent] LLM agent loop did not complete: {error_msg}")
@@ -308,7 +321,7 @@ class PathExplorationAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Substep 2: Execute the command with memory limit
-        self.logger.info (f"  [PathExplorationAgent] Executing command: {command} in {round_dir}")
+        self.logger.info (f"  [PathExplorationAgent] Executing command: {command}")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
@@ -342,16 +355,17 @@ class PathExplorationAgent:
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
 
         # Substep 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
-        self.logger.debug(f"  [PathExplorationAgent] LLVM_PROFILE_FILE = {profraw_path}")
         if not os.path.exists(profraw_path): # Check if profraw file has been generated
-            self.logger.warning(f"  [PathExplorationAgent] Failed to find this profraw file!!") # Maybe the binary was not well-instrumented or the execution failed early...
+            self.logger.warning(f"  [PathExplorationAgent] Failed to find profraw file at: {profraw_path}") # Maybe the binary was not well-instrumented or the execution failed early...
             return exit_code, exec_output
+        else:
+            self.logger.info(f"  [PathExplorationAgent] Found profraw file at: {profraw_path}")
 
         try:
             # Here we should already have llvm profraw file in current round directory.
             self.llvm_cov_utils.update_profile_data(profraw_path) # Transform profraw to profdata internally, but the JSON _coverage_data will be lazy-loaded.
             if os.path.exists(self.llvm_cov_utils.profdata_path):
-                self.logger.info(f"  [PathExplorationAgent] Current cov profdata file at: {self.llvm_cov_utils.profdata_path}")
+                self.logger.info(f"  [PathExplorationAgent] Current cov profdata file found at: {self.llvm_cov_utils.profdata_path}")
             return exit_code, exec_output
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to convert profraw to profdata: {e}")
@@ -360,9 +374,10 @@ class PathExplorationAgent:
     def _collect_coverage_feedback(self) -> Tuple[str, List[Dict]]: # No LLM needed
         # Collect function-level coverage feedback along the vulnerable crash backtrace.
         # Update: Now we only return two items.
-        print("")
+        self.logger.debug("")
         self.logger.info(f"  [PathExplorationAgent] Step3: Collecting coverage feedback...")
-        assert self.llvm_cov_utils is not None, "LLVMCovUtils not initialized before collecting coverage!" # Should never happen
+        if self.llvm_cov_utils is None:
+            raise RuntimeError("LLVMCovUtils not initialized before collecting coverage!")
 
         # Substep 1: Use `llvm-cov report` to get overall coverage summary. 
         # This is helpful for examining if we have usable coverage data at all.
@@ -418,7 +433,7 @@ class PathExplorationAgent:
             else:
                 # Function not found in coverage data - maybe caused by compiler optimizations
                 # TODO: FIX: Here we meet too many failures/fallbacks!!! Jepordizes the analysis...
-                self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage: {e} for {frame['function_name']}.  Maybe caused by compiler optimizations (omitted)...")
+                self.logger.warning(f"  [PathExplorationAgent] Failed to get function coverage for {frame['function_name']}.  Maybe caused by compiler optimizations (omitted)...")
                 updated_frame.update({
                     'failed_getting_cov'   : True,
                     'func_executed'        : False,  # Placeholder values
@@ -428,7 +443,6 @@ class PathExplorationAgent:
 
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
         sorted_cov_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
-        # print(repr(sorted_cov_frames)) # For debug
 
         return cov_report, sorted_cov_frames
 
@@ -490,9 +504,9 @@ class PathExplorationAgent:
         with open(os.path.join(round_dir, "coverage_record.md"), "w") as f:
             f.write(formatted_cov_info)
             f.write(f"Overall Coverage Report:\n{cov_report}") # For debug
-        
-        print(formatted_cov_info)
-        print(f"Overall Coverage Report:\n{cov_report}") # For debug
+
+        self.logger.debug(f"\n{formatted_cov_info}")
+        self.logger.debug(f"Overall Coverage Report:\n{len(cov_report.split('\n'))} lines")
         return formatted_cov_info
 
 
@@ -519,7 +533,7 @@ class PathExplorationAgent:
         # Check for "segmentation fault" (crash) - this is our target!
         # Exit code 139 = 128 + 11 (SIGSEGV signal) (-11 = SIGSEGV on some systems)
         if exit_code == 139 or exit_code == -11:
-            self.logger.warning(f"  [PathExplorationAgent] *** SEGMENTATION FAULT detected (exit code {exit_code}) ***")
+            self.logger.warning(f"  [PathExplorationAgent] SEGMENTATION FAULT detected (exit code {exit_code})")
             return True  # Crash input pov found
 
         # Check for other interesting exit codes
@@ -563,47 +577,49 @@ class PathExplorationAgent:
             self.crash_input_pov['saved_pov_path'] = pov_output_path
 
             # Log the crash discovery
-            self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND ***")
+            self.logger.info(f"  [PathExplorationAgent] *** CRASH INPUT POV FOUND in PEA {self.current_exp_iteration} ***")
             self.logger.info(f"  [PathExplorationAgent] Test case: {test_case_path}")
-            self.logger.info(f"  [PathExplorationAgent] Iteration: {self.current_exp_iteration}")
             self.logger.info(f"  [PathExplorationAgent] Content size: {len(crash_input_content)} bytes")
 
-            # Print crash information to console for visibility
-            print("\n")
-            print("=" * 80)
-            print("CRASH INPUT POV DISCOVERED")
-            print("=" * 80)
-            print(f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!")
-            print(f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}")
-            print(f"Exit Code:       {exit_code}")
-            print(f"Test Case Path:  {test_case_path}")
-            print(f"Content Size:    {len(crash_input_content)} bytes")
-            print(f"\n--- Test Case Content (hex) ---")
-            # Print hex representation for binary data
+            # Log crash information for visibility
+            crash_info_lines = [
+                "",
+                "=" * 80,
+                "CRASH INPUT POV DISCOVERED",
+                "=" * 80,
+                f"PathExplorationAgent has discovered a crashing input that triggers a segmentation fault!",
+                f"Iteration:       {self.current_exp_iteration}/{self.max_exp_iterations}",
+                f"Exit Code:       {exit_code}",
+                f"Test Case Path:  {test_case_path}",
+                f"Content Size:    {len(crash_input_content)} bytes",
+                "",
+                "--- Test Case Content (hex) ---"
+            ]
+            # Add hex representation for binary data
             hex_str = crash_input_content.hex()
-            for i in range(0, min(len(hex_str), 512), 64):  # Print first 256 bytes in hex
-                print(hex_str[i:i+64])
+            for i in range(0, min(len(hex_str), 512), 64):  # First 256 bytes in hex
+                crash_info_lines.append(hex_str[i:i+64])
             if len(hex_str) > 512:
-                print(f"... ({len(crash_input_content) - 256} more bytes)")
+                crash_info_lines.append(f"... ({len(crash_input_content) - 256} more bytes)")
 
-            # Try to print as text if it's printable
-            try:
-                text_content = crash_input_content.decode('utf-8', errors='replace')
-                if text_content.isprintable() or '\n' in text_content:
-                    print(f"\n--- Test Case Content (text) ---")
-                    print(text_content)  # Print all!
-                    # print(text_content[:500])  # Print first 500 chars
-                    # if len(text_content) > 500:
-                    #     print(f"... ({len(text_content) - 500} more chars)")
-            except:
-                pass
+            # Try to add text if it's printable
+            # try:
+            #     text_content = crash_input_content.decode('utf-8', errors='replace')
+            #     if text_content.isprintable() or '\n' in text_content:
+            #         crash_info_lines.append("")
+            #         crash_info_lines.append("--- Test Case Content (text) ---")
+            #         crash_info_lines.append(text_content)
+            # except:
+            #     pass
 
-            print(f"\n--- Execution Output ---")
-            print(exec_output[:1000])  # Print first 1000 chars of output
-            if len(exec_output) > 1000:
-                print(f"... ({len(exec_output) - 1000} more chars)")
-            print("=" * 80)
-            print("\n")
+            crash_info_lines.append("--- Execution Output ---")
+            crash_info_lines.append(exec_output[:500])
+            if len(exec_output) > 500:
+                crash_info_lines.append(f"... ({len(exec_output) - 500} more chars)")
+            crash_info_lines.append("=" * 80)
+            crash_info_lines.append("")
+
+            self.logger.debug("\n".join(crash_info_lines))
 
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Failed to read crash input: {e}")

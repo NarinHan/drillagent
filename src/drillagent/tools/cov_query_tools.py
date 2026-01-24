@@ -46,6 +46,9 @@ class FunctionCovTool(AgentTool):
         # Maximum output lines
         self.max_output_lines = 500
 
+        # Maximum output characters (to control context size)
+        self.max_output_chars = 15000
+
     def name(self) -> str:
         return "coverage_query"
 
@@ -211,11 +214,12 @@ class FunctionCovTool(AgentTool):
                 timeout=self.timeout
             )
 
-            # Step 5: Truncate output by line count
+            # Step 5: Truncate output by line count and character count
             stdout = result.stdout
             stderr = result.stderr
             truncated = False
 
+            # First, truncate by line count
             stdout_lines = stdout.split('\n')
             if len(stdout_lines) > self.max_output_lines:
                 stdout = '\n'.join(stdout_lines[:self.max_output_lines])
@@ -228,9 +232,34 @@ class FunctionCovTool(AgentTool):
                 stderr += f"\n\n... [STDERR TRUNCATED: showing first {self.max_output_lines} of {len(stderr_lines)} lines]"
                 truncated = True
 
+            # Then, truncate by character count (to control context size)
+            if len(stdout) > self.max_output_chars:
+                # Truncate at line boundary
+                truncated_stdout = stdout[:self.max_output_chars]
+                last_newline = truncated_stdout.rfind('\n')
+                if last_newline > self.max_output_chars * 0.8:
+                    stdout = truncated_stdout[:last_newline]
+                else:
+                    stdout = truncated_stdout
+                stdout += f"\n\n... [OUTPUT TRUNCATED: {len(result.stdout)} chars total, showing first {self.max_output_chars}]"
+                truncated = True
+
+            if len(stderr) > self.max_output_chars:
+                truncated_stderr = stderr[:self.max_output_chars]
+                last_newline = truncated_stderr.rfind('\n')
+                if last_newline > self.max_output_chars * 0.8:
+                    stderr = truncated_stderr[:last_newline]
+                else:
+                    stderr = truncated_stderr
+                stderr += f"\n\n... [STDERR TRUNCATED: {len(result.stderr)} chars total, showing first {self.max_output_chars}]"
+                truncated = True
+
             # Build response
+            # success: indicates tool execution succeeded (not blocked, not timed out)
+            # command_success: indicates the command itself returned exit_code 0
             response = {
                 "success": True,
+                "command_success": result.returncode == 0,
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": result.returncode,

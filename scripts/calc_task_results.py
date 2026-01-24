@@ -26,6 +26,17 @@ def find_final_pov_files(task_dir: Path) -> list[Path]:
     return pov_files
 
 
+def find_variant_pov_files(task_dir: Path) -> list[Path]:
+    """Find all variant-pov- files in a task directory."""
+    variant_files = []
+
+    for f in task_dir.iterdir():
+        if f.is_file() and f.name.startswith("variant-pov-"):
+            variant_files.append(f)
+
+    return variant_files
+
+
 def get_file_mtime(filepath: Path) -> datetime:
     """Get the modification time of a file."""
     return datetime.fromtimestamp(filepath.stat().st_mtime)
@@ -44,6 +55,7 @@ def analyze_output_dir(output_dir: Path) -> dict:
     results = {
         "successful_tasks": [],
         "failed_tasks": [],
+        "newfind_tasks": [],
         "total_tasks": 0,
     }
 
@@ -70,7 +82,20 @@ def analyze_output_dir(output_dir: Path) -> dict:
                 "created_time": mtime.strftime("%Y-%m-%d %H:%M:%S"),
             })
         else:
-            results["failed_tasks"].append(task_name)
+            # Check for variant-pov files (newfind)
+            variant_files = find_variant_pov_files(task_dir)
+            if variant_files:
+                latest_variant = max(variant_files, key=lambda f: f.stat().st_mtime)
+                mtime = get_file_mtime(latest_variant)
+
+                results["newfind_tasks"].append({
+                    "task_name": task_name,
+                    "pov_path": str(latest_variant.resolve()),
+                    "created_time": mtime.strftime("%Y-%m-%d %H:%M:%S"),
+                    "variant_count": len(variant_files),
+                })
+            else:
+                results["failed_tasks"].append(task_name)
 
     return results
 
@@ -79,6 +104,7 @@ def print_results(results: dict):
     """Print the analysis results."""
     successful = results["successful_tasks"]
     failed = results["failed_tasks"]
+    newfind = results["newfind_tasks"]
     total = results["total_tasks"]
 
     print("=" * 80)
@@ -86,6 +112,7 @@ def print_results(results: dict):
     print("=" * 80)
     print(f"Total tasks: {total}")
     print(f"Successful:  {len(successful)}")
+    print(f"Newfind:     {len(newfind)}")
     # print(f"Failed:      {len(failed)}")
     # print(f"Success rate: {len(successful) / total * 100:.1f}%" if total > 0 else "N/A")
     print()
@@ -102,6 +129,24 @@ def print_results(results: dict):
             print()
             successful_tasks_str += f"{task['task_name']},"
 
+    newfind_tasks_str = ""
+    if newfind:
+        print("-" * 80)
+        print("NEWFIND TASKS (variant-pov):")
+        print("-" * 80)
+        for task in newfind:
+            print(f"Task: {task['task_name']}")
+            print(f"  POV file: {task['pov_path']}")
+            print(f"  Created:  {task['created_time']}")
+            print(f"  Variants: {task['variant_count']}")
+            print()
+            newfind_tasks_str += f"{task['task_name']},"
+
+    failed_tasks_str = ""
+    if failed:
+        for task_name in failed:
+            failed_tasks_str += f"{task_name},"
+
     # if failed:
     #     print()
     #     print("-" * 80)
@@ -111,7 +156,9 @@ def print_results(results: dict):
     #         print(f"  - {task_name}")
 
     print()
-    print("All successful tasks: " + successful_tasks_str)
+    print("All successful tasks: " + successful_tasks_str + "\n")
+    print("All newfind tasks: " + newfind_tasks_str + "\n")
+    print("All failed tasks: " + failed_tasks_str)
     print("=" * 80)
 
 

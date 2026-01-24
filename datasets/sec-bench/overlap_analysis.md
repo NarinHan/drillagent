@@ -66,6 +66,58 @@ Total: 11
 10. libredwg.cve-2021-28237
 11. mruby.cve-2018-14337
 
+## Union Instances
+
+Total: 47 (4 are special cases)
+
+1. exiv2.cve-2017-17669
+2. exiv2.cve-2017-18005
+3. exiv2.cve-2018-17229
+4. exiv2.cve-2018-17230
+5. exiv2.cve-2020-18899
+6. faad2.cve-2018-20195
+7. faad2.cve-2018-20357
+8. faad2.cve-2018-20359
+9. faad2.cve-2018-20361
+10. faad2.cve-2018-20362
+11. gpac.cve-2021-32438
+12. gpac.cve-2023-0819
+13. gpac.cve-2023-3291
+14. gpac.cve-2023-42298 ❌
+15. gpac.cve-2023-4758
+16. gpac.cve-2023-5586 ❌
+17. gpac.cve-2024-0321
+18. imagemagick.cve-2017-11539
+19. imagemagick.cve-2017-12641
+20. imagemagick.cve-2017-12644
+21. imagemagick.cve-2017-14400
+22. imagemagick.cve-2017-18022
+23. imagemagick.cve-2018-5246
+24. imagemagick.cve-2018-5247
+25. imagemagick.cve-2018-5248
+26. imagemagick.cve-2019-13297
+27. imagemagick.cve-2019-13301
+28. imagemagick.cve-2019-13303
+29. imagemagick.cve-2019-13306
+30. imagemagick.cve-2019-13309
+31. imagemagick.cve-2022-48541
+32. liblouis.cve-2023-26768
+33. libmodbus.cve-2022-0367
+34. libplist.cve-2017-5545
+35. libredwg.cve-2021-28237
+36. libsndfile.cve-2018-19432
+37. libxls.cve-2023-38855
+38. matio.cve-2019-9036 ❌
+39. matio.cve-2020-19497
+40. mruby.cve-2018-14337
+41. njs.cve-2022-27007
+42. openjpeg.cve-2016-10507
+43. openjpeg.cve-2016-7445
+44. openjpeg.cve-2017-14041
+45. readstat.cve-2018-5698 ❌
+46. upx.cve-2017-15056
+47. wabt.cve-2022-43282
+
 ## Insights
 
 - **Overlap rate**: 14/25 = 56% of swea_sonnet's successes are also in oh_sonnet

@@ -19,6 +19,7 @@ from drillagent.prompts.CrashTriggerAgent_prompt import (
 from drillagent.utils.llvm_cov import LLVMCovUtils
 from drillagent.utils.utils import *
 from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
+from drillagent.models import BudgetExceededError
 class CrashTriggerAgent:
     # Responsible for triggering crashes based on analyzed paths
     def __init__(self, drill_agent: 'DrillAgent'):
@@ -32,7 +33,7 @@ class CrashTriggerAgent:
         self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 15 # 15 or 20 or 25
+        self.max_generation_turns = 6 # Larger turns will cause input context explosion.
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
@@ -70,7 +71,7 @@ class CrashTriggerAgent:
             self.logger.warning(f"[CrashTriggerAgent] No price config for model: {model_name}")
 
     def run(self) -> None:
-        self.logger.info(f"  [CrashTriggerAgent] Starting running. Checking previous path exploration results...  (tools num: {len(self.tools_for_generation)})")
+        self.logger.info(f"  [CrashTriggerAgent] Starting running. (tools num: {len(self.tools_for_generation)})")
 
         # Clear all the previous roundN directories if exist
         for i in range(1, self.max_trigger_iterations+1+4):
@@ -83,14 +84,15 @@ class CrashTriggerAgent:
         if path_agent is not None:
             # Check if we already have a crash input
             if path_agent.crash_input_pov is not None:
+                self.logger.info("  [CrashTriggerAgent] Checking for previous crash input from path exploration phase...")
                 cur_crash_type, is_valid = self.drill_agent.validate_pov(path_agent.crash_command)
                 if is_valid:
                     PEA_pov_data = path_agent.crash_input_pov
                     PEA_pov_data['crash_type'] = cur_crash_type
+                    crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
                     if cur_crash_type == self.drill_agent.gt_crash_type:
                         # Save the crash input as final PoV
                         self.logger.info(f"  [CrashTriggerAgent] Valid crash input found from path exploration phase! Crash: {cur_crash_type}")
-                        crash_pov_path = path_agent.crash_input_pov.get('saved_pov_path')
                         self._record_final_pov(PEA_pov_data, crash_pov_path)
                         return
                     else:
@@ -112,11 +114,12 @@ class CrashTriggerAgent:
                 self.useful_testcase_paths.extend(list(reversed(path_agent.history_testcases))[:remaining])
             # Ensure we have at most 3 testcases
             self.useful_testcase_paths = self.useful_testcase_paths[:3]
-            assert len(self.useful_testcase_paths) > 0, "No useful test cases found from path exploration!"
+            if len(self.useful_testcase_paths) == 0:
+                raise RuntimeError("No useful test cases found from path exploration!")
 
         # Main loop for crash triggering attempts.
         for iteration in range(1, self.max_trigger_iterations + 1):
-            print("\n" + "=" * 80)
+            self.logger.debug("\n" + "=" * 60)
             self.logger.info(f"  [CrashTriggerAgent] Iteration {iteration}/{self.max_trigger_iterations}")
             self.current_trigger_iteration = iteration
 
@@ -170,8 +173,12 @@ class CrashTriggerAgent:
                 else:
                     self.logger.info(f"  [CrashTriggerAgent] PoV at iteration {iteration} did not trigger crash, continuing...")
 
+            except BudgetExceededError:
+                # Budget exceeded - re-raise to terminate analysis
+                raise
             except Exception as e:
                 self.logger.error(f"  [CrashTriggerAgent] Error in iteration {iteration}: {e}", exc_info=True)
+                self.logger.info(f"  [CrashTriggerAgent] Continuing to next iteration...")
                 continue
 
         # Summary
@@ -268,6 +275,14 @@ class CrashTriggerAgent:
             )
             self._accumulate_token_usage(result, self.drill_agent.basic_llm.model_name)
 
+            # Check for budget exceeded - raise exception to terminate analysis
+            if result.get('stop_reason') == 'budget_exceeded':
+                current_cost = self.drill_agent.get_current_total_cost()
+                max_budget = self.drill_agent.config.max_budget_usd
+                raise BudgetExceededError(
+                    f"Budget exceeded in CrashTriggerAgent: ${current_cost:.4f} >= ${max_budget:.2f}"
+                )
+
             if not result['success']:
                 error_msg = result.get('error', 'Unknown error')
                 self.logger.warning(f"  [CrashTriggerAgent] LLM agent loop did not complete: {error_msg}")
@@ -275,9 +290,9 @@ class CrashTriggerAgent:
 
             self.logger.info(f"  [CrashTriggerAgent] LLM completed in {result.get('iterations', 'N/A')} iteration(s)")
             self.logger.info(f"  [CrashTriggerAgent] Stop reason: {result.get('stop_reason', 'N/A')}")
-            response = result.get('final_response', '')
-            if response:
-                self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
+            # response = result.get('final_response', '')
+            # if response:
+            #     self.logger.debug(f"  [CrashTriggerAgent] LLM Response: {response[:500]}...")
             # Show the current round directory contents.
             _, output = list_directory(round_dir)
             self.logger.debug(f"  [CrashTriggerAgent] ls -lh {round_dir}:\n{output}")
@@ -294,19 +309,19 @@ class CrashTriggerAgent:
             matching_files = glob.glob(search_pattern)
             if not matching_files:
                 raise RuntimeError(
-                    f"PoV file was not created. Expected: {pov_path} or {pov_path}.* "
+                    f"PoV candidate file was not created. Expected: {pov_path} or {pov_path}.* "
                     f"LLM may have failed to use write_file tool."
                 )
             # Update the path using the first matching file (should only be one)
             pov_path = matching_files[0]
-            self.logger.info(f"  [CrashTriggerAgent] Found PoV with extension: {pov_path}")
+            self.logger.info(f"  [CrashTriggerAgent] Found PoV candidate with extension: {pov_path}")
 
         file_size = os.path.getsize(pov_path)
         if file_size == 0:
-            raise RuntimeError(f"PoV file at {pov_path} is empty. LLM may have failed to write content.")
+            raise RuntimeError(f"PoV candidate file is empty at {pov_path}. LLM may have failed to write content.")
 
         self.logger.info(f"  [CrashTriggerAgent] PoV candidate successfully written to: {pov_path}")
-        self.logger.debug(f"  [CrashTriggerAgent] PoV file size: {file_size} bytes")
+        self.logger.debug(f"  [CrashTriggerAgent] PoV candidate file size: {file_size} bytes")
         return pov_path
 
     def _execute_pov_candidate(self, command: str) -> Tuple[int, str]: # No LLM needed
@@ -320,7 +335,7 @@ class CrashTriggerAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Execute the command
-        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command} (in {round_dir})")
+        self.logger.info(f"  [CrashTriggerAgent] Executing command: {command}")
         try:
             # Use subprocess to execute the command, set timeout to avoid hang
             result = subprocess.run(
@@ -372,7 +387,8 @@ class CrashTriggerAgent:
         Returns:
             The path where the final PoV is saved
         """
-        assert pov_path is not None, f"Crash input PoV path ({pov_path}) not found!"
+        if pov_path is None:
+            raise ValueError(f"Crash input PoV path ({pov_path}) not found!")
         # Generate timestamp and filename for the final PoV
         timestamp = datetime.now().strftime("%y%m%d-%H%M")
         final_pov_filename = f"final-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"
@@ -393,7 +409,8 @@ class CrashTriggerAgent:
         """
         Record and save the PoV with unexpected sanitizer crash to the output directory.
         """
-        assert pov_path is not None, f"Crash input PoV path ({pov_path}) not found!"
+        if pov_path is None:
+            raise ValueError(f"Crash input PoV path ({pov_path}) not found!")
         # Generate timestamp and filename for the final PoV
         timestamp = datetime.now().strftime("%y%m%d-%H%M")
         cur_pov_filename = f"variant-pov-{self.drill_agent.project_name}-{timestamp}-CTA-round{self.current_trigger_iteration}"

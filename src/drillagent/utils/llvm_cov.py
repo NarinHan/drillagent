@@ -42,7 +42,8 @@ class LLVMCovUtils:
     def update_profile_data(self, profraw_path: str) -> None:
         # First clear self.profdata_path and self._coverage_data. Then re-generate these two fields from profraw_path.
         # Validate profraw_path format
-        assert profraw_path.endswith('.profraw'), "Suffix of profraw_path must be .profraw"
+        if not profraw_path.endswith('.profraw'):
+            raise ValueError("Suffix of profraw_path must be .profraw")
 
         # Clear cached coverage data before updating
         self.clear_data()
@@ -407,6 +408,7 @@ class LLVMCovUtils:
             self.binary_path,
             f'-instr-profile={self.profdata_path}'
         ]
+        # print(f"Running command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"llvm-cov command failed: {result.stderr}")
@@ -446,7 +448,8 @@ class LLVMCovUtils:
 
         # Return main HTML file path
         index_path = os.path.join(output_dir, 'index.html')
-        assert os.path.isfile(index_path), "llvm-cov: HTML report generation failed."
+        if not os.path.isfile(index_path):
+            raise RuntimeError("llvm-cov: HTML report generation failed.")
         return index_path
 
     def clear_data(self) -> None:

@@ -62,7 +62,7 @@ class DrillAgent:
         self.crash_agent: CrashTriggerAgent            = None
 
         # Intermediate analysis results
-        self.vulnerability_info: VulnInfo = VulnInfo() # For vulnerability analysis results (e.g., call trace, root cause)
+        self.vulnerability_info: VulnInfo = None # For vulnerability analysis results (e.g., call trace, root cause)
         self.project_info       = None # For project-level analysis results # TBD
 
         # Final analysis results
@@ -83,15 +83,15 @@ class DrillAgent:
         except Exception as e:
             self.logger.warning(f"Failed to initialize LLM history log: {e}")
 
-        self._init_components()
-
-        # Prepare token usage tracking
+        # Prepare token usage tracking (must be before _init_components for budget_checker)
         self.overall_token_usage = {
             "VAA" : TokenUsage(),
             # "InstrAgent" : TokenUsage(), # skipped for now
             "PEA" : TokenUsage(),
             "CTA" : TokenUsage()
         }
+
+        self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
         self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
@@ -144,7 +144,8 @@ class DrillAgent:
                 model_name=self.config.basic_model,
                 api_key=self.config.api_key,
                 logger=self.logger,
-                output_dir=self.output_dir
+                output_dir=self.output_dir,
+                budget_checker=self.is_budget_exceeded
             )
             self.logger.info(f"✓ Basic LLM initialized: {self.basic_llm.provider}/{self.basic_llm.model_name}")
 
@@ -156,7 +157,8 @@ class DrillAgent:
                     model_name=reasoning_model,
                     api_key=self.config.api_key,
                     logger=self.logger,
-                    output_dir=self.output_dir
+                    output_dir=self.output_dir,
+                    budget_checker=self.is_budget_exceeded
                 )
                 self.logger.info(f"✓ Reasoning LLM initialized: {self.reasoning_llm.provider}/{self.reasoning_llm.model_name}")
             else:
@@ -172,7 +174,8 @@ class DrillAgent:
                     model_name=low_cost_model,
                     api_key=self.config.api_key,
                     logger=self.logger,
-                    output_dir=self.output_dir
+                    output_dir=self.output_dir,
+                    budget_checker=self.is_budget_exceeded
                 )
                 self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
             else:
@@ -187,7 +190,8 @@ class DrillAgent:
                     model_name=low_cost_model,
                     api_key=self.config.api_key,
                     logger=self.logger,
-                    output_dir=self.output_dir
+                    output_dir=self.output_dir,
+                    budget_checker=self.is_budget_exceeded
                 )
                 self.logger.info(f"✓ Low-cost LLM initialized: {self.low_cost_llm.provider}/{self.low_cost_llm.model_name}")
         
@@ -203,7 +207,6 @@ class DrillAgent:
     def run(self) -> Dict[str, Any]:
         # Main orchestration workflow
         # Returns: Dict containing analysis results and generated PoVs
-        # print("")
         self.logger.info("=" * 60)
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
@@ -242,6 +245,7 @@ class DrillAgent:
                     return self.generate_report()
 
             # Phase 3: Path Exploration with the coverage feedback
+            self._update_actual_binary_path(self.config.target_repo_path) # Necessary before PEA
             if not self.skip_path_exploration:
                 start_time = time.time()
                 self._phase_path_exploration()
@@ -308,6 +312,17 @@ class DrillAgent:
             f"cost=${usage.cost_total_usd:.6f}"
         )
 
+    def get_current_total_cost(self) -> float:
+        """Get the current total cost (USD) across all phases."""
+        total = 0.0
+        for usage in self.overall_token_usage.values():
+            total += usage.cost_total_usd
+        return total
+
+    def is_budget_exceeded(self) -> bool:
+        """Check if the budget has been exceeded."""
+        return self.get_current_total_cost() >= self.config.max_budget_usd
+
     def _phase_vulnerability_analysis(self):
         """Phase 1: Analyze vulnerability using LLM"""
         print("\n")
@@ -343,7 +358,7 @@ class DrillAgent:
 
             # Print the formatted vulnerability analysis results
             vuln_info_str = self.vulnerability_info.format_output()
-            print(vuln_info_str)
+            self.logger.info("Vulnerability Analysis Returns:\n" + vuln_info_str)
             self.logger.info("✓ Vulnerability analysis completed")
 
         except Exception as e:
@@ -548,6 +563,7 @@ class DrillAgent:
                 self.vulnerability_info.actual_binary_path = actual_bin_path
             else:
                 self.vulnerability_info.actual_binary_path = self.vulnerability_info.binary_path # necessary
+                self.vuln_agent.store_to_cache() # Update cache with the actual_binary_path
             self.logger.info(f"✓ Entry program and actual binary path: \n{36*' '+self.vulnerability_info.binary_path} \n{36*' '+self.vulnerability_info.actual_binary_path}")
         else:
             pass # do nothing
@@ -602,13 +618,15 @@ class DrillAgent:
         self.logger.info(f"  [DrillAgent] PoV validation command: {command}")
         exit_code, exec_output = execute_command(command, env)
         if detect_sanitizer_triggered(exec_output):
-            self.logger.info(f"  [DrillAgent] PoV validation successful: Sanitizer error detected! Exit code: {exit_code}")
-            print(exec_output)
+            self.logger.info(f"  [DrillAgent] PoV triggered crash successful: Exit code: {exit_code}")
+            self.logger.info(f"  [DrillAgent] Sanitizer output:\n{exec_output}")
             # Crash successfully triggered! Triage the crash type further.
             cur_crash_type = get_sanitizer_crash_type(exec_output)
+            self.logger.info(f"  [DrillAgent] Detected sanitizer crash type: {cur_crash_type}")
             return cur_crash_type, True
         else:
             self.logger.info(f"  [DrillAgent] PoV validation: No sanitizer error detected. Exit code: {exit_code}")
+            self.logger.info(f"  [DrillAgent] Exec validate output:\n{exec_output}")
 
         return "", False
 
@@ -650,8 +668,8 @@ class DrillAgent:
 
 
 @dataclass
-class TokenUsage:
-    input_tokens: int = 0
+class TokenUsage: # For phase-level usage tracking
+    input_tokens:  int = 0
     output_tokens: int = 0
     cost_input_usd: float = 0.0
     cost_output_usd: float = 0.0

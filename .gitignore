@@ -5,7 +5,7 @@ logs/
 cache/
 output/
 workspace/
-test_output/
+eval/
 gt_povs/
 success_povs/
 tmp*
@@ -15,6 +15,7 @@ src/drillagent/scripts/lhy_*
 scripts/lhy_*
 
 # For LLM
+mykeys/
 openai*.key
 claude*.key
 gemini*.key

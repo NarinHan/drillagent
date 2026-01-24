@@ -10,7 +10,7 @@ Key features:
 
 Usage patterns:
 1. Simple text generation:
-   llm = LLMInterface(provider="claude", model_name="claude-3-7-sonnet-20250219")
+   llm = LLMInterface(provider="claude", model_name="claude-sonnet-4-5-20250929")
    response = llm.generate(prompt="What is Python?")
 
 2. Manual tool calling (backward compatible):
@@ -73,8 +73,13 @@ class InvalidResponseError(LLMError):
     pass
 
 
+class BudgetExceededError(LLMError):
+    """Budget limit reached - analysis should be terminated"""
+    pass
+
+
 @dataclass
-class UsageStats:
+class UsageStats: # For run_agent_loop local usage
     """Track LLM API usage statistics"""
     total_tokens: int = 0
     prompt_tokens: int = 0
@@ -215,7 +220,7 @@ class LLMInterface:
 
     Example:
         # Create instance (supports multiple instances with different models)
-        llm = LLMInterface(provider="claude", model_name="claude-3-7-sonnet-20250219")
+        llm = LLMInterface(provider="claude", model_name="claude-sonnet-4-5-20250929")
 
         # Automatic agent loop (recommended)
         result = llm.run_agent_loop(
@@ -238,29 +243,32 @@ class LLMInterface:
         api_key: Optional[str] = None,
         api_key_file: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
-        output_dir: Optional[str] = None
+        output_dir: Optional[str] = None,
+        budget_checker: Optional[Callable[[], bool]] = None
     ):
         """
         Initialize LLM interface.
 
         Args:
             provider: "claude" or "openai"
-            model_name: Model name (default: claude-3-7-sonnet-20250219 or gpt-4-turbo)
+            model_name: Model name (default: claude-sonnet-4-5-20250929 or gpt-4o)
             api_key: API key string (takes precedence)
             api_key_file: Path to file containing API key
             logger: Optional logger instance
             output_dir: Optional output directory for logging LLM interactions
+            budget_checker: Optional callback that returns True if budget is exceeded
         """
         self.provider = provider.lower()
         self.logger = logger or logging.getLogger(__name__)
         self.output_dir = output_dir  # For LLM interaction logging
+        self.budget_checker = budget_checker  # Callback to check if budget exceeded
 
         # Set default model names
         if model_name is None:
             if self.provider == "claude":
-                model_name = "claude-3-7-sonnet-20250219"
+                model_name = "claude-sonnet-4-5-20250929"
             elif self.provider == "openai":
-                model_name = "gpt-4-turbo"
+                model_name = "gpt-4o"
             else:
                 raise ValueError(f"Unsupported provider: {provider}")
 
@@ -422,11 +430,25 @@ class LLMInterface:
                 * 'finish_tool_partial' - finish tool called with task_completed=partial
                 * 'end_turn'/'stop' - LLM stopped naturally without tool calls
                 * 'max_iterations' - reached iteration limit
+                * 'budget_exceeded' - budget limit reached before starting
                 * 'rate_limit_error'/'timeout_error'/'llm_error' - various errors
             - task_completed: Optional[str] - 'true'/'false'/'partial' (only when finish tool used)
             - error: Optional[str] - error message if failed (LHY: This content is from our own handling)
             - usage_stats: Dict - token usage statistics for this agent loop only
         """
+        # Check budget at the start of agent loop
+        if self.budget_checker and self.budget_checker():
+            self.logger.warning("Budget exceeded, skipping agent loop execution")
+            return {
+                'success': False,
+                'final_response': '',
+                'iterations': 0,
+                'conversation': None,
+                'stop_reason': 'budget_exceeded',
+                'error': 'Budget exceeded before starting agent loop',
+                'usage_stats': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'api_calls': 0}
+            }
+
         # Create local usage stats to track this agent loop's token consumption
         loop_usage_stats = UsageStats()
 
@@ -455,8 +477,7 @@ class LLMInterface:
                 # Only one iteration allowed - can only use write_file, execute_bash, finish
                 current_prompt = (
                     "CRITICAL: You have ONLY ONE iteration to complete this task. Make sure you will give a complete answer.\n"
-                    "If you are asked to generate a testcase or PoV file. You are allowed to use the following tools: write_file, execute_bash.\n\n"
-                    "You can:\n"
+                    "If you are asked to generate a testcase or PoV file. You are allowed to use the following tools: write_file, execute_bash.\n"
                     "1. Use write_file to generate the target PoV/testcase file (or a Python script that generates it)\n"
                     "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
                     "The task is as below.\n\n"
@@ -811,9 +832,8 @@ class LLMInterface:
                     current_prompt = (
                         "CRITICAL: This is your FINAL iteration. Make sure you will give a complete answer.\n\n"
                         "Theoretically, you should no longer perform tool calls.\n"
-                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration. "
-                        "You can:\n"
-                        "1. Use write_file to generate the target file (or a Python script that generates it)\n"
+                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration. \n"
+                        "1. You can use write_file to generate the target file (or a Python script that generates it)\n"
                         "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
                         "**Note that** this is your LAST response, and you won't be able to view the tool results!"
                     )
@@ -1229,7 +1249,7 @@ class LLMInterface:
                 'total_tokens': response.usage.total_tokens
             }
             # LHY: Output response.usage for debugging
-            print(f"From OpenAI response:" + json.dumps(current_call_usage))
+            self.logger.debug(f"From OpenAI response: " + json.dumps(current_call_usage))
 
         # Get stop_reason from response (OpenAI calls it finish_reason)
         stop_reason = response.choices[0].finish_reason if response.choices else "unknown"
@@ -1237,7 +1257,7 @@ class LLMInterface:
         # Parse response
         message = response.choices[0].message
         text_response = message.content or ""
-        print(f"LLM raw response content: {len(text_response)} chars.")  # LHY: Debug output
+        # print(f"LLM raw response content: {len(text_response)} chars.")  # LHY: Debug output
 
         tool_calls = []
         tool_calls_for_api = []
@@ -1256,9 +1276,11 @@ class LLMInterface:
                         "arguments": tool_call.function.arguments
                     }
                 })
-        print(f"LLM tool calls: {len(tool_calls)}")  # LHY: Debug output
+
+        tool_call_details = ""
         for tc in tool_calls:
-            print(f"  {tc['name']} with args {tc['arguments']}")  # LHY: Debug output
+            tool_call_details += f"  {tc['name']} with args {tc['arguments']}\n"
+        self.logger.debug(f"LLM raw response content: {len(text_response)} chars. LLM tool calls: {len(tool_calls)}\n{tool_call_details}\n") # LHY: Debug output
 
         # Build complete assistant message in OpenAI's official format
         assistant_message = {
