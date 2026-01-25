@@ -42,8 +42,9 @@ class VulnAnalysisAgent:
             self.max_rca_turns: int = 15
             self.normal_task_llm = self.drill_agent.basic_llm
 
-        # Vulnerability information container!!!!! 
+        # Vulnerability information container!!!!!
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
+        self.loaded_from_cache = False  # Flag to indicate if results were loaded from cache
 
     def _accumulate_token_usage(self, result: Dict[str, Any], model_name: str) -> None:
         usage = result.get("usage_stats") if isinstance(result, dict) else None
@@ -175,6 +176,7 @@ class VulnAnalysisAgent:
             self.clear_cache()
         # Try to examine if there is already a cached result and load from cache first.
         elif self.load_from_cache():
+                self.loaded_from_cache = True
                 self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
                 return self.vuln_info
         
@@ -225,7 +227,7 @@ class VulnAnalysisAgent:
 
         return self.vuln_info
 
-    def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report):
+    def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report) -> None:
         # Extract vulnerability information from sanitizer report using LLM with tools
         # LLM: Using new LLMInterface with automatic agent loop
         try:
@@ -259,6 +261,7 @@ class VulnAnalysisAgent:
             self.logger.debug(f"\n{response}") # for tmp debug
 
             # Extract JSON from response
+            # TODO: FIX: Why here it cannot extract information when using claude? Must have some bug...
             extracted_info = LLMInterface.extract_json_from_response(response)
             if not extracted_info:
                 raise ValueError("Could not extract JSON from LLM response")

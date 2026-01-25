@@ -99,6 +99,9 @@ class DrillAgent:
             "phase_crash_triggering": 0.0
         }
 
+        # Load historical overhead data from previous runs (for incremental runs)
+        self._load_historical_overhead()
+
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
@@ -230,7 +233,11 @@ class DrillAgent:
             if not self.skip_vulnerability_analysis:
                 start_time = time.time()
                 self._phase_vulnerability_analysis()
-                self.overall_time_usage["phase_vulnerability_analysis"] = time.time() - start_time
+                # Only update time if actual analysis was performed (not loaded from cache)
+                if self.vuln_agent and not self.vuln_agent.loaded_from_cache: 
+                    self.overall_time_usage["phase_vulnerability_analysis"] = time.time() - start_time
+                else:
+                    pass # Not really analyzed but loading from cache, skip time update
                 self._log_phase_token_usage("VAA", "Vulnerability Analysis")
 
             # Phase 2: Code Instrumentation
@@ -301,6 +308,42 @@ class DrillAgent:
             self.logger.info(f"Token usage saved to {tokens_overhead_path}")
         except Exception as e:
             self.logger.warning(f"Failed to save tokens overhead: {e}")
+
+    def _load_historical_overhead(self) -> None:
+        """Load historical time and token overhead from previous runs.
+
+        This enables incremental runs where some phases are skipped.
+        Without this, skipped phases would have their historical data overwritten with 0.
+        """
+        # Load historical time overhead
+        time_overhead_path = os.path.join(self.output_dir, "time_overhead.json")
+        if os.path.exists(time_overhead_path):
+            try:
+                with open(time_overhead_path, 'r') as f:
+                    historical_time = json.load(f)
+                for phase_key, value in historical_time.items():
+                    if phase_key in self.overall_time_usage:
+                        self.overall_time_usage[phase_key] = value
+                self.logger.info(f"Loaded historical time overhead from {time_overhead_path}")
+            except Exception as e:
+                self.logger.warning(f"Failed to load historical time overhead: {e}")
+
+        # Load historical token overhead
+        tokens_overhead_path = os.path.join(self.output_dir, "tokens_overhead.json")
+        if os.path.exists(tokens_overhead_path):
+            try:
+                with open(tokens_overhead_path, 'r') as f:
+                    historical_tokens = json.load(f)
+                for phase_key, usage_dict in historical_tokens.items():
+                    if phase_key in self.overall_token_usage:
+                        usage = self.overall_token_usage[phase_key]
+                        usage.input_tokens = usage_dict.get("input_tokens", 0)
+                        usage.output_tokens = usage_dict.get("output_tokens", 0)
+                        usage.cost_input_usd = usage_dict.get("cost_input_usd", 0.0)
+                        usage.cost_output_usd = usage_dict.get("cost_output_usd", 0.0)
+                self.logger.info(f"Loaded historical token overhead from {tokens_overhead_path}")
+            except Exception as e:
+                self.logger.warning(f"Failed to load historical token overhead: {e}")
 
     def _log_phase_token_usage(self, phase_key: str, phase_label: str) -> None:
         usage = self.overall_token_usage.get(phase_key)
