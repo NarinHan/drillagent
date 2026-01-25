@@ -33,6 +33,15 @@ class VulnAnalysisAgent:
         self.enhanced_tools: List['AgentTool'] = drill_agent.basic_tools + drill_agent.ast_grep_tools
         # Sometimes ast-grep may not be usable, so we keep both basic and enhanced toolsets.
 
+        # Max run_agent_loop rounds for root cause analysis
+        if self.config.model_provider.lower() == "claude":
+            # Really should control budget here, since sonnet is too expensive.
+            self.max_rca_turns: int = 8
+            self.normal_task_llm = self.drill_agent.low_cost_llm # TODO: Try to put this into use.
+        else:
+            self.max_rca_turns: int = 15
+            self.normal_task_llm = self.drill_agent.basic_llm
+
         # Vulnerability information container!!!!! 
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
 
@@ -246,7 +255,8 @@ class VulnAnalysisAgent:
             response = result['final_response']
             self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
             self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
-            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
+            self.logger.info(f"  [VulnAnalysisAgent] LLM Response size: {len(response)} chars")
+            self.logger.debug(f"\n{response}") # for tmp debug
 
             # Extract JSON from response
             extracted_info = LLMInterface.extract_json_from_response(response)
@@ -303,7 +313,7 @@ class VulnAnalysisAgent:
                 ),
                 tools=self.basic_tools,  # Provide tools to locate files if needed
                 system_prompt=VAA_system_prompt,
-                max_iterations=6,  # Allow a few iterations for file location
+                max_iterations=5,  # Allow a few iterations for file location
                 temperature=0.1,
                 max_tokens=4096,
                 continuation_prompt="Please continue transforming the call trace and provide the final JSON output."
@@ -381,6 +391,7 @@ class VulnAnalysisAgent:
                         current_frame_json = json.dumps(current_frame, indent=2)
 
                         # Invoke low-cost LLM (faster) to refine the line number of each stack frame
+                        self.logger.info(f"  [VulnAnalysisAgent] Using LLMInterface to refine line number of stack frame #{seq_num}...")
                         result = self.drill_agent.low_cost_llm.run_agent_loop(
                             task=VAA_call_trace_linenum_refine_prompt.format(
                                 project_name=self.config.project_name,
@@ -557,7 +568,6 @@ class VulnAnalysisAgent:
             free_trace_str = self.vuln_info.format_trace(self.vuln_info.free_trace)
 
             # Prepare the initial prompt
-            # TODO: Maybe we can identify critical stack frames in the crash trace during root cause analysis.
             user_prompt = VAA_root_cause_analysis_prompt.format(
                 project_name=self.config.project_name,
                 actual_repo_path=self.config.target_repo_path,
@@ -573,14 +583,14 @@ class VulnAnalysisAgent:
             )
 
             # Use LLMInterface for automatic tool calling and conversation management
-            self.logger.info("    Using LLMInterface for root cause analysis...")
+            self.logger.info("    Using LLMInterface to conduct root cause analysis...")
 
-            # Run more powerful reasoning LLM than basic LLMs. 
-            result = self.drill_agent.reasoning_llm.run_agent_loop(
+            # Run more powerful reasoning LLM than basic LLMs. (update: too expensive, still use basic_llm)
+            result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,
                 tools=self.enhanced_tools,  # Allow usage of enhanced code browsing tools for code exploration
                 system_prompt=VAA_system_prompt,
-                max_iterations=15,  # Allow up to 15 rounds of deep analysis
+                max_iterations=self.max_rca_turns,
                 temperature=0.3,
                 max_tokens=30720, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."
@@ -596,7 +606,7 @@ class VulnAnalysisAgent:
             self.vuln_info.root_cause = result['final_response']
             self.logger.info(f"    ✓ Root cause analysis complete in {result['iterations']} iteration(s)")
             self.logger.info(f"    Stop reason: {result['stop_reason']}")
-            self.logger.info(f"    Analysis: {self.vuln_info.root_cause[:200]}...")
+            self.logger.info(f"    RCA Results: {self.vuln_info.root_cause[:200]}...")
 
         except Exception as e:
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
@@ -634,7 +644,7 @@ class VulnAnalysisAgent:
             ),
             tools=self.basic_tools,
             system_prompt=VAA_system_prompt,
-            max_iterations=5,
+            max_iterations=4,
             temperature=0.1,
             max_tokens=4096,
             continuation_prompt="Please continue analyzing the script and provide the final JSON output with the actual binary path."

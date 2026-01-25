@@ -1177,8 +1177,7 @@ The task_completed field indicates your completion status:
                 "type": "string",
                 "description": (
                     "Final message summarizing the task outcome. "
-                    "Include: actions taken, results achieved, PoV file path (if generated), "
-                    "and any important observations or limitations encountered."
+                    "This message should be as brief as possible."
                 ),
                 "required": True
             },

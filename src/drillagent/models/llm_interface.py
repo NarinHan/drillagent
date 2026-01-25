@@ -713,7 +713,6 @@ class LLMInterface:
                                 )
                             except Exception as log_err:
                                 self.logger.warning(f"Failed to log agent loop end: {log_err}")
-                        # TODO: Do we make use of the incomplete response? Could be useful 🤔
                         return result
                     else:
                         # Unknown stop reason, assume complete
@@ -830,21 +829,22 @@ class LLMInterface:
                 if next_iteration == max_iterations:
                     # Next iteration is the last one: only write_file, execute_bash, finish tools available
                     current_prompt = (
-                        "CRITICAL: This is your FINAL iteration. Make sure you will give a complete answer.\n\n"
-                        "Theoretically, you should no longer perform tool calls.\n"
-                        "But if you are asked to generate a testcase or PoV file, you can still use the write_file and execute_bash tools for this iteration. \n"
-                        "1. You can use write_file to generate the target file (or a Python script that generates it)\n"
-                        "2. If you wrote a Python script, use execute_bash to run it (e.g., 'python3 /path/to/script.py')\n"
-                        "**Note that** this is your LAST response, and you won't be able to view the tool results!"
+                        "CRITICAL: This is your FINAL iteration. Make sure you give a complete answer now.\n\n"
+                        "By default, you should NOT call any tools - just provide your final answer directly.\n\n"
+                        "**Exception**: If your task requires generating a testcase or PoV file, you may use:\n"
+                        "- `write_file`: to create the target file (or a Python script that generates it)\n"
+                        "- `execute_bash`: to run the script if needed (e.g., run 'python3 /path/to/script.py' if you just created a python script)\n"
+                        "- `finish`: to indicate task completion\n\n"
+                        "**Warning**: This is your LAST response. You will NOT see any tool execution results!"
                     )
                 elif next_iteration == max_iterations - 1:
                     # Next iteration is second-to-last: warn this is the last chance to use all tools
                     current_prompt = (
                         "IMPORTANT: This is your second-to-last iteration (maybe your LAST chance to call tools).\n"
                         "After this iteration, you will need to provide your final answer based on all available context.\n"
-                        "Use tools wisely if needed, or provide your final answer now if you have enough information.\n"
-                        # "You can still use any tools in this iteration, but in the next iteration you will only be able to use write_file and execute_bash.\n\n"
-                        "- If you are asked to generate a testcase or PoV file, conduct generation operations now!\n"
+                        "Use tools wisely if needed, or get prepared to provide your final answer.\n"
+                        "- If you are asked to generate a testcase or PoV file, conduct file generation operations now!\n"
+                        "- In the next final iteration, you will only be able to use `write_file`, `execute_bash` and `finish`."
                         f"{continuation_prompt}"
                     )
                 else:
@@ -958,12 +958,12 @@ class LLMInterface:
         temperature: float,
         max_tokens: Optional[int]
     ) -> str:
-        """Generate using Claude API (simple text generation)"""
+        """Generate using Claude API (simple text generation) with streaming"""
         messages = [{"role": "user", "content": prompt}]
 
         # Claude API requires max_tokens, use default if not specified
-        # Use 65536 (64k) as default to allow maximum output length
-        effective_max_tokens = max_tokens if max_tokens is not None else 65536
+        # Use 64000 (64k) as default to allow maximum output length
+        effective_max_tokens = max_tokens if max_tokens is not None else 63999
 
         kwargs = {
             "model": self.model_name,
@@ -975,7 +975,10 @@ class LLMInterface:
         if system_prompt:
             kwargs["system"] = system_prompt
 
-        response = self.client.messages.create(**kwargs)
+        # Use streaming to avoid 10-minute timeout limit for long requests
+        with self.client.messages.stream(**kwargs) as stream:
+            # Wait for the complete response
+            response = stream.get_final_message()
 
         # Capture this call's usage stats
         current_call_usage = None
@@ -985,6 +988,8 @@ class LLMInterface:
                 'output_tokens': response.usage.output_tokens,
                 'total_tokens': response.usage.input_tokens + response.usage.output_tokens
             }
+            # LHY: Output response.usage for debugging
+            self.logger.debug(f"From Claude response: " + json.dumps(current_call_usage))
 
         # Get response text and stop reason
         text_response = response.content[0].text
@@ -1051,6 +1056,8 @@ class LLMInterface:
                 'completion_tokens': response.usage.completion_tokens,
                 'total_tokens': response.usage.total_tokens
             }
+            # LHY: Output response.usage for debugging
+            self.logger.debug(f"From OpenAI response: " + json.dumps(current_call_usage))
 
         # Get response text and stop reason
         text_response = response.choices[0].message.content
@@ -1086,7 +1093,7 @@ class LLMInterface:
         temperature: float,
         max_tokens: Optional[int]
     ) -> Tuple[str, List[Dict], Dict, str, Optional[Dict[str, int]]]:
-        """Claude-specific tool calling implementation"""
+        """Claude-specific tool calling implementation with streaming"""
 
         # Convert tools to Claude's schema
         tool_schemas = [tool.to_claude_schema() for tool in tools]
@@ -1096,10 +1103,10 @@ class LLMInterface:
         messages.append({"role": "user", "content": prompt})
 
         # Claude API requires max_tokens, use default if not specified
-        # Use 65536 (64k) as default to allow maximum output length
-        effective_max_tokens = max_tokens if max_tokens is not None else 65536
+        # Use 64000 (64k) as default to allow maximum output length
+        effective_max_tokens = max_tokens if max_tokens is not None else 63999
 
-        # Call Claude API with tools
+        # Call Claude API with tools using streaming
         kwargs = {
             "model": self.model_name,
             "messages": messages,
@@ -1112,7 +1119,10 @@ class LLMInterface:
             kwargs["system"] = system_prompt
 
         try:
-            response = self.client.messages.create(**kwargs)
+            # Use streaming to avoid 10-minute timeout limit for long requests
+            with self.client.messages.stream(**kwargs) as stream:
+                # Wait for the complete response
+                response = stream.get_final_message()
         except Exception as e:
             # Convert API errors to our custom exceptions
             error_msg = str(e).lower()
@@ -1131,6 +1141,8 @@ class LLMInterface:
                 'output_tokens': response.usage.output_tokens,
                 'total_tokens': response.usage.input_tokens + response.usage.output_tokens
             }
+            # LHY: Output response.usage for debugging
+            self.logger.debug(f"From Claude response: " + json.dumps(current_call_usage))
 
         # Get stop_reason from response
         stop_reason = response.stop_reason if hasattr(response, 'stop_reason') else "unknown"
@@ -1159,6 +1171,12 @@ class LLMInterface:
                     "name": content_block.name,
                     "input": content_block.input
                 })
+
+        # LHY: Debug output for raw response content and tool calls
+        tool_call_details = ""
+        for tc in tool_calls:
+            tool_call_details += f"  {tc['name']} with args {tc['arguments']}\n"
+        self.logger.debug(f"LLM raw response content: {len(text_response)} chars. LLM tool calls: {len(tool_calls)}\n{tool_call_details}\n")
 
         # Build complete assistant message in Claude's official format
         assistant_message = {
@@ -1259,7 +1277,6 @@ class LLMInterface:
         # Parse response
         message = response.choices[0].message
         text_response = message.content or ""
-        # print(f"LLM raw response content: {len(text_response)} chars.")  # LHY: Debug output
 
         tool_calls = []
         tool_calls_for_api = []

@@ -320,6 +320,7 @@ Then output should be:
 
 # 
 # Prompt for root cause analysis (this template is about 1k tokens)
+# Vuln types: out-of-bound read/write, heap-buffer-overflow, heap-use-after-free, stack-buffer-overflow, null pointer dereference, memory leak
 # 
 VAA_root_cause_analysis_prompt = """You are performing root cause analysis for a vulnerability.
 

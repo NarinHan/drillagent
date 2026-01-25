@@ -89,8 +89,8 @@ class AgentConfig:
 
     def print_config(self):
         print("=" * 80)
-        print("Agent Configuration")
-        print("=" * 80)
+        print("Agent Configuration:")
+        print("")
 
         print("[PoV Task Information]")
         print(f"  Project Name:       {self.project_name}")

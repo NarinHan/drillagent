@@ -86,18 +86,26 @@ class DrillAgent:
         # Prepare token usage tracking (must be before _init_components for budget_checker)
         self.overall_token_usage = {
             "VAA" : TokenUsage(),
-            # "InstrAgent" : TokenUsage(), # skipped for now
+            # "PIA" : TokenUsage(), # skipped for now
             "PEA" : TokenUsage(),
             "CTA" : TokenUsage()
+        }
+
+        # Prepare time usage tracking for each phase
+        self.overall_time_usage = {
+            "phase_vulnerability_analysis": 0.0,
+            "phase_code_instrumentation": 0.0,
+            "phase_path_exploration": 0.0,
+            "phase_crash_triggering": 0.0
         }
 
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
-        self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
-        self.logger.info(f"Skip code instrumentation:  {self.skip_code_instrumentation}")
-        self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
-        self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
+        # self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
+        # self.logger.info(f"Skip code instrumentation:  {self.skip_code_instrumentation}")
+        # self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
+        # self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
 
     def _init_components(self):
         self.logger.info("Initializing components...")
@@ -164,7 +172,7 @@ class DrillAgent:
             else:
                 # Use same as basic_llm if not configured
                 self.reasoning_llm = self.basic_llm
-                self.logger.info(f"✓ Reasoning LLM initialized: re-using basic LLM configuration")
+                self.logger.info(f"✓ Reasoning LLM initialized: re-using basic LLM model")
 
             # 3. Low-cost LLM - uses low_cost_model if configured, otherwise use cheaper default
             if self.config.low_cost_model and self.config.low_cost_model[0]:
@@ -211,18 +219,10 @@ class DrillAgent:
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
 
-        # Initialize time overhead tracking
-        time_overhead = {
-            "phase_vulnerability_analysis": 0.0,
-            "phase_code_instrumentation": 0.0,
-            "phase_path_exploration": 0.0,
-            "phase_crash_triggering": 0.0
-        }
-
         # Checkout the base commit for the target repository is provided!
         if len(self.config.base_commit) != 40:
             self.logger.error("Invalid base commit hash provided, cannot proceed.")
-            self._save_time_overhead(time_overhead)
+            self._save_time_overhead()
             return self.generate_report()
 
         try:
@@ -230,17 +230,17 @@ class DrillAgent:
             if not self.skip_vulnerability_analysis:
                 start_time = time.time()
                 self._phase_vulnerability_analysis()
-                time_overhead["phase_vulnerability_analysis"] = time.time() - start_time
+                self.overall_time_usage["phase_vulnerability_analysis"] = time.time() - start_time
                 self._log_phase_token_usage("VAA", "Vulnerability Analysis")
 
             # Phase 2: Code Instrumentation
             if not self.skip_code_instrumentation:
                 start_time = time.time()
                 res = self._phase_code_instrumentation()
-                time_overhead["phase_code_instrumentation"] = time.time() - start_time
+                self.overall_time_usage["phase_code_instrumentation"] = time.time() - start_time
                 if not res:
                     self.logger.error("Instrumentation phase failed, cannot proceed without P_san and P_cov.")
-                    self._save_time_overhead(time_overhead)
+                    self._save_time_overhead()
                     self._save_tokens_overhead()
                     return self.generate_report()
 
@@ -249,35 +249,35 @@ class DrillAgent:
             if not self.skip_path_exploration:
                 start_time = time.time()
                 self._phase_path_exploration()
-                time_overhead["phase_path_exploration"] = time.time() - start_time
+                self.overall_time_usage["phase_path_exploration"] = time.time() - start_time
                 self._log_phase_token_usage("PEA", "Path Exploration")
 
             # Phase 4: PoV Generation and Verification
             if not self.skip_crash_triggering:
                 start_time = time.time()
                 self._phase_crash_triggering()
-                time_overhead["phase_crash_triggering"] = time.time() - start_time
+                self.overall_time_usage["phase_crash_triggering"] = time.time() - start_time
                 self._log_phase_token_usage("CTA", "Crash Triggering")
 
             # Mark as completed
             self.phase = "completed"
-            self._save_time_overhead(time_overhead)
+            self._save_time_overhead()
             self._save_tokens_overhead()
             return self.generate_report()
 
         except Exception as e:
             self.logger.error(f"Fatal error in DrillAgent workflow: {e}", exc_info=True)
             self.errors.append(str(e))
-            self._save_time_overhead(time_overhead)
+            self._save_time_overhead()
             self._save_tokens_overhead()
             return self.generate_report()
 
-    def _save_time_overhead(self, time_overhead: Dict[str, float]) -> None:
+    def _save_time_overhead(self) -> None:
         """Save time overhead for each phase to a JSON file."""
         time_overhead_path = os.path.join(self.output_dir, "time_overhead.json")
         try:
             with open(time_overhead_path, 'w') as f:
-                json.dump(time_overhead, f, indent=2)
+                json.dump(self.overall_time_usage, f, indent=2)
             self.logger.info(f"Time overhead saved to {time_overhead_path}")
         except Exception as e:
             self.logger.warning(f"Failed to save time overhead: {e}")

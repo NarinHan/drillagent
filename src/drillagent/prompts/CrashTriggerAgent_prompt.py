@@ -78,8 +78,11 @@ Learn from the previous test case structure and coverage results, then improve u
 """
 
 
+# 
 # Core prompt for this phase.
+# 
 # Use `previous_pov_gen_progress` to provide previous execution feedback.
+# The {vuln_type_guidance} starts with "## VULNERABILITY-SPECIFIC GUIDANCE"
 CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV violating memory safety.
 - This task typically requires multiple rounds of iteration. Your current high-level progress is: {loop_progress}. 
 - You are also provided with test case and execution feedback from previous attempts to help you refine and improve the test cases.
@@ -109,23 +112,18 @@ Actual repository path: {actual_repo_path}
 
 2. **Determine the input file type**:
    Based on the project name, harness command, and vulnerability information, determine if the target program expects:
-   - **Text-based input**: e.g., source code for interpreters (JavaScript, Ruby, Lua), markup (XML, JSON, HTML), config files, etc.
+   - **Text-based input**: e.g., source code for interpreters (JavaScript, Ruby, PHP), markup (XML, JSON, HTML), config files, etc.
    - **Structured binary input**: e.g., image formats (PNG, JPEG, GIF), document formats (PDF), archive formats (ZIP), network protocols, custom binary formats, etc.
 
 3. **Synthesize a final PoV to violate the memory safety policies**:
    - Combine successful elements from previous test cases with vulnerability insights
    - Target the exact triggering conditions identified in the root cause analysis
-   - Ensure the input satisfies all preconditions along the call trace
+   - Ensure the input satisfies all preconditions along the call trace (meet the input format requirements)
    - **You have to think offensively and creatively**. The PoV sometimes doesn't look like a code snippet by normal developers.
-     - For buffer overflows: calculate exact overflow sizes based on analysis
-     - For UAF vulnerabilities: ensure proper sequence of allocation, free, and use
-     - For NULL dereference: craft inputs that leave pointers NULL at critical points
-     - For integer overflows: design values that cause arithmetic wrapping
-     - For OOB access: generate inputs that exceed valid bounds
 
 4. **Write the final PoV** (choose the appropriate method):
 
-   **Method A - For TEXT-based input (e.g., script interpreters like njs, mruby, lua):**
+   **Method A - For TEXT-based input (e.g., script interpreters like njs, mruby, php):**
    - Use `write_file` tool directly to write the PoV content
    - Example: `write_file(file_path="/path/to/testcase-round1.js", content="var x = ...;")`
 
@@ -141,12 +139,21 @@ Actual repository path: {actual_repo_path}
    - What specific vulnerability condition does this PoV target?
    - Why should this PoV successfully trigger the crash?
 
-IMPORTANT:
-- Use provided tools (e.g., `ast_grep_search_function`) to read source code at critical points if needed to refine your PoV
-- **CRITICAL**: You MUST ensure the PoV file exists at the TARGET PoV FILE PATH before your final response!
+{vuln_type_guidance}
+
+## IMPORTANT REMINDERS
+
+**Tool Usage:**
+- Use provided tools (e.g., `ast_grep_search_function`, `read_file`) to read source code at critical points if needed to refine your PoV
+
+**Output Requirements:**
+- You MUST conduct all pov generation operations in your workspace directory: `{current_round_dir}`
+- You MUST ensure the PoV file exists at the **TARGET PoV FILE PATH** before calling `finish`: `{target_pov_path}`
+- The PoV file should contain ONLY the input data for the target program (not a Python script or wrapper code)
+
+**Mindset:**
 - This is your final attempt - make it count by leveraging ALL available information
-- Focus on reproducing the crash over code path exploration.
-- The PoV file should contain ONLY the input data for the target program (not a script or code)
+- Focus on reproducing the crash over code path exploration
 
 Generate the final PoV now and write it to the target file path.
 
