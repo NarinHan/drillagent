@@ -962,7 +962,8 @@ class LLMInterface:
         messages = [{"role": "user", "content": prompt}]
 
         # Claude API requires max_tokens, use default if not specified
-        effective_max_tokens = max_tokens if max_tokens is not None else 4096
+        # Use 65536 (64k) as default to allow maximum output length
+        effective_max_tokens = max_tokens if max_tokens is not None else 65536
 
         kwargs = {
             "model": self.model_name,
@@ -1095,7 +1096,8 @@ class LLMInterface:
         messages.append({"role": "user", "content": prompt})
 
         # Claude API requires max_tokens, use default if not specified
-        effective_max_tokens = max_tokens if max_tokens is not None else 4096
+        # Use 65536 (64k) as default to allow maximum output length
+        effective_max_tokens = max_tokens if max_tokens is not None else 65536
 
         # Call Claude API with tools
         kwargs = {

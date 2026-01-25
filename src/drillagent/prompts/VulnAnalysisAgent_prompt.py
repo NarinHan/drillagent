@@ -33,42 +33,44 @@ Your task is to extract the following information from the sanitizer report:
 
 1. **Vulnerability Type**: Identify the type (e.g., heap-buffer-overflow, stack-buffer-overflow, heap-use-after-free, double-free, null pointer dereference, and so on)
 
-2. **Crash Function**: From the crash call trace, find the INNERMOST function that is IN THE REPOSITORY CODE (not in libc or system libraries).
-   - Look at the stack trace from #0 downwards
-   - Skip functions in system libraries (libc, libstdc++, etc.)
-   - Find the first function that is in the project's source code
+2. **Crash Function**: From the crash call trace, find the INNERMOST function that belongs to the repository code.
+   - Look at the stack trace from #0 downwards, skip system library functions (libc, libstdc++, libasan, etc.)
+   - The first repository function encountered is the crash function
 
-3. **Crash Location (crash_location)**: Must be in format "file_relative_path:line_number"
+3. **Crash Location (crash_location)**: The source file location of the Crash Function identified above.
+   - Must be in format "file_relative_path:line_number"
    - The file path must be RELATIVE to the repository root: {actual_repo_path}
-   - Example: if full path is /home/user/njs/src/njs_function.c, then relative path is src/njs_function.c
-   - Format: src/njs_function.c:574 (NOT /home/user/njs/src/njs_function.c:574)
-   - The file MUST exist in the repository
+   - Example: src/njs_function.c:574 (NOT /home/user/njs/src/njs_function.c:574)
 
 4. **Entry Function**: Identify the entry point function (usually the 'main' function or equivalent IN THE REPOSITORY CODE)
 
-5. **Entry Location (entry_location)**: Must be in format "file_relative_path:line_number"
-   - Find the location where the entry function is called or defined in the call trace
-   - Look at the LAST frame in the stack trace (typically #N where N is the highest number)
+5. **Entry Location (entry_location)**: The source file location where the Entry Function is defined.
+   - Must be in format "file_relative_path:line_number"
+   - Look from the outermost frames in the stack trace (highest #N) towards inner frames to find the entry function's location
    - The file path must be RELATIVE to the repository root: {actual_repo_path}
-   - Format: src/main.c:45 (NOT /home/user/project/src/main.c:45)
+   - Example: src/main.c:45 (NOT /home/user/project/src/main.c:45)
    - If entry location is not clearly in the call trace, leave it empty
 
-6. **Call Traces**: Extract ALL call traces from the sanitizer report. Different vulnerability types have different traces:
+6. **Call Traces**: Extract call traces related to the vulnerability. Different vulnerability types have different traces:
+
+   NOTE: If the sanitizer report contains multiple vulnerabilities (e.g., a heap-buffer-overflow followed by a heap-use-after-free), only extract traces for the FIRST vulnerability reported!
 
    For **heap-buffer-overflow**:
    - `crash_trace` (REQUIRED): The main error trace showing where the overflow READ/WRITE occurred (starts with "ERROR: AddressSanitizer:")
-   - `allocation_trace` (OPTIONAL): Shows where the overflowed buffer was allocated (starts with "allocated by thread")
+   - `allocation_trace` (OPTIONAL): Shows where the overflowed buffer was allocated (look for "allocated by thread" header and extract the stack frames below it)
 
    For **heap-use-after-free** and **double-free**:
    - `crash_trace` (REQUIRED): The main error trace showing where the freed memory was accessed (starts with "ERROR: AddressSanitizer:")
    - `free_trace` (OPTIONAL): Shows where the memory was freed (starts with "freed by thread")
-   - `allocation_trace` (OPTIONAL): Shows where the memory was originally allocated (starts with "previously allocated by thread")
+   - `allocation_trace` (OPTIONAL): Shows where the memory was originally allocated (look for "[previously] allocated by thread" header and extract the stack frames below it)
 
    For **other vulnerability types**:
    - `crash_trace` (REQUIRED): The main error trace
    - `allocation_trace` and `free_trace`: Leave as empty strings if not present
 
-   IMPORTANT: Each trace should include ALL lines starting with # (the full stack frames).
+   IMPORTANT for trace extraction:
+   - Each trace should include ALL lines starting with # (the full stack frames).
+   - Frame numbers within each trace MUST be monotonically increasing (e.g., #0, #1, #2, ...). If you see frame numbers restart (e.g., #19, #20 followed by #0, #1), that indicates a NEW trace belonging to a different vulnerability - do NOT mix them.
 
 IMPORTANT PATH REQUIREMENTS:
 - ALL paths must be relative to repository root: {actual_repo_path}
@@ -84,7 +86,7 @@ Respond in the following JSON format ONLY:
     "entry_location": "relative/path/file.c:line_number",
     "crash_trace": "full stack trace of the crash point starting with #0... #1... etc.",
     "allocation_trace": "full stack trace showing where memory was allocated (or empty string if not present)",
-    "free_trace": "full stack trace showing where memory was freed (or empty string if not present, only for use-after-free and double-free)"
+    "free_trace": "full stack trace showing where memory was freed (or empty string if not present, only for heap-use-after-free and double-free)"
 }}
 
 Be precise. Extract information directly from the report.
@@ -316,14 +318,15 @@ Then output should be:
 # Be thorough. Verify paths exist before responding.
 
 
-# Prompt for root cause analysis
-# TODO: This should be further improved.
+# 
+# Prompt for root cause analysis (this template is about 1k tokens)
+# 
 VAA_root_cause_analysis_prompt = """You are performing root cause analysis for a vulnerability.
 
 Project: {project_name}
 Repository path: {actual_repo_path}
 
-# VULNERABILITY INFORMATION
+# BASIC VULNERABILITY INFORMATION
 
 - Vuln Type: {vuln_type}
 - Crash Location: {crash_location}
@@ -346,31 +349,88 @@ Command to trigger the vulnerability crash:
 {allocation_trace}
 ```
 
-**Free Call Trace** (where the memory was freed, for use-after-free and double-free, if available):
+**Free Call Trace** (where the memory was freed, for heap-use-after-free and double-free, if available):
 ```
 {free_trace}
 ```
 
 # YOUR TASK
 
-Your task is to explain the ROOT CAUSE of this vulnerability:
+Your task is to explain the ROOT CAUSE of this vulnerability through the following analysis:
 
-1. Examine the source code at the crash location.
-2. Follow the crash call trace to retrieve the source code around the corresponding locations, and analyze the data flow along the function calls, with particular attention to the call sites at each layer.
-3. For memory-related vulnerabilities (heap-buffer-overflow, heap-use-after-free, double-free):
-   - Use the **allocation trace** to understand where and how the memory was allocated (size, context)
-   - For use-after-free and double-free: Use the **free trace** to understand where the memory was freed and why it became a dangling pointer
-4. Identify WHY the vulnerability occurs during analysis. (e.g., missing bounds check, use-after-free due to dangling pointer)
+## ANALYSIS APPROACH
 
-Use the provided tools (mainly `ast_grep_search_function`, supplemented by `read_file`) to examine relevant source files.
-- All the relative file paths are based on the repository root: {actual_repo_path}
-- Some source file line numbers may be inaccurate (i.e., target code line doesn't contain a callsite to next stack frame) due to compiler preprocessing or macro expansion. You may need to read a few lines above the provided line number, and use the callee function name in the next stack frame to pinpoint the correct call-site code snippet!!
+### 1. Forward Analysis (Reachability)
+Starting from the **entry point**, follow the crash call trace forward through the code:
+- Read the source code at each call site along the trace
+- Understand how input data is parsed, validated, and propagated
+- Identify what input file format/structure is required to reach the crash point
+- Note any branching conditions that must be satisfied for the vulnerable path to be taken
 
-Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE" and covering:
-- What the vulnerability is
-- Why it occurs (the root cause)
-- What code pattern or logic flaw enables it
-- Explain what conditions trigger it!
+### 2. Backward Analysis (Vuln Crash Reason)
+Starting from the **crash point**, analyze backward to understand the vulnerability:
+- Examine the exact code that triggered the sanitizer error
+- Identify the vulnerable code pattern (e.g., unchecked array access, use of freed pointer)
+- Trace back to find where the security check is missing or insufficient
+- Determine whether the root cause is at the crash site or in an upstream function
+
+### 3. Vulnerability Type-Specific Analysis
+Apply the following guidance based on the vulnerability type:
+
+**For out-of-bound read/write (OOB)**:
+- Identify the buffer and its allocated size, or array and its length
+- Find where the out-of-bound index/offset originates
+- Check if bounds validation is missing or bypassable
+
+**For heap-buffer-overflow**:
+- Use the **allocation trace** to locate the allocation site, then examine the source code to determine the buffer size
+- Compare with the access offset at crash point
+- Identify why the size calculation or bounds check failed
+
+**For heap-use-after-free (UAF)**:
+- Use the **free trace** to find where memory object was freed
+- Use the **allocation trace** to understand the memory object's lifecycle
+- Identify why the dangling pointer was not nullified or why the freed memory was accessed
+
+**For stack-buffer-overflow**:
+- Identify the stack buffer size (local array or alloca)
+- Find the source of the overflow (e.g., unbounded copy, format string)
+- Check for missing length limits
+
+**For null pointer dereference**:
+- Trace the pointer's origin to find where it became NULL
+- Identify the missing NULL check or error handling path
+- Understand what input condition leads to the NULL state
+
+**For memory leak**:
+- Identify the allocation site and expected deallocation
+- Find the code path where deallocation is skipped
+- Check for missing cleanup in error handling paths
+
+**For other vulnerability types**:
+- Apply general security analysis principles
+- Focus on identifying the security invariant that was violated
+- Analyze the gap between expected and actual program behavior
+
+## TOOLS USAGE
+
+Use the provided tools to examine relevant source files:
+- `ast_grep_search_function`: Preferred for reading function implementations. Use this when you need to examine a specific function's body.
+- `read_file`: More general-purpose. Use this for global variables, struct/type declarations, macro definitions, or when you need to see a broader context around a specific line number.
+
+Notes:
+- All relative file paths are based on the repository root: {actual_repo_path}
+- Some line numbers in the call trace may be inaccurate due to compiler preprocessing or macro expansion. If the target line doesn't contain the expected call site, read a few lines above to locate the correct code snippet.
+
+## OUTPUT FORMAT
+
+Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE".
+Your report should cover the following aspects (you may organize them flexibly):
+- Vulnerability type and sub-pattern analysis
+- Vulnerability behavior description
+- Input format requirements for triggering the vulnerability
+- Triggering conditions and key constraints
+- Relevant insecure code snippets with explanations
 """
 
 
@@ -431,68 +491,3 @@ And repository root is `/home/ubuntu/PoV/Repos/project`, then output:
 }}
 """
 
-
-# Useless for now
-VAA_critical_step_identification_prompt = """You are analyzing a vulnerability call trace to identify critical function call steps that are essential for triggering the vulnerability.
-
-Project: {project_name}
-Repository path: {actual_repo_path}
-
-Vulnerability Information:
-- Vuln Type: {vuln_type}
-
-Root Cause Analysis:
-```
-{root_cause}
-```
-
-Refined Call Trace (The highest sequence number is the entry point):
-```
-{refined_call_trace}
-```
-
-Your task is to identify which function calls in the above call trace are CRITICAL for triggering the vulnerability.
-
-IMPORTANT CONCEPTS:
-- **Critical steps**: Function calls that are essential to reach the vulnerability point. If these are not executed, the vulnerability cannot be triggered.
-- **Non-critical steps**: Basic/common function calls that would be executed by almost any test case (e.g., initialization functions, basic parsing functions). These are less important for our further coverage tracking.
-
-Analysis Steps:
-1. Use the code browsing tools to examine the source code for each function in the call trace.
-2. Identify which function calls implement key logic that leads to the vulnerability (e.g., specific branching conditions, data transformations, state changes).
-3. For each frame in the call trace, determine if it is "critical" based on:
-   - Does it perform security-relevant operations (bounds checks, type checks, etc.)?
-   - Does it contain conditional branches that filter inputs?
-   - Does it transform data in a way specific to triggering the vulnerability?
-   - Would most test cases skip this function or take a different path?
-   - Is it a function call within a specific case of a switch statement (critical to choose this `case` branch)?
-
-IMPORTANT:
-- All file paths are RELATIVE to repository root: {actual_repo_path}
-- You MUST use the code browsing tools to examine the actual source code before making judgments
-- Be selective: typically only 20-40 percent of frames should be marked as critical
-
-Respond in the following JSON format ONLY:
-{{
-    "critical_frames": [
-        {{
-            "sequence_num": <frame_sequence_number>,
-            "function_name": "<function_name>",
-            "file_path": "<relative_file_path>",
-            "line_number": <line_number>,
-            "reasoning": "<brief explanation of why this step is critical>"
-        }},
-        ...
-    ],
-    "non_critical_frames": [
-        {{
-            "sequence_num": <frame_sequence_number>,
-            "function_name": "<function_name>",
-            "reasoning": "<brief explanation of why this step is not critical>"
-        }},
-        ...
-    ]
-}}
-
-Be thorough. Use provided tools to examine the code before making your assessment.
-"""

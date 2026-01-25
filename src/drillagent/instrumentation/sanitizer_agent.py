@@ -41,8 +41,10 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
             self.sanitizer_type = "address"  # LSAN is part of ASAN. Can be turned off with ASAN_OPTIONS=detect_leaks=0
         elif "UndefinedBehaviorSanitizer" in report:
             self.sanitizer_type = "undefined"
-        elif "MemorySanitizer" in report:
+        elif "MemorySanitizer" in report:    # Limited to Clang/LLVM
             self.sanitizer_type = "memory"
+        elif "ThreadSanitizer" in report:
+            self.sanitizer_type = "thread"
         else:
             self.sanitizer_type = "address"  # Default to ASAN
 
