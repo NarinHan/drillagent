@@ -427,11 +427,11 @@ Notes:
 
 Provide a clear, technical explanation starting with "## VULNERABILITY ROOT CAUSE".
 Your report should cover the following aspects (you may organize them flexibly):
-- Vulnerability type and sub-pattern analysis
-- Vulnerability behavior description
-- Input format requirements for triggering the vulnerability
-- Triggering conditions and key constraints
-- Relevant insecure code snippets with explanations
+- ### Vulnerability type and sub-pattern analysis
+- ### Vulnerability behavior description
+- ### Input format requirements for triggering the vulnerability
+- ### Triggering conditions and key constraints
+- ### Relevant insecure code snippets with explanations
 """
 
 

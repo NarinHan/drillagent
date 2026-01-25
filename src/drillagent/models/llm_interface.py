@@ -776,7 +776,11 @@ class LLMInterface:
                         # Handle both dict results and error strings
                         if isinstance(finish_result, dict):
                             task_completed = finish_result.get('task_completed', 'false')
-                            finish_message = finish_result.get('message', text_response)
+                            # IMPORTANT: Prefer text_response over finish tool's message
+                            # The text_response contains the LLM's actual analysis output (may include JSON),
+                            # while finish tool's message is just a brief summary signal.
+                            # Only fall back to finish tool's message if text_response is empty.
+                            finish_message = text_response if text_response.strip() else finish_result.get('message', '')
                             finish_success = finish_result.get('success', True)
                         else:
                             # Error occurred during finish tool execution

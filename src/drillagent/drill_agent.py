@@ -607,7 +607,7 @@ class DrillAgent:
             else:
                 self.vulnerability_info.actual_binary_path = self.vulnerability_info.binary_path # necessary
                 self.vuln_agent.store_to_cache() # Update cache with the actual_binary_path
-            self.logger.info(f"✓ Entry program and actual binary path: \n{36*' '+self.vulnerability_info.binary_path} \n{36*' '+self.vulnerability_info.actual_binary_path}")
+            self.logger.info(f"✓ Updated actual binary path: \n- Entry program: {self.vulnerability_info.binary_path} \n- Actual binary: {self.vulnerability_info.actual_binary_path}")
         else:
             pass # do nothing
 

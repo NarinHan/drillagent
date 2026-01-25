@@ -258,10 +258,9 @@ class VulnAnalysisAgent:
             self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
             self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
             self.logger.info(f"  [VulnAnalysisAgent] LLM Response size: {len(response)} chars")
-            self.logger.debug(f"\n{response}") # for tmp debug
+            # self.logger.debug(f"\n{response}") # for tmp debug
 
             # Extract JSON from response
-            # TODO: FIX: Why here it cannot extract information when using claude? Must have some bug...
             extracted_info = LLMInterface.extract_json_from_response(response)
             if not extracted_info:
                 raise ValueError("Could not extract JSON from LLM response")
@@ -307,7 +306,7 @@ class VulnAnalysisAgent:
             is_crash_trace = (trace_type == "crash")
 
             # Substep 1: Transform raw call trace to structured format
-            self.logger.info(f"  [VulnAnalysisAgent] Using LLMInterface to transform {trace_type} trace...")
+            self.logger.info(f"  [VulnAnalysisAgent] Using LLMInterface to transform {trace_type} backtrace...")
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=VAA_call_trace_transform_prompt.format(
                     project_name=self.config.project_name,
@@ -585,10 +584,8 @@ class VulnAnalysisAgent:
                 free_trace=free_trace_str
             )
 
-            # Use LLMInterface for automatic tool calling and conversation management
-            self.logger.info("    Using LLMInterface to conduct root cause analysis...")
-
             # Run more powerful reasoning LLM than basic LLMs. (update: too expensive, still use basic_llm)
+            self.logger.info("    Using LLMInterface to conduct root cause analysis...")
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,
                 tools=self.enhanced_tools,  # Allow usage of enhanced code browsing tools for code exploration
@@ -637,6 +634,7 @@ class VulnAnalysisAgent:
             raise RuntimeError(f"Wrapper script is empty: {entry_program_path}")
         self.logger.info(f"  [VulnAnalysisAgent] Script content length: {len(script_content)} chars")
 
+        self.logger.info("    Using LLMInterface to find actual binary path...")
         script_rel_path = os.path.relpath(entry_program_path, target_repo_path)
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=VAA_find_actual_binary_prompt.format(
