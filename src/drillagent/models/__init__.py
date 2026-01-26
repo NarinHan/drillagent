@@ -15,6 +15,11 @@ from .llm_interface import (
     BudgetExceededError
 )
 
+from .prompt_sampler import (
+    VulnTypeGuidanceSampler,
+    VULN_TYPE_GUIDANCE
+)
+
 __all__ = [
     "LLMInterface",
     "ConversationManager",
@@ -23,5 +28,7 @@ __all__ = [
     "TimeoutError",
     "ToolExecutionError",
     "InvalidResponseError",
-    "BudgetExceededError"
+    "BudgetExceededError",
+    "VulnTypeGuidanceSampler",
+    "VULN_TYPE_GUIDANCE"
 ]

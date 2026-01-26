@@ -474,6 +474,8 @@ class WriteFileTool(AgentTool):
             "Write content to a file in text mode or hex mode with different write strategies. "
             "Supports both relative paths (from code repository root) and absolute paths (any location on the system). "
             "\n\n"
+            "IMPORTANT: Both 'file_path' and 'content' parameters are REQUIRED. You must provide both parameters when calling this tool."
+            "\n\n"
             "WRITE MODES:\n"
             "- create: Overwrite file completely (creates new file if doesn't exist)\n"
             "- insert: Insert content at specific position (requires start_line or start_offset)\n"
@@ -1177,8 +1179,7 @@ The task_completed field indicates your completion status:
                 "type": "string",
                 "description": (
                     "Final message summarizing the task outcome. "
-                    "Include: actions taken, results achieved, PoV file path (if generated), "
-                    "and any important observations or limitations encountered."
+                    "This message should be as brief as possible."
                 ),
                 "required": True
             },

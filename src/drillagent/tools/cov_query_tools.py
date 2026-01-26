@@ -44,7 +44,7 @@ class FunctionCovTool(AgentTool):
         self.timeout = 30
 
         # Maximum output lines
-        self.max_output_lines = 500
+        self.max_output_lines = 200
 
         # Maximum output characters (to control context size)
         self.max_output_chars = 15000
@@ -92,6 +92,7 @@ class FunctionCovTool(AgentTool):
             "\n"
             "OUTPUT LIMIT:\n"
             f"Output is limited to {self.max_output_lines} lines. Use filters (grep, head, tail) if needed.\n"
+            "If the output is truncated due to length limit, use the read_file tool to read the truncated content directly.\n"
             "\n"
             "WORKING DIRECTORY:\n"
             "Commands execute in the specified `working_dir` (default: code repository root).\n"
@@ -222,14 +223,16 @@ class FunctionCovTool(AgentTool):
             # First, truncate by line count
             stdout_lines = stdout.split('\n')
             if len(stdout_lines) > self.max_output_lines:
+                omitted_lines = len(stdout_lines) - self.max_output_lines
                 stdout = '\n'.join(stdout_lines[:self.max_output_lines])
-                stdout += f"\n\n... [OUTPUT TRUNCATED: showing first {self.max_output_lines} of {len(stdout_lines)} lines]"
+                stdout += f"\n\n... [OUTPUT TRUNCATED: showing first {self.max_output_lines} lines, {omitted_lines} lines omitted]"
                 truncated = True
 
             stderr_lines = stderr.split('\n')
             if len(stderr_lines) > self.max_output_lines:
+                omitted_lines = len(stderr_lines) - self.max_output_lines
                 stderr = '\n'.join(stderr_lines[:self.max_output_lines])
-                stderr += f"\n\n... [STDERR TRUNCATED: showing first {self.max_output_lines} of {len(stderr_lines)} lines]"
+                stderr += f"\n\n... [STDERR TRUNCATED: showing first {self.max_output_lines} lines, {omitted_lines} lines omitted]"
                 truncated = True
 
             # Then, truncate by character count (to control context size)
@@ -329,7 +332,9 @@ class FuncLineCovTool(AgentTool):
             "Shows execution counts for each line of code within the function. "
             "Use this when you need to understand which lines in a function were executed "
             "and how many times during test runs. "
-            "Requires an instrumented binary and corresponding profdata coverage file."
+            "Requires an instrumented binary and corresponding profdata coverage file. "
+            "Output is limited to 200 lines. "
+            "If the output is truncated due to length limit, use the read_file tool to read the truncated content directly."
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -462,10 +467,11 @@ class FuncLineCovTool(AgentTool):
 
             # Limit output to first N lines
             output_lines = output.split('\n')
-            limit_line_num = 300
+            limit_line_num = 200
             if len(output_lines) > limit_line_num:
+                omitted_lines = len(output_lines) - limit_line_num
                 output = '\n'.join(output_lines[:limit_line_num])
-                output += f'\n\n... (truncated, showing first {limit_line_num} of {len(output_lines)} lines)'
+                output += f'\n\n... [OUTPUT TRUNCATED: showing first {limit_line_num} lines, {omitted_lines} lines omitted]'
 
             if not output:
                 # Is this happens a lot?

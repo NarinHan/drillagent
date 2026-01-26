@@ -346,7 +346,9 @@ class AstGrepFunctionSearchTool(AgentTool):
             "Returns file paths, line numbers, and function signatures. "
             "Use this for quick exploration or when clangd-based tools are unavailable. "
             "Note: Less accurate than clangd for complex cases (macros, templates). "
-            "Good for rapid initial exploration of unfamiliar codebases."
+            "Good for rapid initial exploration of unfamiliar codebases. "
+            "Output is limited to 200 lines per function. "
+            "If the output is truncated due to length limit, use the read_file tool to read the truncated content directly."
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -419,9 +421,10 @@ class AstGrepFunctionSearchTool(AgentTool):
             source_lines = source_text.split("\n")
             start_line = match["line"]
 
-            # Limit to first 400 lines for readability
-            truncated = len(source_lines) > 400
-            display_lines = source_lines[:400]
+            # Limit to first 200 lines for readability
+            max_lines = 200
+            truncated = len(source_lines) > max_lines
+            display_lines = source_lines[:max_lines]
 
             # Add line numbers
             numbered_lines = []
@@ -431,7 +434,8 @@ class AstGrepFunctionSearchTool(AgentTool):
 
             formatted_snippet = "\n".join(numbered_lines)
             if truncated:
-                formatted_snippet += f"\n... (truncated, {len(source_lines)} total lines)"
+                omitted_lines = len(source_lines) - max_lines
+                formatted_snippet += f"\n\n... [OUTPUT TRUNCATED: showing first {max_lines} lines, {omitted_lines} lines omitted]"
 
             formatted_match = {
                 "file": match["file"],
@@ -505,7 +509,9 @@ class AstGrepPatternSearchTool(AgentTool):
             "specific function call patterns, etc. "
             "Examples: 'malloc($SIZE)' finds all malloc calls; "
             "'if ($COND) { $$$ }' finds all if statements; "
-            "'return $VALUE;' finds all return statements."
+            "'return $VALUE;' finds all return statements. "
+            "Output is limited to 200 lines per match. "
+            "If the output is truncated due to length limit, use the read_file tool to read the truncated content directly."
         )
 
     def parameters_schema(self) -> Dict[str, Any]:
@@ -573,17 +579,33 @@ class AstGrepPatternSearchTool(AgentTool):
         # Format results with context
         formatted_matches = []
         max_results = 100  # Limit to prevent overwhelming output
+        max_lines_per_match = 200  # Limit lines per match
 
         matches = result.get("matches", [])
         limited = len(matches) > max_results
 
+        def truncate_to_lines(text: str, max_lines: int) -> str:
+            """Truncate text to max_lines, showing omitted line count."""
+            lines = text.split("\n")
+            if len(lines) > max_lines:
+                omitted = len(lines) - max_lines
+                return "\n".join(lines[:max_lines]) + f"\n\n... [OUTPUT TRUNCATED: showing first {max_lines} lines, {omitted} lines omitted]"
+            return text
+
         for match in matches[:max_results]:
+            matched_code = match.get("text", "")
+            context = match.get("lines", match.get("text", ""))
+
+            # Truncate matched_code and context to max_lines_per_match
+            matched_code = truncate_to_lines(matched_code, max_lines_per_match)
+            context = truncate_to_lines(context, max_lines_per_match)
+
             formatted_match = {
                 "file": match["file"],
                 "line": match["line"],
                 "column": match["column"],
-                "matched_code": match.get("text", ""),
-                "context": match.get("lines", match.get("text", ""))
+                "matched_code": matched_code,
+                "context": context
             }
 
             # Include captured variables if any

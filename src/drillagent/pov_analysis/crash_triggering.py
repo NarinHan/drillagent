@@ -19,7 +19,7 @@ from drillagent.prompts.CrashTriggerAgent_prompt import (
 from drillagent.utils.llvm_cov import LLVMCovUtils
 from drillagent.utils.utils import *
 from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
-from drillagent.models import BudgetExceededError
+from drillagent.models import BudgetExceededError, VulnTypeGuidanceSampler
 class CrashTriggerAgent:
     # Responsible for triggering crashes based on analyzed paths
     def __init__(self, drill_agent: 'DrillAgent'):
@@ -30,10 +30,13 @@ class CrashTriggerAgent:
         self.tools_for_generation: List['AgentTool'] = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools + self.drill_agent.cov_tools
 
         # The outermost-loop counters.
-        self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
+        self.max_trigger_iterations = 8
         # Control test case generation turns.
-        self.max_generation_turns = 6 # Larger turns will cause input context explosion.
+        if self.config.model_provider.lower() == "claude":
+            self.max_generation_turns = 4 # Larger turns will cause input context explosion.
+        else:
+            self.max_generation_turns = 6
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
@@ -47,10 +50,16 @@ class CrashTriggerAgent:
 
         # Init the LLVM coverage util. Set the profdata_path later after each execution.
         binary_abs_path = os.path.abspath(os.path.join(
-            self.drill_agent.config.target_repo_path, 
+            self.drill_agent.config.target_repo_path,
             self.drill_agent.vulnerability_info.actual_binary_path # Must use actual binary here!
         ))
         self.llvm_cov_utils = LLVMCovUtils(binary_abs_path=binary_abs_path)
+
+        # Init the vulnerability type guidance sampler for type-specific PoV generation hints.
+        self.vuln_type_sampler = VulnTypeGuidanceSampler(
+            llm_interface=self.drill_agent.low_cost_llm,
+            logger=self.logger
+        )
 
     def _accumulate_token_usage(self, result: Dict[str, Any], model_name: str) -> None:
         usage = result.get("usage_stats") if isinstance(result, dict) else None
@@ -112,8 +121,9 @@ class CrashTriggerAgent:
             if len(self.useful_testcase_paths) < 3 and path_agent.history_testcases:
                 remaining = 3 - len(self.useful_testcase_paths)
                 self.useful_testcase_paths.extend(list(reversed(path_agent.history_testcases))[:remaining])
-            # Ensure we have at most 3 testcases
+            # We only use 3 testcases at most.
             self.useful_testcase_paths = self.useful_testcase_paths[:3]
+            # If no useful test cases found, raise error 🤔
             if len(self.useful_testcase_paths) == 0:
                 raise RuntimeError("No useful test cases found from path exploration!")
 
@@ -201,6 +211,12 @@ class CrashTriggerAgent:
         vuln_info_str = self.drill_agent.vulnerability_info.format_output(skip_rca_result=True)
         root_cause_str = self.drill_agent.vulnerability_info.get_full_root_cause()
 
+        # Get vulnerability-type-specific guidance for PoV generation
+        vuln_type_guidance = self.vuln_type_sampler.get_vuln_type_guidance(
+            root_cause=root_cause_str,
+            reported_vuln_type=self.drill_agent.gt_crash_type or self.drill_agent.vulnerability_info.vuln_type
+        )
+
         # For history exec info, we provide path exploration progress to the first round and previous CTA-generated testcase for later rounds.
         if self.current_trigger_iteration == 1:
             # Try to prepare and provide PEA-generated useful test cases.
@@ -257,11 +273,12 @@ class CrashTriggerAgent:
             # Designed context sections
             vulnerability_info=vuln_info_str,   # Including vuln type, call trace, etc.
             root_cause_analysis=root_cause_str, # Markdown format content
-            previous_pov_gen_progress=previous_progress # 🤔
+            vuln_type_guidance=vuln_type_guidance, # Type-specific PoV generation guidance
+            previous_pov_gen_progress=previous_progress
         )
 
         # For crash triggering, we also provide ast-grep and coverage tools.
-        self.logger.info(f"  [CrashTriggerAgent] Using LLMInterface to generate final PoV (max rounds={self.max_generation_turns})...")
+        self.logger.info(f"  [CrashTriggerAgent] Using LLMInterface to generate final PoV candidate (max rounds={self.max_generation_turns})...")
         try:
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,
@@ -309,7 +326,7 @@ class CrashTriggerAgent:
             matching_files = glob.glob(search_pattern)
             if not matching_files:
                 raise RuntimeError(
-                    f"PoV candidate file was not created. Expected: {pov_path} or {pov_path}.* "
+                    f"PoV candidate file was not created (should continue). \nExpected: {pov_path} or {pov_path}.* "
                     f"LLM may have failed to use write_file tool."
                 )
             # Update the path using the first matching file (should only be one)

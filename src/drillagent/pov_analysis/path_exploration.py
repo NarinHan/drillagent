@@ -36,10 +36,14 @@ class PathExplorationAgent:
 
         # In each exploration, the agent will generate a PoV test case, execute it, and collect coverage feedback.
         # The outermost-loop counters:
-        self.max_exp_iterations = 8
         self.current_exp_iteration = 0
         # Control test case generation turns.
-        self.max_generation_turns = 6 # Larger turns will cause input context explosion.
+        if self.config.model_provider.lower() == "claude":
+            self.max_exp_iterations   = 4 # Also limit large iteration number (8->4) for claude model
+            self.max_generation_turns = 5 # Larger turns will cause input context explosion.
+        else:
+            self.max_exp_iterations   = 8
+            self.max_generation_turns = 6
 
         # For coverage collection
         binary_abs_path = os.path.abspath(os.path.join(
@@ -192,7 +196,7 @@ class PathExplorationAgent:
         return os.path.join(self.drill_agent.work_dir, f"round{round_num}") 
 
     def _generate_test_case(self, previous_feedback: str = "") -> str:
-        # Generate test case using LLMInterface with automatic agent loop
+        # Generate test case with automatic agent loop
         self.logger.info(f"  [PathExplorationAgent] Step1: Generating test case...")
         round_dir = self._get_round_dir(self.current_exp_iteration)
 
@@ -296,7 +300,7 @@ class PathExplorationAgent:
             matching_files = glob.glob(search_pattern)
             if not matching_files:
                 raise RuntimeError(
-                    f"Test case file was not created. Expected: {test_case_path}"
+                    f"Test case file was not created (should continue). \nExpected: {test_case_path}"
                 )
             # Update the path using the first matching file (should only be one)
             test_case_path = matching_files[0]

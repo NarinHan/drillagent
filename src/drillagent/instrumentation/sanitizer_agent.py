@@ -41,10 +41,16 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
             self.sanitizer_type = "address"  # LSAN is part of ASAN. Can be turned off with ASAN_OPTIONS=detect_leaks=0
         elif "UndefinedBehaviorSanitizer" in report:
             self.sanitizer_type = "undefined"
-        elif "MemorySanitizer" in report:
+        elif "MemorySanitizer" in report:    # Limited to Clang/LLVM
             self.sanitizer_type = "memory"
+        elif "ThreadSanitizer" in report:
+            self.sanitizer_type = "thread"
         else:
             self.sanitizer_type = "address"  # Default to ASAN
+
+        # Define sanitizer flags (separate compile and link flags)
+        self.san_compile_flags = f"-g -O1 -fsanitize={self.sanitizer_type} -fno-omit-frame-pointer"
+        self.san_link_flags = f"-fsanitize={self.sanitizer_type}"
 
         self.logger.info(f"SanitizerInstrumentAgent initialized for {self.project_name} {self.drill_agent.cve_id}")
         self.logger.info(f"Sanitizer type: {self.sanitizer_type}")
@@ -175,16 +181,13 @@ class SanitizerInstrumentAgent(BaseInstrAgent):
         )
 
         # Replace Docker paths with actual repo path using LLM
-        build_commands = self._replace_docker_paths(build_commands)
-
-        # Define sanitizer flags
-        san_flags = f"-g -O1 -fsanitize={self.sanitizer_type} -fno-omit-frame-pointer"
+        build_commands = self._replace_docker_paths(build_commands)        
 
         # Initialize flags to empty if they might be used in expansions
-        # TODO: Maybe we just add the SAN_FLAGS at the beginning of CFLAGS/CXXFLAGS directly? Duplicate may not cause error.
         modified = f'''#!/bin/bash -e
 # Sanitizer instrumentation flags ({self.sanitizer_type})
-SAN_FLAGS="{san_flags}"
+SAN_CFLAGS="{self.san_compile_flags}"
+SAN_LDFLAGS="{self.san_link_flags}"
 CFLAGS="${{CFLAGS:-}}"
 CXXFLAGS="${{CXXFLAGS:-}}"
 LDFLAGS="${{LDFLAGS:-}}"
@@ -192,10 +195,10 @@ LDFLAGS="${{LDFLAGS:-}}"
 {build_commands}
 '''
 
-        # Replace patterns that modify CFLAGS/CXXFLAGS to append to SAN_FLAGS instead
+        # Replace patterns that modify CFLAGS/CXXFLAGS to append to SAN_CFLAGS instead
         modified = re.sub(
             r'export (C(?:XX)?FLAGS)="(\$\1\s+[^"]+)"',
-            r'export \1="$SAN_FLAGS \2"',
+            r'export \1="$SAN_CFLAGS \2"',
             modified
         )
 
@@ -204,21 +207,21 @@ LDFLAGS="${{LDFLAGS:-}}"
             # Plain configure
             modified = re.sub(
                 r'(\n\s*)(\./configure)(\s|$)',
-                r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CFLAGS="$SAN_FLAGS $CFLAGS" CXXFLAGS="$SAN_FLAGS $CXXFLAGS" LDFLAGS="$SAN_FLAGS $LDFLAGS" ./configure\3',
+                r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CFLAGS="$SAN_CFLAGS $CFLAGS" CXXFLAGS="$SAN_CFLAGS $CXXFLAGS" LDFLAGS="$SAN_LDFLAGS $LDFLAGS" ./configure\3',
                 modified
             )
         elif contains_in_non_comment_lines(modified, 'autogen.sh'):
             # autogen.sh without explicit configure - inject flags before autogen.sh
             modified = re.sub(
                 r'(\n\s*)(\./autogen\.sh)(\s|$)',
-                r'\1CFLAGS="$SAN_FLAGS $CFLAGS" CXXFLAGS="$SAN_FLAGS $CXXFLAGS" LDFLAGS="$SAN_FLAGS $LDFLAGS" \2\3',
+                r'\1CFLAGS="$SAN_CFLAGS $CFLAGS" CXXFLAGS="$SAN_CFLAGS $CXXFLAGS" LDFLAGS="$SAN_LDFLAGS $LDFLAGS" \2\3',
                 modified
             )
         elif contains_in_non_comment_lines(modified, 'cmake'):
             # CMake builds
             modified = re.sub(
                 r'(\n\s*)(cmake\s)',
-                r'\1cmake -DCMAKE_C_FLAGS="$SAN_FLAGS $CFLAGS" -DCMAKE_CXX_FLAGS="$SAN_FLAGS $CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$SAN_FLAGS $LDFLAGS" ',
+                r'\1cmake -DCMAKE_C_FLAGS="$SAN_CFLAGS $CFLAGS" -DCMAKE_CXX_FLAGS="$SAN_CFLAGS $CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$SAN_LDFLAGS $LDFLAGS" ',
                 modified
             )
         elif re.search(r'(mini)?rake', modified.lower()):
@@ -227,7 +230,7 @@ LDFLAGS="${{LDFLAGS:-}}"
             if re.search(rake_pattern, modified, re.IGNORECASE):
                 modified = re.sub(
                     rake_pattern,
-                    r'\1export CFLAGS="$SAN_FLAGS $CFLAGS"\n\1export CXXFLAGS="$SAN_FLAGS $CXXFLAGS"\n\1export LDFLAGS="$SAN_FLAGS $LDFLAGS"\n\1\2',
+                    r'\1export CFLAGS="$SAN_CFLAGS $CFLAGS"\n\1export CXXFLAGS="$SAN_CFLAGS $CXXFLAGS"\n\1export LDFLAGS="$SAN_LDFLAGS $LDFLAGS"\n\1\2',
                     modified,
                     count=1,
                     flags=re.IGNORECASE
@@ -237,7 +240,7 @@ LDFLAGS="${{LDFLAGS:-}}"
             if 'make' in modified and 'export CC' not in modified:
                 modified = modified.replace(
                     'make',
-                    'export CFLAGS="$SAN_FLAGS $CFLAGS" CXXFLAGS="$SAN_FLAGS $CXXFLAGS" LDFLAGS="$SAN_FLAGS $LDFLAGS"\nmake',
+                    'export CFLAGS="$SAN_CFLAGS $CFLAGS" CXXFLAGS="$SAN_CFLAGS $CXXFLAGS" LDFLAGS="$SAN_LDFLAGS $LDFLAGS"\nmake',
                     1
                 )
 

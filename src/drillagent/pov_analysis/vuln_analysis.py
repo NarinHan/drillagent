@@ -12,8 +12,7 @@ from drillagent.prompts.VulnAnalysisAgent_prompt import (
     VAA_call_trace_linenum_refine_prompt,
     VAA_harness_refine_prompt,
     VAA_root_cause_analysis_prompt,
-    VAA_find_actual_binary_prompt,
-    VAA_critical_step_identification_prompt
+    VAA_find_actual_binary_prompt
 )
 from drillagent.models.llm_interface import LLMInterface
 from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
@@ -34,8 +33,18 @@ class VulnAnalysisAgent:
         self.enhanced_tools: List['AgentTool'] = drill_agent.basic_tools + drill_agent.ast_grep_tools
         # Sometimes ast-grep may not be usable, so we keep both basic and enhanced toolsets.
 
-        # Vulnerability information container!!!!! 
+        # Max run_agent_loop rounds for root cause analysis
+        if self.config.model_provider.lower() == "claude":
+            # Really should control budget here, since sonnet is too expensive.
+            self.max_rca_turns: int = 8
+            self.normal_task_llm = self.drill_agent.low_cost_llm # TODO: Try to put this into use.
+        else:
+            self.max_rca_turns: int = 15
+            self.normal_task_llm = self.drill_agent.basic_llm
+
+        # Vulnerability information container!!!!!
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
+        self.loaded_from_cache = False  # Flag to indicate if results were loaded from cache
 
     def _accumulate_token_usage(self, result: Dict[str, Any], model_name: str) -> None:
         usage = result.get("usage_stats") if isinstance(result, dict) else None
@@ -167,6 +176,7 @@ class VulnAnalysisAgent:
             self.clear_cache()
         # Try to examine if there is already a cached result and load from cache first.
         elif self.load_from_cache():
+                self.loaded_from_cache = True
                 self.logger.info("  [VulnAnalysisAgent] Loaded vulnerability analysis from cache. Skipping analysis steps.")
                 return self.vuln_info
         
@@ -212,19 +222,12 @@ class VulnAnalysisAgent:
         else:
             self.logger.info("  [VulnAnalysisAgent] Root cause analysis is disabled by configuration. Skipping!")
 
-        # Substep4: Identify critical function call steps for vulnerability triggering.
-        # if not self.config.disable_root_cause_analysis:  # Only run if root cause analysis is enabled
-        #     self.logger.info("  [VulnAnalysisAgent] Identifying critical function call steps...")
-        #     self._identify_critical_steps()
-        # else:
-        #     self.logger.info("  [VulnAnalysisAgent] Critical step identification is skipped (requires root cause analysis).")
-
         # Store results to cache for future use
         self.store_to_cache()
 
         return self.vuln_info
 
-    def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report):
+    def _extract_sanitizer_report(self, project_name, actual_repo_path, sanitizer_report) -> None:
         # Extract vulnerability information from sanitizer report using LLM with tools
         # LLM: Using new LLMInterface with automatic agent loop
         try:
@@ -254,7 +257,8 @@ class VulnAnalysisAgent:
             response = result['final_response']
             self.logger.info(f"  [VulnAnalysisAgent] LLM completed in {result['iterations']} iteration(s)")
             self.logger.info(f"  [VulnAnalysisAgent] Stop reason: {result['stop_reason']}")
-            # self.logger.info(f"  [VulnAnalysisAgent] LLM Response: {response[:300]}...")
+            self.logger.info(f"  [VulnAnalysisAgent] LLM Response size: {len(response)} chars")
+            # self.logger.debug(f"\n{response}") # for tmp debug
 
             # Extract JSON from response
             extracted_info = LLMInterface.extract_json_from_response(response)
@@ -302,7 +306,7 @@ class VulnAnalysisAgent:
             is_crash_trace = (trace_type == "crash")
 
             # Substep 1: Transform raw call trace to structured format
-            self.logger.info(f"  [VulnAnalysisAgent] Using LLMInterface to transform {trace_type} trace...")
+            self.logger.info(f"  [VulnAnalysisAgent] Using LLMInterface to transform {trace_type} backtrace...")
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=VAA_call_trace_transform_prompt.format(
                     project_name=self.config.project_name,
@@ -311,7 +315,7 @@ class VulnAnalysisAgent:
                 ),
                 tools=self.basic_tools,  # Provide tools to locate files if needed
                 system_prompt=VAA_system_prompt,
-                max_iterations=6,  # Allow a few iterations for file location
+                max_iterations=5,  # Allow a few iterations for file location
                 temperature=0.1,
                 max_tokens=4096,
                 continuation_prompt="Please continue transforming the call trace and provide the final JSON output."
@@ -389,6 +393,7 @@ class VulnAnalysisAgent:
                         current_frame_json = json.dumps(current_frame, indent=2)
 
                         # Invoke low-cost LLM (faster) to refine the line number of each stack frame
+                        self.logger.info(f"  [VulnAnalysisAgent] Using LLMInterface to refine line number of stack frame #{seq_num}...")
                         result = self.drill_agent.low_cost_llm.run_agent_loop(
                             task=VAA_call_trace_linenum_refine_prompt.format(
                                 project_name=self.config.project_name,
@@ -398,7 +403,7 @@ class VulnAnalysisAgent:
                             ),
                             tools=self.enhanced_tools, # Allow the usage of ast-grep
                             system_prompt=VAA_system_prompt,
-                            max_iterations=3,
+                            max_iterations=4,
                             temperature=0.1,
                             max_tokens=4096,
                             continuation_prompt="Please continue verifying the line number using the tools and provide the final JSON output."
@@ -509,7 +514,7 @@ class VulnAnalysisAgent:
                 ),
                 tools=self.basic_tools,
                 system_prompt=VAA_system_prompt,
-                max_iterations=3,  # Allow up to 3 rounds of tool usage
+                max_iterations=4,
                 temperature=0.2,
                 max_tokens=4096,
                 continuation_prompt="Please continue exploring the repository and provide the final JSON output with the refined harness command."
@@ -565,7 +570,6 @@ class VulnAnalysisAgent:
             free_trace_str = self.vuln_info.format_trace(self.vuln_info.free_trace)
 
             # Prepare the initial prompt
-            # TODO: Maybe we can identify critical stack frames in the crash trace during root cause analysis.
             user_prompt = VAA_root_cause_analysis_prompt.format(
                 project_name=self.config.project_name,
                 actual_repo_path=self.config.target_repo_path,
@@ -580,15 +584,13 @@ class VulnAnalysisAgent:
                 free_trace=free_trace_str
             )
 
-            # Use LLMInterface for automatic tool calling and conversation management
-            self.logger.info("    Using LLMInterface for root cause analysis...")
-
-            # Run more powerful reasoning LLM than basic LLMs. 
-            result = self.drill_agent.reasoning_llm.run_agent_loop(
+            # Run more powerful reasoning LLM than basic LLMs. (update: too expensive, still use basic_llm)
+            self.logger.info("    Using LLMInterface to conduct root cause analysis...")
+            result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,
                 tools=self.enhanced_tools,  # Allow usage of enhanced code browsing tools for code exploration
                 system_prompt=VAA_system_prompt,
-                max_iterations=15,  # Allow up to 15 rounds of deep analysis
+                max_iterations=self.max_rca_turns,
                 temperature=0.3,
                 max_tokens=30720, # Modern LLMs can handle larger contexts.
                 continuation_prompt="Please continue your root cause analysis based on the code you examined."
@@ -604,7 +606,7 @@ class VulnAnalysisAgent:
             self.vuln_info.root_cause = result['final_response']
             self.logger.info(f"    ✓ Root cause analysis complete in {result['iterations']} iteration(s)")
             self.logger.info(f"    Stop reason: {result['stop_reason']}")
-            self.logger.info(f"    Analysis: {self.vuln_info.root_cause[:200]}...")
+            self.logger.info(f"    RCA Results: {self.vuln_info.root_cause[:200]}...")
 
         except Exception as e:
             self.logger.error(f"    Failed to perform root cause analysis: {e}", exc_info=True)
@@ -632,6 +634,7 @@ class VulnAnalysisAgent:
             raise RuntimeError(f"Wrapper script is empty: {entry_program_path}")
         self.logger.info(f"  [VulnAnalysisAgent] Script content length: {len(script_content)} chars")
 
+        self.logger.info("    Using LLMInterface to find actual binary path...")
         script_rel_path = os.path.relpath(entry_program_path, target_repo_path)
         result = self.drill_agent.basic_llm.run_agent_loop(
             task=VAA_find_actual_binary_prompt.format(
@@ -642,7 +645,7 @@ class VulnAnalysisAgent:
             ),
             tools=self.basic_tools,
             system_prompt=VAA_system_prompt,
-            max_iterations=5,
+            max_iterations=4,
             temperature=0.1,
             max_tokens=4096,
             continuation_prompt="Please continue analyzing the script and provide the final JSON output with the actual binary path."
@@ -685,68 +688,6 @@ class VulnAnalysisAgent:
         self.store_to_cache()
 
         return actual_binary_path
-
-    # TODO: This part is too simple for now, improve this identification in the future if needed (LHY).
-    # def _identify_critical_steps(self):
-    #     # Identify critical function call steps for vulnerability triggering.
-    #     # LLM uses tools to read code and identify which frames are critical vs non-critical.
-    #     # Results are stored in a JSON file for later use.
-    #     try:
-    #         # Skip if no call trace is available
-    #         if not self.vuln_info.crash_trace or len(self.vuln_info.crash_trace) == 0:
-    #             self.logger.warning("  [VulnAnalysisAgent] No refined call trace available. Skipping critical step identification.")
-    #             return
-
-    #         # Prepare the prompt
-    #         crash_trace_str = self.vuln_info.format_trace((self.vuln_info.raw_crash_trace, self.vuln_info.crash_trace))
-    #         initial_prompt = VAA_critical_step_identification_prompt.format(
-    #             project_name=self.config.project_name,
-    #             actual_repo_path=self.config.target_repo_path,
-    #             vuln_type=self.vuln_info.vuln_type,
-    #             root_cause=self.vuln_info.root_cause if self.vuln_info.root_cause else "Not available",
-    #             refined_call_trace=crash_trace_str
-    #         )
-
-    #         # Use LLMInterface for automatic tool calling and conversation management
-    #         self.logger.info("    Using LLMInterface to identify critical steps...")
-    #         result = self.drill_agent.basic_llm.run_agent_loop(
-    #             task=initial_prompt,
-    #             tools=self.enhanced_tools,
-    #             system_prompt=VAA_system_prompt,
-    #             max_iterations=10,  # To be adjusted...
-    #             temperature=0.2,
-    #             max_tokens=8192,
-    #             continuation_prompt="Please continue examining the remaining frames and provide the final JSON output with critical and non-critical frames."
-    #         )
-
-    #         if not result['success']:
-    #             error_msg = result.get('error', 'Unknown error')
-    #             self.logger.error(f"    LLM agent loop failed: {error_msg}")
-    #             raise RuntimeError(f"Failed to identify critical steps: {error_msg}")
-
-    #         response = result['final_response']
-    #         self.logger.info(f"    ✓ Critical step identification complete in {result['iterations']} iteration(s)")
-    #         self.logger.info(f"    Stop reason: {result['stop_reason']}")
-    #         self.logger.info(f"    LLM Response: {response[:300]}...")
-
-    #         # Extract JSON from response
-    #         critical_steps_data = LLMInterface.extract_json_from_response(response)
-    #         if not critical_steps_data:
-    #             raise ValueError("Could not extract JSON from LLM response")
-
-    #         # Store critical steps data in vuln_info
-    #         self.vuln_info.critical_steps = critical_steps_data
-
-    #         # Log summary
-    #         num_critical = len(critical_steps_data.get('critical_frames', []))
-    #         num_non_critical = len(critical_steps_data.get('non_critical_frames', []))
-    #         total_frames = len(self.vuln_info.crash_trace)
-    #         self.logger.info(f"    ✓ Critical step identification complete:")
-    #         self.logger.info(f"      Critical frames: {num_critical}/{total_frames}")
-    #         self.logger.info(f"      Non-critical frames: {num_non_critical}/{total_frames}")
-
-    #     except Exception as e:
-    #         self.logger.error(f"    Failed to identify critical steps: {e}", exc_info=True)
 
 @dataclass
 class VulnInfo:

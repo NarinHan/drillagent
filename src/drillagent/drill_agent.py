@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
-from drillagent.models import LLMInterface
+from drillagent.models import LLMInterface, BudgetExceededError
 from drillagent.instrumentation import CoverageInstrumentAgent, SanitizerInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
@@ -86,18 +86,29 @@ class DrillAgent:
         # Prepare token usage tracking (must be before _init_components for budget_checker)
         self.overall_token_usage = {
             "VAA" : TokenUsage(),
-            # "InstrAgent" : TokenUsage(), # skipped for now
+            # "PIA" : TokenUsage(), # skipped for now
             "PEA" : TokenUsage(),
             "CTA" : TokenUsage()
         }
 
+        # Prepare time usage tracking for each phase
+        self.overall_time_usage = {
+            "phase_vulnerability_analysis": 0.0,
+            "phase_code_instrumentation": 0.0,
+            "phase_path_exploration": 0.0,
+            "phase_crash_triggering": 0.0
+        }
+
+        # Load historical overhead data from previous runs (for incremental runs)
+        self._load_historical_overhead()
+
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
-        self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
-        self.logger.info(f"Skip code instrumentation:  {self.skip_code_instrumentation}")
-        self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
-        self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
+        # self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
+        # self.logger.info(f"Skip code instrumentation:  {self.skip_code_instrumentation}")
+        # self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
+        # self.logger.info(f"Skip crash trigger analysis: {self.skip_crash_triggering}")
 
     def _init_components(self):
         self.logger.info("Initializing components...")
@@ -164,7 +175,7 @@ class DrillAgent:
             else:
                 # Use same as basic_llm if not configured
                 self.reasoning_llm = self.basic_llm
-                self.logger.info(f"✓ Reasoning LLM initialized: re-using basic LLM configuration")
+                self.logger.info(f"✓ Reasoning LLM initialized: re-using basic LLM model")
 
             # 3. Low-cost LLM - uses low_cost_model if configured, otherwise use cheaper default
             if self.config.low_cost_model and self.config.low_cost_model[0]:
@@ -211,18 +222,10 @@ class DrillAgent:
         self.logger.info("Starting DrillAgent workflow")
         self.logger.info("=" * 60)
 
-        # Initialize time overhead tracking
-        time_overhead = {
-            "phase_vulnerability_analysis": 0.0,
-            "phase_code_instrumentation": 0.0,
-            "phase_path_exploration": 0.0,
-            "phase_crash_triggering": 0.0
-        }
-
         # Checkout the base commit for the target repository is provided!
         if len(self.config.base_commit) != 40:
             self.logger.error("Invalid base commit hash provided, cannot proceed.")
-            self._save_time_overhead(time_overhead)
+            self._save_time_overhead()
             return self.generate_report()
 
         try:
@@ -230,17 +233,21 @@ class DrillAgent:
             if not self.skip_vulnerability_analysis:
                 start_time = time.time()
                 self._phase_vulnerability_analysis()
-                time_overhead["phase_vulnerability_analysis"] = time.time() - start_time
+                # Only update time if actual analysis was performed (not loaded from cache)
+                if self.vuln_agent and not self.vuln_agent.loaded_from_cache: 
+                    self.overall_time_usage["phase_vulnerability_analysis"] = time.time() - start_time
+                else:
+                    pass # Not really analyzed but loading from cache, skip time update
                 self._log_phase_token_usage("VAA", "Vulnerability Analysis")
 
             # Phase 2: Code Instrumentation
             if not self.skip_code_instrumentation:
                 start_time = time.time()
                 res = self._phase_code_instrumentation()
-                time_overhead["phase_code_instrumentation"] = time.time() - start_time
+                self.overall_time_usage["phase_code_instrumentation"] = time.time() - start_time
                 if not res:
                     self.logger.error("Instrumentation phase failed, cannot proceed without P_san and P_cov.")
-                    self._save_time_overhead(time_overhead)
+                    self._save_time_overhead()
                     self._save_tokens_overhead()
                     return self.generate_report()
 
@@ -249,35 +256,44 @@ class DrillAgent:
             if not self.skip_path_exploration:
                 start_time = time.time()
                 self._phase_path_exploration()
-                time_overhead["phase_path_exploration"] = time.time() - start_time
+                self.overall_time_usage["phase_path_exploration"] = time.time() - start_time
                 self._log_phase_token_usage("PEA", "Path Exploration")
 
             # Phase 4: PoV Generation and Verification
             if not self.skip_crash_triggering:
                 start_time = time.time()
                 self._phase_crash_triggering()
-                time_overhead["phase_crash_triggering"] = time.time() - start_time
+                self.overall_time_usage["phase_crash_triggering"] = time.time() - start_time
                 self._log_phase_token_usage("CTA", "Crash Triggering")
 
             # Mark as completed
             self.phase = "completed"
-            self._save_time_overhead(time_overhead)
+            self._save_time_overhead()
+            self._save_tokens_overhead()
+            return self.generate_report()
+
+        except BudgetExceededError as e:
+            # Budget exceeded - gracefully exit and save current progress
+            self.logger.warning(f"Budget exceeded, terminating workflow early: {e}")
+            self.errors.append(f"Budget exceeded: {e}")
+            self.phase = "budget_exceeded"
+            self._save_time_overhead()
             self._save_tokens_overhead()
             return self.generate_report()
 
         except Exception as e:
             self.logger.error(f"Fatal error in DrillAgent workflow: {e}", exc_info=True)
             self.errors.append(str(e))
-            self._save_time_overhead(time_overhead)
+            self._save_time_overhead()
             self._save_tokens_overhead()
             return self.generate_report()
 
-    def _save_time_overhead(self, time_overhead: Dict[str, float]) -> None:
+    def _save_time_overhead(self) -> None:
         """Save time overhead for each phase to a JSON file."""
         time_overhead_path = os.path.join(self.output_dir, "time_overhead.json")
         try:
             with open(time_overhead_path, 'w') as f:
-                json.dump(time_overhead, f, indent=2)
+                json.dump(self.overall_time_usage, f, indent=2)
             self.logger.info(f"Time overhead saved to {time_overhead_path}")
         except Exception as e:
             self.logger.warning(f"Failed to save time overhead: {e}")
@@ -301,6 +317,42 @@ class DrillAgent:
             self.logger.info(f"Token usage saved to {tokens_overhead_path}")
         except Exception as e:
             self.logger.warning(f"Failed to save tokens overhead: {e}")
+
+    def _load_historical_overhead(self) -> None:
+        """Load historical time and token overhead from previous runs.
+
+        This enables incremental runs where some phases are skipped.
+        Without this, skipped phases would have their historical data overwritten with 0.
+        """
+        # Load historical time overhead
+        time_overhead_path = os.path.join(self.output_dir, "time_overhead.json")
+        if os.path.exists(time_overhead_path):
+            try:
+                with open(time_overhead_path, 'r') as f:
+                    historical_time = json.load(f)
+                for phase_key, value in historical_time.items():
+                    if phase_key in self.overall_time_usage:
+                        self.overall_time_usage[phase_key] = value
+                self.logger.info(f"Loaded historical time overhead from {time_overhead_path}")
+            except Exception as e:
+                self.logger.warning(f"Failed to load historical time overhead: {e}")
+
+        # Load historical token overhead
+        tokens_overhead_path = os.path.join(self.output_dir, "tokens_overhead.json")
+        if os.path.exists(tokens_overhead_path):
+            try:
+                with open(tokens_overhead_path, 'r') as f:
+                    historical_tokens = json.load(f)
+                for phase_key, usage_dict in historical_tokens.items():
+                    if phase_key in self.overall_token_usage:
+                        usage = self.overall_token_usage[phase_key]
+                        usage.input_tokens = usage_dict.get("input_tokens", 0)
+                        usage.output_tokens = usage_dict.get("output_tokens", 0)
+                        usage.cost_input_usd = usage_dict.get("cost_input_usd", 0.0)
+                        usage.cost_output_usd = usage_dict.get("cost_output_usd", 0.0)
+                self.logger.info(f"Loaded historical token overhead from {tokens_overhead_path}")
+            except Exception as e:
+                self.logger.warning(f"Failed to load historical token overhead: {e}")
 
     def _log_phase_token_usage(self, phase_key: str, phase_label: str) -> None:
         usage = self.overall_token_usage.get(phase_key)
@@ -504,6 +556,8 @@ class DrillAgent:
             self.logger.info(f"  - {len(self.path_agent.vfunc_reached_testcases)} reached the vulnerable function.")
             self.logger.info(60 * "-")
 
+        except BudgetExceededError:
+            raise # Budget exceeded - re-raise to terminate the entire workflow
         except Exception as e:
             self.logger.error(f"  Failed to run path exploration: {e}", exc_info=True)
             self.errors.append(f"Path exploration failed: {e}")
@@ -546,6 +600,9 @@ class DrillAgent:
                 self.logger.warning(f"✗ No valid PoV generated after {self.crash_agent.current_trigger_iteration} iterations")
                 self.errors.append("Crash triggering failed: No valid PoV found")
 
+        except BudgetExceededError:
+            # Budget exceeded - re-raise to terminate the entire workflow
+            raise
         except Exception as e:
             self.logger.error(f"  Failed to run crash triggering: {e}", exc_info=True)
             self.errors.append(f"Crash triggering failed: {e}")
@@ -564,7 +621,7 @@ class DrillAgent:
             else:
                 self.vulnerability_info.actual_binary_path = self.vulnerability_info.binary_path # necessary
                 self.vuln_agent.store_to_cache() # Update cache with the actual_binary_path
-            self.logger.info(f"✓ Entry program and actual binary path: \n{36*' '+self.vulnerability_info.binary_path} \n{36*' '+self.vulnerability_info.actual_binary_path}")
+            self.logger.info(f"✓ Updated actual binary path: \n- Entry program: {self.vulnerability_info.binary_path} \n- Actual binary: {self.vulnerability_info.actual_binary_path}")
         else:
             pass # do nothing
 
