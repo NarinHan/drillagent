@@ -165,6 +165,11 @@ Examples:
   python3 multiple_secb_task.py --project-name njs \\
       --repo-path /home/ubuntu/PoV/Repos/njs-cov \\
       --basic-model gpt-5.1-2025-11-13
+
+  # Run all 200 SEC-bench tasks (excluding blacklisted ones)
+  python3 multiple_secb_task.py --all-supported-tasks \\
+      --repos-dir /home/ubuntu/PoV/Repos \\
+      --basic-model claude-sonnet-4-5-20250929
         """
     )
 
@@ -182,6 +187,11 @@ Examples:
         '--solved-tasks',
         action='store_true',
         help='Run the union of get_openhands_solved_tasks and get_swea_solved_tasks'
+    )
+    task_group.add_argument(
+        '--all-supported-tasks',
+        action='store_true',
+        help='Run all 200 SEC-bench tasks, excluding blacklisted ones (is_labelled_blacklist)'
     )
 
     # Repository location (mutually exclusive)
@@ -539,6 +549,17 @@ def main():
             sys.exit(1)
 
         print(f"✓ Found {len(tasks)} solved tasks (OpenHands + SWEA)")
+    elif args.all_supported_tasks:
+        # Load all 200 SEC-bench tasks, excluding blacklisted ones
+        loader = RawSecbTaskLoader(dataset_path=args.dataset_path)
+        loader.load_cve_tasks()
+        tasks = [task for instance_id, task in loader.cve_tasks.items()
+                 if not loader.is_labelled_blacklist(instance_id)]
+        if not tasks:
+            print("✗ Error: No supported tasks found")
+            sys.exit(1)
+
+        print(f"✓ Found {len(tasks)} supported tasks (all minus blacklist)")
     else:
         print("✗ Error: No task selection provided")
         sys.exit(1)

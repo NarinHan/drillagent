@@ -260,7 +260,7 @@ class RawSecbTaskLoader:
         # Returns True if the instance_id is among the blacklist!
         blacklist = [
             "gpac.cve-2023-3012",
-            "gpac.cve-2023-5586",   # Only two frames have line numbers.
+            # "gpac.cve-2023-5586",   # Only two frames have line numbers.
             "imagemagick.cve-2018-6405",
             "matio.cve-2019-9032",
             "matio.cve-2019-9035",
@@ -272,8 +272,8 @@ class RawSecbTaskLoader:
         ] # These 9 tasks are very weird in SEC-bench!
         blacklist += [
             "php.cve-2018-12882",   # Cannot be compiled...
-            "gpac.cve-2022-2454",   # "UndefinedBehaviorSanitizer"
-            "gpac.cve-2023-42298",  # "UndefinedBehaviorSanitizer" (Don't have backtrace starting with "#")
+            # "gpac.cve-2022-2454",   # "UndefinedBehaviorSanitizer"
+            # "gpac.cve-2023-42298",  # "UndefinedBehaviorSanitizer" (Don't have backtrace starting with "#")
         ] # These tasks just have no call trace. But still possible to handle.
         return instance_id in blacklist
 
@@ -477,6 +477,30 @@ class RawSecbTaskLoader:
         # Combine both dictionaries (union)
         return {**oh_tasks, **swea_tasks}
 
+    def get_tasks_oh_subset(self) -> Dict[str, SecbTask]:
+        """Get the 75 CVE tasks from the OpenHands subset (oh-subset.txt).
+
+        Returns:
+            Dictionary mapping instance_id to SecbTask objects
+        """
+        # Read instance IDs from oh-subset.txt
+        subset_file = Path(__file__).parent / "oh-subset.txt"
+        if not subset_file.exists():
+            raise FileNotFoundError(f"oh-subset.txt not found at {subset_file}")
+
+        with open(subset_file, 'r') as f:
+            instance_ids = [line.strip() for line in f if line.strip()]
+
+        # Filter the loaded tasks to only include oh_subset instances
+        res = dict()
+        for instance_id in instance_ids:
+            if instance_id in self.cve_tasks:
+                res[instance_id] = self.cve_tasks[instance_id]
+            else:
+                print(f"[!] Warning: {instance_id} not found in loaded tasks")
+
+        return res
+
     def print_task_summary(self, instance_id: str):
         """
         Print a summary of a specific task.
@@ -605,6 +629,24 @@ def print_partitioned_instance_ids(n_partitions: int = 3,
 
 if __name__ == "__main__":
     # Allow specifying number of partitions as command line argument
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 3
-    print_partitioned_instance_ids(n_partitions=n)
+    # n = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+    # print_partitioned_instance_ids(n_partitions=n)
+
+    # Find intersection of oh_subset and united_solved tasks
+    loader = RawSecbTaskLoader(dataset_path="datasets/sec-bench/CVE-instances")
+    loader.load_cve_tasks()
+
+    oh_subset_tasks = loader.get_tasks_oh_subset()
+    united_solved_tasks = loader.get_united_solved_tasks()
+
+    # Find intersection
+    intersection = set(oh_subset_tasks.keys()) & set(united_solved_tasks.keys())
+
+    print(f"\n=== Tasks in both oh_subset and united_solved ===")
+    print(f"oh_subset: {len(oh_subset_tasks)} tasks")
+    print(f"united_solved: {len(united_solved_tasks)} tasks")
+    print(f"intersection: {len(intersection)} tasks\n")
+
+    for instance_id in sorted(intersection):
+        print(instance_id)
     

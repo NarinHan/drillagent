@@ -40,7 +40,7 @@ class PathExplorationAgent:
         # Control test case generation turns.
         if self.config.model_provider.lower() == "claude":
             self.max_exp_iterations   = 4 # Also limit large iteration number (8->4) for claude model
-            self.max_generation_turns = 4 # Larger turns will cause input context explosion.
+            self.max_generation_turns = 5 # Larger turns will cause input context explosion.
         else:
             self.max_exp_iterations   = 8
             self.max_generation_turns = 6

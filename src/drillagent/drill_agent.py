@@ -557,8 +557,7 @@ class DrillAgent:
             self.logger.info(60 * "-")
 
         except BudgetExceededError:
-            # Budget exceeded - re-raise to terminate the entire workflow
-            raise
+            raise # Budget exceeded - re-raise to terminate the entire workflow
         except Exception as e:
             self.logger.error(f"  Failed to run path exploration: {e}", exc_info=True)
             self.errors.append(f"Path exploration failed: {e}")

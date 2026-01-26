@@ -403,7 +403,7 @@ class VulnAnalysisAgent:
                             ),
                             tools=self.enhanced_tools, # Allow the usage of ast-grep
                             system_prompt=VAA_system_prompt,
-                            max_iterations=3,
+                            max_iterations=4,
                             temperature=0.1,
                             max_tokens=4096,
                             continuation_prompt="Please continue verifying the line number using the tools and provide the final JSON output."
@@ -514,7 +514,7 @@ class VulnAnalysisAgent:
                 ),
                 tools=self.basic_tools,
                 system_prompt=VAA_system_prompt,
-                max_iterations=3,  # Allow up to 3 rounds of tool usage
+                max_iterations=4,
                 temperature=0.2,
                 max_tokens=4096,
                 continuation_prompt="Please continue exploring the repository and provide the final JSON output with the refined harness command."
