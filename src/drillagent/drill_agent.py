@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 
 from drillagent.config import AgentConfig
-from drillagent.models import LLMInterface
+from drillagent.models import LLMInterface, BudgetExceededError
 from drillagent.instrumentation import CoverageInstrumentAgent, SanitizerInstrumentAgent
 from drillagent.pov_analysis.vuln_analysis import VulnAnalysisAgent, VulnInfo
 from drillagent.pov_analysis.path_exploration import PathExplorationAgent
@@ -268,6 +268,15 @@ class DrillAgent:
 
             # Mark as completed
             self.phase = "completed"
+            self._save_time_overhead()
+            self._save_tokens_overhead()
+            return self.generate_report()
+
+        except BudgetExceededError as e:
+            # Budget exceeded - gracefully exit and save current progress
+            self.logger.warning(f"Budget exceeded, terminating workflow early: {e}")
+            self.errors.append(f"Budget exceeded: {e}")
+            self.phase = "budget_exceeded"
             self._save_time_overhead()
             self._save_tokens_overhead()
             return self.generate_report()
@@ -547,6 +556,9 @@ class DrillAgent:
             self.logger.info(f"  - {len(self.path_agent.vfunc_reached_testcases)} reached the vulnerable function.")
             self.logger.info(60 * "-")
 
+        except BudgetExceededError:
+            # Budget exceeded - re-raise to terminate the entire workflow
+            raise
         except Exception as e:
             self.logger.error(f"  Failed to run path exploration: {e}", exc_info=True)
             self.errors.append(f"Path exploration failed: {e}")
@@ -589,6 +601,9 @@ class DrillAgent:
                 self.logger.warning(f"✗ No valid PoV generated after {self.crash_agent.current_trigger_iteration} iterations")
                 self.errors.append("Crash triggering failed: No valid PoV found")
 
+        except BudgetExceededError:
+            # Budget exceeded - re-raise to terminate the entire workflow
+            raise
         except Exception as e:
             self.logger.error(f"  Failed to run crash triggering: {e}", exc_info=True)
             self.errors.append(f"Crash triggering failed: {e}")

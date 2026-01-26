@@ -116,9 +116,9 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
     output.append("\n### 🤖 Assistant Response:")
     output.append(assistant_response if assistant_response else "[No text response]")
 
-    # Tool calls
+    # Tool calls and results - show each call with its result together
     if tool_calls:
-        output.append(f"\n### 🔧 Tool Calls: {len(tool_calls)} calls")
+        output.append(f"\n### 🔧 Tool Calls & Results: {len(tool_calls)} calls")
         for i, tool_call in enumerate(tool_calls):
             tool_name = tool_call.get("name", "unknown")
             tool_id = tool_call.get("id", "")
@@ -127,23 +127,10 @@ def format_llm_interaction(entry: Dict[str, Any], index: int, inside_agent_loop:
             # Show arguments
             args_str = json.dumps(tool_args, indent=4)
             output.append(f"      Arguments: {args_str}")
-
-    # Tool results
-    if tool_results and tool_calls:
-        # Filter to only show results for coverage_query
-        whilelist_tools = ["coverage_query"]
-        coverage_results = []
-        for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
-            tool_name = tool_call.get("name", "unknown")
-            if tool_name in whilelist_tools:
-                coverage_results.append((i, result))
-
-        if coverage_results:
-            output.append(f"\n### 📤 Tool Results: {len(coverage_results)} results")
-            for i, result in coverage_results:
-                result_str = str(result)
-                # Don't truncate coverage results - show them in full
-                output.append(f"  [Call #{i+1}] {result_str}")
+            # Show result for this tool call
+            if tool_results and i < len(tool_results):
+                result_str = str(tool_results[i])
+                output.append(f"      Result: {result_str}")
 
     # Stop reason and usage
     output.append(f"\n### ⏹️  Stop Reason: {stop_reason}")

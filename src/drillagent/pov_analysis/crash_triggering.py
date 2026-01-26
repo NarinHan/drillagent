@@ -30,11 +30,11 @@ class CrashTriggerAgent:
         self.tools_for_generation: List['AgentTool'] = self.drill_agent.basic_tools + self.drill_agent.ast_grep_tools + self.drill_agent.cov_tools
 
         # The outermost-loop counters.
-        self.max_trigger_iterations = 8
         self.current_trigger_iteration = 0
+        self.max_trigger_iterations = 8
         # Control test case generation turns.
         if self.config.model_provider.lower() == "claude":
-            self.max_generation_turns = 5 # Larger turns will cause input context explosion.
+            self.max_generation_turns = 4 # Larger turns will cause input context explosion.
         else:
             self.max_generation_turns = 6
 
@@ -121,8 +121,9 @@ class CrashTriggerAgent:
             if len(self.useful_testcase_paths) < 3 and path_agent.history_testcases:
                 remaining = 3 - len(self.useful_testcase_paths)
                 self.useful_testcase_paths.extend(list(reversed(path_agent.history_testcases))[:remaining])
-            # Ensure we have at most 3 testcases
+            # We only use 3 testcases at most.
             self.useful_testcase_paths = self.useful_testcase_paths[:3]
+            # If no useful test cases found, raise error 🤔
             if len(self.useful_testcase_paths) == 0:
                 raise RuntimeError("No useful test cases found from path exploration!")
 
@@ -325,7 +326,7 @@ class CrashTriggerAgent:
             matching_files = glob.glob(search_pattern)
             if not matching_files:
                 raise RuntimeError(
-                    f"PoV candidate file was not created. Expected: {pov_path} or {pov_path}.* "
+                    f"PoV candidate file was not created (should continue). \nExpected: {pov_path} or {pov_path}.* "
                     f"LLM may have failed to use write_file tool."
                 )
             # Update the path using the first matching file (should only be one)
