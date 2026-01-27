@@ -84,7 +84,7 @@ Learn from the previous test case structure and coverage results, then improve u
 # Use `previous_pov_gen_progress` to provide previous execution feedback.
 # The {vuln_type_guidance} starts with "## VULNERABILITY-SPECIFIC GUIDANCE"
 CTA_final_pov_generation_prompt = """You are generating a final Proof-of-Vulnerability (PoV) input to trigger a crash in the target program. This is the culmination of vulnerability analysis and path exploration - your only goal is to craft the most effective PoV violating memory safety.
-- This task typically requires multiple rounds of iteration. Your current high-level progress is: {loop_progress}. 
+- This task typically requires multiple rounds of iteration. This is iteration {current_iteration} of {max_iterations}.
 - You are also provided with test case and execution feedback from previous attempts to help you refine and improve the test cases.
 
 Vulnerable Project Name: {project_name}
@@ -152,7 +152,7 @@ Actual repository path: {actual_repo_path}
 - The PoV file should contain ONLY the input data for the target program (not a Python script or wrapper code)
 
 **Mindset:**
-- This is your final attempt - make it count by leveraging ALL available information
+- Make each iteration count by leveraging ALL available information
 - Focus on reproducing the crash over code path exploration
 
 Generate the final PoV now and write it to the target file path.

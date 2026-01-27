@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import shutil
 import subprocess
@@ -87,10 +88,13 @@ class PathExplorationAgent:
         self.logger.info(f"  [PathExplorationAgent] Starting path exploration analysis... (tools num: {len(self.tools_for_generation)})")
 
         # Clear all the previous roundN directories if exist
-        for i in range(1, self.max_exp_iterations+1+4):
-            round_dir = self._get_round_dir(i)
-            if os.path.exists(round_dir):
-                shutil.rmtree(round_dir)
+        round_dir_pattern = re.compile(r'^round\d+$')
+        if os.path.exists(self.drill_agent.work_dir):
+            for item in os.listdir(self.drill_agent.work_dir):
+                if round_dir_pattern.match(item):
+                    round_dir = os.path.join(self.drill_agent.work_dir, item)
+                    if os.path.isdir(round_dir):
+                        shutil.rmtree(round_dir)
 
         # Maintain feedback from previous iteration to guide next iteration's testcase generation
         previous_feedback = None # From coverage feedback analysis
@@ -185,8 +189,7 @@ class PathExplorationAgent:
 
         if not self.crash_input_pov:
             self.logger.info(f"  [PathExplorationAgent] Although no crash-triggering PoV generated during path exploration, we get closer ^^")
-            usable_testcases = max(len(self.history_testcases), len(self.vfunc_reached_testcases))
-            if usable_testcases <= 1:
+            if len(self.history_testcases) <= 1:
                 raise RuntimeError("Failed to obtain enough useful test cases during path exploration!")
         else:
             self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV successfully generated during path exploration!")
@@ -239,7 +242,8 @@ class PathExplorationAgent:
 
         # Format the unified task prompt. (now root cause is included in vuln_info_str)
         user_prompt = PEA_testcase_generation_prompt.format(
-            loop_progress=f"{self.current_exp_iteration - 1}/{self.max_exp_iterations}",
+            current_iteration=self.current_exp_iteration,
+            max_iterations=self.max_exp_iterations,
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
             current_round_dir=round_dir,
@@ -302,7 +306,14 @@ class PathExplorationAgent:
                 raise RuntimeError(
                     f"Test case file was not created (should continue). \nExpected: {test_case_path}"
                 )
-            # Update the path using the first matching file (should only be one)
+            # Prioritize files with the expected suffix if available
+            if len(matching_files) > 1 and file_suffix:
+                suffix_matches = [f for f in matching_files if f.endswith(file_suffix)]
+                if suffix_matches:
+                    matching_files = suffix_matches # Update filtered files
+                    # self.logger.debug(f"  [PathExplorationAgent] Filtered to {len(suffix_matches)} file(s) with expected suffix '{file_suffix}'")
+                else: # Not find perfect match, just use original matching files
+                    pass
             test_case_path = matching_files[0]
             self.logger.info(f"  [PathExplorationAgent] Found test case with extension: {test_case_path}")
 
@@ -446,6 +457,7 @@ class PathExplorationAgent:
             cov_frames.append(updated_frame)
 
         # Sort cov_frames by sequence_num in descending order (from caller to callee, largest sequence_num first)
+        # TODO: Is this annotation correct?
         sorted_cov_frames = sorted(cov_frames, key=lambda f: f['sequence_num'], reverse=True)
 
         return cov_report, sorted_cov_frames
