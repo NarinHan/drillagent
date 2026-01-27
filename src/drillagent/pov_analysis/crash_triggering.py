@@ -226,7 +226,7 @@ class CrashTriggerAgent:
                 tmp_paths = []
                 for testcase_path in self.useful_testcase_paths:
                     tmp_paths.append(testcase_path)
-                    # LHY: Currently, we don't add "test_N.profdata" into prompt. All cov data is already organized.
+                    # Currently: we don't add "test_N.profdata" into prompt. All cov data is already organized.
                     # dir_path = os.path.dirname(testcase_path)
                     # coverage_path = os.path.join(dir_path, "coverage_record.md")
                     # tmp_paths.append(coverage_path)

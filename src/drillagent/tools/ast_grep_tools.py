@@ -429,7 +429,7 @@ class AstGrepFunctionSearchTool(AgentTool):
             # Add line numbers
             numbered_lines = []
             for i, line in enumerate(display_lines):
-                line_num = start_line + i + 1 # LHY added this "+ 1"
+                line_num = start_line + i + 1 # Added this "+ 1". Seems good now.
                 numbered_lines.append(f"{line_num:4d} | {line}")
 
             formatted_snippet = "\n".join(numbered_lines)

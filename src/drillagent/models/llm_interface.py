@@ -424,7 +424,7 @@ class LLMInterface:
             - final_response: str - final text response from LLM (or finish tool message)
             - iterations: int - number of iterations used
             - conversation: ConversationManager - full conversation history
-            - stop_reason: str - why the agent stopped: (LHY: This content is from LLM provider response)
+            - stop_reason: str - why the agent stopped: (This content is from LLM provider response)
                 * 'finish_tool_true' - finish tool called with task_completed=true
                 * 'finish_tool_false' - finish tool called with task_completed=false
                 * 'finish_tool_partial' - finish tool called with task_completed=partial
@@ -433,7 +433,7 @@ class LLMInterface:
                 * 'budget_exceeded' - budget limit reached before starting
                 * 'rate_limit_error'/'timeout_error'/'llm_error' - various errors
             - task_completed: Optional[str] - 'true'/'false'/'partial' (only when finish tool used)
-            - error: Optional[str] - error message if failed (LHY: This content is from our own handling)
+            - error: Optional[str] - error message if failed (This content is from our own handling)
             - usage_stats: Dict - token usage statistics for this agent loop only
         """
         # Check budget at the start of agent loop

@@ -21,7 +21,7 @@ from drillagent.models.llm_price_config import MODEL_PRICE_PER_MTOK_USD
 from drillagent.models import BudgetExceededError
 
 # 
-# Currently we assume that the PathExplorationAgent **has** usable call trace. (LHY)
+# Currently we assume that the PathExplorationAgent **has** usable call trace.
 # 
 class PathExplorationAgent:
     # Responsible for exploring paths leading to vulnerabilities, fully utilizing the coverage feedback.
@@ -186,7 +186,7 @@ class PathExplorationAgent:
         if not self.crash_input_pov:
             self.logger.info(f"  [PathExplorationAgent] Although no crash-triggering PoV generated during path exploration, we get closer ^^")
             usable_testcases = max(len(self.history_testcases), len(self.vfunc_reached_testcases))
-            if usable_testcases < 3:
+            if usable_testcases <= 1:
                 raise RuntimeError("Failed to obtain enough useful test cases during path exploration!")
         else:
             self.logger.info(f"  [PathExplorationAgent] Crash-triggering PoV successfully generated during path exploration!")

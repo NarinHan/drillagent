@@ -86,7 +86,7 @@ class DrillAgent:
         # Prepare token usage tracking (must be before _init_components for budget_checker)
         self.overall_token_usage = {
             "VAA" : TokenUsage(),
-            # "PIA" : TokenUsage(), # skipped for now
+            # "ITA" : TokenUsage(), # skipped for now
             "PEA" : TokenUsage(),
             "CTA" : TokenUsage()
         }
