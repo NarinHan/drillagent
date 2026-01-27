@@ -124,6 +124,8 @@ class FunctionCovTool(AgentTool):
             }
         }
 
+    # TODO: Sometimes multiple functions are matched.
+    # Maybe we should first parse how many functions are matched, and then decide which to provide to LLM (?)
     def execute(self, command: str, working_dir: str = ".") -> Dict[str, Any]:
         """
         Execute a coverage-related command with whitelist validation.

@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import shutil
 import subprocess
@@ -82,11 +83,15 @@ class CrashTriggerAgent:
     def run(self) -> None:
         self.logger.info(f"  [CrashTriggerAgent] Starting running. (tools num: {len(self.tools_for_generation)})")
 
-        # Clear all the previous roundN directories if exist
-        for i in range(1, self.max_trigger_iterations+1+4):
-            round_dir = self._get_round_dir(i)
-            if os.path.exists(round_dir):
-                shutil.rmtree(round_dir)
+        # Clear all the previous roundN directories if exist (using regex pattern matching)
+        triggering_dir = os.path.join(self.drill_agent.work_dir, "triggering")
+        round_dir_pattern = re.compile(r'^round\d+$')
+        if os.path.exists(triggering_dir):
+            for item in os.listdir(triggering_dir):
+                if round_dir_pattern.match(item):
+                    round_dir = os.path.join(triggering_dir, item)
+                    if os.path.isdir(round_dir):
+                        shutil.rmtree(round_dir)
 
         # Before all: Examine the progress from previous path exploration.
         path_agent = self.drill_agent.path_agent
@@ -226,7 +231,7 @@ class CrashTriggerAgent:
                 tmp_paths = []
                 for testcase_path in self.useful_testcase_paths:
                     tmp_paths.append(testcase_path)
-                    # LHY: Currently, we don't add "test_N.profdata" into prompt. All cov data is already organized.
+                    # Currently: we don't add "test_N.profdata" into prompt. All cov data is already organized.
                     # dir_path = os.path.dirname(testcase_path)
                     # coverage_path = os.path.join(dir_path, "coverage_record.md")
                     # tmp_paths.append(coverage_path)
@@ -265,7 +270,8 @@ class CrashTriggerAgent:
         # Substep 2: Use LLMInterface to generate the final PoV
         # Format the user prompt for PoV generation
         user_prompt = CTA_final_pov_generation_prompt.format(
-            loop_progress=f"{self.current_trigger_iteration - 1}/{self.max_trigger_iterations}",
+            current_iteration=self.current_trigger_iteration,
+            max_iterations=self.max_trigger_iterations,
             project_name=self.config.project_name,
             actual_repo_path=self.config.target_repo_path,
             current_round_dir=round_dir,
@@ -329,7 +335,13 @@ class CrashTriggerAgent:
                     f"PoV candidate file was not created (should continue). \nExpected: {pov_path} or {pov_path}.* "
                     f"LLM may have failed to use write_file tool."
                 )
-            # Update the path using the first matching file (should only be one)
+            # Prioritize files with the expected suffix if available
+            if len(matching_files) > 1 and file_suffix:
+                suffix_matches = [f for f in matching_files if f.endswith(file_suffix)]
+                if suffix_matches:
+                    matching_files = suffix_matches
+                else: # Not find perfect match, just use original matching files
+                    pass
             pov_path = matching_files[0]
             self.logger.info(f"  [CrashTriggerAgent] Found PoV candidate with extension: {pov_path}")
 
@@ -376,7 +388,10 @@ class CrashTriggerAgent:
         except subprocess.TimeoutExpired as e:
             self.logger.warning(f"  [CrashTriggerAgent] Command execution timeout after 30s")
             exit_code = -1
-            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{e.stdout}\n\n[STDERR]\n{e.stderr}"
+            # Handle stdout/stderr that may be bytes or None
+            stdout_str = (e.stdout.decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or ''))
+            stderr_str = (e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or ''))
+            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{stdout_str}\n\n[STDERR]\n{stderr_str}"
         except Exception as e:
             self.logger.error(f"  [CrashTriggerAgent] Command execution failed: {e}")
             exit_code = -1

@@ -41,11 +41,13 @@ Common options:
 - `--name-regex=^func_name$`: Show coverage for a specific function (use regex anchors for exact match)
 - `--show-line-counts`: Show execution counts for each line
 
-Example `coverage_query` tool call:
-- Note: The binary program shown below is the coverage-instrumented executable **you are most likely to use**; however, it can be replaced with other binary paths if needed.
+Example `coverage_query` tool call (JSON format):
+Note: The binary program shown below is the coverage-instrumented executable **you are most likely to use**; however, it can be replaced with other binary paths if needed.
+```json
 {{
-    "command": "llvm-cov show {cov_binary_path} [source files] -instr-profile={previous_round_dir}/test_{previous_iteration}.profdata --name-regex=^target_function_name$"
+    "command": "llvm-cov show {cov_binary_path} /path/to/source.c -instr-profile={previous_round_dir}/test_{previous_iteration}.profdata --name-regex=^target_function_name$"
 }}
+```
 
 **Coverage Output Format:**
 - Lines with `N|` show execution count N (N=0 means NOT executed/uncovered)
@@ -71,7 +73,7 @@ Based on the runtime feedback below, your should try to figure out the actual ex
 # ##previous round dir instructions (if any)
 # #YOUR TASK
 PEA_testcase_generation_prompt = """You are generating a test case with the goal of reaching the vulnerable function, and potentially triggering the vulnerability crash.
-- This task typically requires multiple rounds of iteration. Your current high-level progress is: {loop_progress}. 
+- This task typically requires multiple rounds of iteration. This is iteration {current_iteration} of {max_iterations}.
 - In addition to the necessary vulnerability context, you will also receive execution feedback from the previous round to help you refine and improve the test cases.
 
 Vulnerable Project Name: {project_name}
@@ -104,7 +106,13 @@ Actual repository path: {actual_repo_path}
    - **Text-based input**: e.g., source code for interpreters (JavaScript, Ruby, Lua), markup (XML, JSON, HTML), config files, etc.
    - **Structured binary input**: e.g., image formats (PNG, JPEG, GIF), document formats (PDF), archive formats (ZIP), network protocols, custom binary formats, etc.
 
-3. **Generate a test case** (choose the appropriate method):
+3. **Analyze input format constraints**:
+   To reach the vulnerable code, your input must pass format validation checks in the program.
+   - Check the VULNERABILITY ROOT CAUSE section above for input format requirements
+   - If coverage feedback shows execution stopped early, read the source code near that location to identify what format checks failed (magic bytes, headers, checksums, length fields, etc.)
+   - Use `coverage_query` and `read_file`/`ast_grep_search_function` tools to inspect parsing functions along the call trace
+
+4. **Generate a test case** (choose the appropriate method):
 
    **Method A - For TEXT-based input (e.g., script interpreters like njs, mruby, lua):**
    - Use `write_file` tool directly to write the test case content
@@ -118,12 +126,6 @@ Actual repository path: {actual_repo_path}
      - Example: `execute_bash(command="python3 /path/to/gen_testcase_round1.py")`
    - The script should generate the binary testcase file at the TARGET TEST CASE FILE PATH
 
-4. **Vulnerability-specific patterns**:
-   - For buffer overflows: generate inputs that exceed buffer boundaries
-   - For Use-After-Free (UAF): generate inputs that trigger object deallocation followed by subsequent access or reuse of the freed memory
-   - For NULL Pointer Dereference (NPD): generate inputs that cause pointers to remain NULL and be dereferenced during execution
-   - For Out-of-Bounds (OOB): generate inputs that lead to memory accesses beyond the valid bounds of arrays or buffers
-
 5. **Explain your approach** (briefly):
    - What input pattern did you generate and why?
    - How does it aim to reach/trigger the vulnerability?
@@ -134,49 +136,42 @@ IMPORTANT:
   - You can also use `read_file` tool to read code if there is no function name. (you are encouraged to read more than one line)
 - **CRITICAL**: You MUST ensure the test case file exists at the TARGET TEST CASE FILE PATH before your final response!
 - If it is already the final turn, ensure you write/generate the test case file in this turn!!!
-- The test case file should contain ONLY the input data for the target program (not a script or code)
+- The test case file should contain valid input for the target program to process (e.g., JavaScript code for a JS interpreter, PNG data for an image parser) - NOT a generator script
 - Focus on generating input that reaches the vulnerable code path first
 - You can refine the input in subsequent rounds based on coverage feedback
+
+NOTES ON COVERAGE FEEDBACK:
+- Coverage instrumentation is imperfect: compiler optimizations may remove some instrumentation, causing functions to show 0 execution count even when executed. Use coverage data as a hint, not absolute truth - combine it with your understanding of the code.
+- If no functions in the call trace are covered, or the program crashes/exits immediately: your input format likely has fundamental issues. Step back and generate a minimal valid-format file first before adding vulnerability-targeted payload.
+- If "Function-Level Coarse-Grained Coverage" section is empty for multiple rounds: instrumentation or execution may have issues. Don't rely on coverage feedback so much - try to generate test cases based on vulnerability info and root cause analysis instead.
 
 Generate the test case now and write it to the target file path.
 
 ## EXAMPLES
 
 **Example 1 - Text-based (JavaScript interpreter like njs):**
-```
-# Directly write JS code that triggers the vulnerability
-   write_file(
-      file_path="/workspace/round1/testcase-round1.js",
-      content="function trigger() {{ var arr = new Array(100); arr[200] = 1; }} trigger();"
-   )
+Directly write JS code using `write_file` tool:
+```json
+{{
+    "file_path": "/workspace/round1/testcase-round1.js",
+    "content": "function trigger() {{ var arr = new Array(100); arr[200] = 1; }} trigger();"
+}}
 ```
 
 **Example 2 - Binary format (PNG parser):**
+Step 1: Write a Python script to generate malformed PNG using `write_file` tool:
+```json
+{{
+    "file_path": "/workspace/round1/gen_testcase_round1.py",
+    "content": "import struct\\n\\noutput_path = \\"/workspace/round1/testcase-round1.png\\"\\n\\nwith open(output_path, \\"wb\\") as f:\\n    f.write(b\\"\\\\x89PNG\\\\r\\\\n\\\\x1a\\\\n\\")\\n    ihdr_data = struct.pack(\\">IIBBBBB\\", 0xFFFFFFFF, 0xFFFFFFFF, 8, 2, 0, 0, 0)\\n    f.write(struct.pack(\\">I\\", len(ihdr_data)))\\n    f.write(b\\"IHDR\\")\\n    f.write(ihdr_data)\\n\\nprint(f\\"Generated testcase at {{output_path}}\\")"
+}}
 ```
-# Step 1: Write Python script to generate malformed PNG
-   write_file(
-      file_path="/workspace/round1/gen_testcase_round1.py",
-      content='''
-   import struct
-
-   output_path = "/workspace/round1/testcase-round1.png"
-
-   with open(output_path, "wb") as f:
-      # PNG magic header
-      f.write(b"\\x89PNG\\r\\n\\x1a\\n")
-      # Malformed IHDR chunk with oversized dimensions
-      ihdr_data = struct.pack(">IIBBBBB", 0xFFFFFFFF, 0xFFFFFFFF, 8, 2, 0, 0, 0)
-      f.write(struct.pack(">I", len(ihdr_data)))  # chunk length
-      f.write(b"IHDR")
-      f.write(ihdr_data)
-      # ... more chunks
-
-   print(f"Generated testcase at {{output_path}}")
-      '''
-   )
-
-# Step 2: Execute the script
-   execute_bash(command="python3 /workspace/round1/gen_testcase_round1.py", working_dir="/workspace/round1")
+Step 2: Execute the script using `execute_bash` tool:
+```json
+{{
+    "command": "python3 /workspace/round1/gen_testcase_round1.py",
+    "working_dir": "/workspace/round1"
+}}
 ```
 
 """

@@ -37,10 +37,10 @@ class VulnAnalysisAgent:
         if self.config.model_provider.lower() == "claude":
             # Really should control budget here, since sonnet is too expensive.
             self.max_rca_turns: int = 8
-            self.normal_task_llm = self.drill_agent.low_cost_llm # TODO: Try to put this into use.
+            # self.normal_task_llm = self.drill_agent.low_cost_llm # Maybe use low-cost LLM for more sub-tasks.
         else:
             self.max_rca_turns: int = 15
-            self.normal_task_llm = self.drill_agent.basic_llm
+            # self.normal_task_llm = self.drill_agent.basic_llm
 
         # Vulnerability information container!!!!!
         self.vuln_info = VulnInfo() # This will be returned to the caller class (DrillAgent).
