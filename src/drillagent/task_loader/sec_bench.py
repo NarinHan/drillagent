@@ -297,12 +297,18 @@ class RawSecbTaskLoader:
             all_json_files = glob.glob(os.path.join(self.dataset_path, "*.json"))
             # Filter by project names (instance_id format: "project_name.cve-xxxx")
             json_files = []
+            skipped_blacklist = []
             for json_file in all_json_files:
                 instance_id = Path(json_file).stem
                 project_name = instance_id.split('.')[0]
                 if project_name in self.project_names:
+                    if self.is_labelled_blacklist(instance_id):
+                        skipped_blacklist.append(instance_id)
+                        continue
                     json_files.append(json_file)
             print(f"[+] Found {len(json_files)} tasks matching the specified projects")
+            if skipped_blacklist:
+                print(f"[!] Skipped {len(skipped_blacklist)} blacklisted tasks: {skipped_blacklist}")
         else:
             print(f"[+] Loading all SEC-bench tasks from {self.dataset_path}")
             # Find all JSON files in the directory

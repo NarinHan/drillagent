@@ -2,6 +2,7 @@ import os
 import re
 import glob
 import shutil
+import signal
 import subprocess
 from datetime import datetime
 
@@ -336,38 +337,77 @@ class PathExplorationAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Substep 2: Execute the command with memory limit
+        # Use process group to ensure all child processes can be properly killed on timeout
         self.logger.info (f"  [PathExplorationAgent] Executing command: {command}")
+        process = None
         try:
-            # Use subprocess to execute the command, set timeout to avoid hang
-            result = subprocess.run(
+            # Use Popen with start_new_session to create a new process group
+            # This ensures we can kill all child processes on timeout
+            process = subprocess.Popen(
                 command,
                 shell=True,
-                cwd=round_dir, # Path to instrumented binary is absolute, so we can execute anywhere.
-                env=env,       # LLVM_PROFILE_FILE is set
-                capture_output=True,
+                cwd=round_dir,  # Path to instrumented binary is absolute, so we can execute anywhere.
+                env=env,        # LLVM_PROFILE_FILE is set
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=30,    # 30 seconds timeout
+                start_new_session=True,      # Create new process group to avoid orphan processes
                 preexec_fn=set_memory_limit  # Apply memory limit to subprocess
             )
-            exit_code = result.returncode
-            stdout = result.stdout
-            stderr = result.stderr
+            stdout, stderr = process.communicate(timeout=30)
+            exit_code = process.returncode
             # Merge stdout and stderr as exec_output
             exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
             self.logger.info(f"  [PathExplorationAgent] Command exit code: {exit_code}")
             if exit_code != 0:
-                self.logger.info(f"  [PathExplorationAgent] stderr: {stderr[:500]}...") # Log first 500 chars of stderr if error
+                self.logger.info(f"  [PathExplorationAgent] stderr: {stderr[:500]}...")  # Log first 500 chars of stderr if error
             # Show the current round directory contents.
             _, output = list_directory(round_dir)
             self.logger.debug(f"  [PathExplorationAgent] ls -lh {round_dir}:\n{output}")
-        except subprocess.TimeoutExpired as e:
-            self.logger.warning(f"  [PathExplorationAgent] Command execution timeout after 30s")
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"  [PathExplorationAgent] Command execution timeout after 30s, killing process group...")
             exit_code = -1
-            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{e.stdout}\n\n[STDERR]\n{e.stderr}"
+            partial_stdout, partial_stderr = "", ""
+            if process is not None:
+                # Kill the entire process group first to release pipe write ends
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=2)  # Give it 2 seconds to terminate gracefully
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)  # Force kill if still alive
+                        process.wait()
+                except (ProcessLookupError, OSError):
+                    pass  # Process already terminated
+                # Now read any remaining output from pipes (safe after process termination)
+                try:
+                    if process.stdout:
+                        partial_stdout = process.stdout.read() or ""
+                    if process.stderr:
+                        partial_stderr = process.stderr.read() or ""
+                except Exception:
+                    pass  # Ignore read errors
+            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{partial_stdout}\n[STDERR]\n{partial_stderr}"
         except Exception as e:
             self.logger.error(f"  [PathExplorationAgent] Command execution failed: {e}")
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
+            # Ensure process is cleaned up on any exception
+            if process is not None and process.poll() is None:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                    process.wait()
+                except (ProcessLookupError, OSError):
+                    pass
+        finally:
+            # Explicitly close pipes to prevent resource leaks
+            if process is not None:
+                if process.stdout:
+                    process.stdout.close()
+                if process.stderr:
+                    process.stderr.close()
 
         # Substep 3: Use LLVMCovUtils to transform profraw and store the coverage profile data (after each execution).
         if not os.path.exists(profraw_path): # Check if profraw file has been generated

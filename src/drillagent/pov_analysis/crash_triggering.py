@@ -2,6 +2,7 @@ import os
 import re
 import glob
 import shutil
+import signal
 import subprocess
 from datetime import datetime
 
@@ -148,6 +149,10 @@ class CrashTriggerAgent:
                 elif os.path.isdir(item_path):
                     shutil.rmtree(item_path)
             # self.logger.debug(f"  [CrashTriggerAgent] Created and cleared round directory: {round_dir}")
+
+            # Clear previous coverage data to avoid memory leak (conservative operation)
+            if self.llvm_cov_utils:
+                self.llvm_cov_utils.clear_data()
 
             try:# Main operations!
                 # Step 1: Generate final PoV.
@@ -364,38 +369,74 @@ class CrashTriggerAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Execute the command
+        # Use process group to ensure all child processes can be properly killed on timeout
         self.logger.info(f"  [CrashTriggerAgent] Executing command: {command}")
+        process = None
         try:
-            # Use subprocess to execute the command, set timeout to avoid hang
-            result = subprocess.run(
+            # Use Popen with start_new_session to create a new process group
+            # This ensures we can kill all child processes on timeout
+            process = subprocess.Popen(
                 command,
                 shell=True,
                 cwd=round_dir,
-                env=env, # Specify environment with LLVM_PROFILE_FILE
-                capture_output=True,
+                env=env,  # Specify environment with LLVM_PROFILE_FILE
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=30,  # 30 seconds timeout
+                start_new_session=True,      # Create new process group to avoid orphan processes
                 preexec_fn=set_memory_limit  # Apply memory limit to subprocess
             )
-            exit_code = result.returncode
-            stdout = result.stdout
-            stderr = result.stderr
+            stdout, stderr = process.communicate(timeout=30)
+            exit_code = process.returncode
             # Merge stdout and stderr as exec_output
             exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
             # Show the current round directory contents.
             _, output = list_directory(round_dir)
             self.logger.debug(f"  [CrashTriggerAgent] ls -lh {round_dir}:\n{output}")
-        except subprocess.TimeoutExpired as e:
-            self.logger.warning(f"  [CrashTriggerAgent] Command execution timeout after 30s")
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"  [CrashTriggerAgent] Command execution timeout after 30s, killing process group...")
             exit_code = -1
-            # Handle stdout/stderr that may be bytes or None
-            stdout_str = (e.stdout.decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or ''))
-            stderr_str = (e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or ''))
-            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{stdout_str}\n\n[STDERR]\n{stderr_str}"
+            partial_stdout, partial_stderr = "", ""
+            if process is not None:
+                # Kill the entire process group first to release pipe write ends
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=2)  # Give it 2 seconds to terminate gracefully
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)  # Force kill if still alive
+                        process.wait()
+                except (ProcessLookupError, OSError):
+                    pass  # Process already terminated
+                # Now read any remaining output from pipes (safe after process termination)
+                try:
+                    if process.stdout:
+                        partial_stdout = process.stdout.read() or ""
+                    if process.stderr:
+                        partial_stderr = process.stderr.read() or ""
+                except Exception:
+                    pass  # Ignore read errors
+            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{partial_stdout}\n[STDERR]\n{partial_stderr}"
         except Exception as e:
             self.logger.error(f"  [CrashTriggerAgent] Command execution failed: {e}")
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
+            # Ensure process is cleaned up on any exception
+            if process is not None and process.poll() is None:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                    process.wait()
+                except (ProcessLookupError, OSError):
+                    pass
+        finally:
+            # Explicitly close pipes to prevent resource leaks
+            if process is not None:
+                if process.stdout:
+                    process.stdout.close()
+                if process.stderr:
+                    process.stderr.close()
 
         # After execution finished, convert the profraw to profdata, and update the file path.
         if os.path.exists(profraw_path):
