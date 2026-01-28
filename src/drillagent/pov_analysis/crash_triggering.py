@@ -36,7 +36,7 @@ class CrashTriggerAgent:
         self.current_trigger_iteration = 0
         # Control test case generation turns.
         if self.config.model_provider.lower() == "claude":
-            self.max_trigger_iterations = 8
+            self.max_trigger_iterations = 6 # Also need to save money here...
             self.max_generation_turns   = 4 # Larger turns will cause input context explosion.
         else:
             self.max_trigger_iterations = 8

@@ -280,7 +280,7 @@ LDFLAGS="${{LDFLAGS:-}}"
         
         try:
             # Use LLMInterface.generate() for simple text generation
-            response = self.drill_agent.basic_llm.generate(
+            response = self.drill_agent.low_cost_llm.generate(
                 prompt=prompt,
                 system_prompt=CIA_system_prompt,
                 temperature=0.1,

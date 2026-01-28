@@ -53,7 +53,7 @@ class AgentConfig:
     #
     # Analysis options
     #
-    max_budget_usd: float = 3.5  # Maximum budget in USD for a single analysis run
+    max_budget_usd: float = 2.5  # Maximum budget in USD for a single analysis run
     # 2025.12.30: Currently not put into use.
     max_iterations: int = 10
     timeout: int = 1200  # in seconds # 20mins

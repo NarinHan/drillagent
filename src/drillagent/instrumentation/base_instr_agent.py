@@ -84,16 +84,67 @@ class BaseInstrAgent:
 
     def get_repeated_errors(self, threshold: int = 2) -> List[Tuple[str, int]]:
         """Get errors that have occurred multiple times
-        
+
         Args:
             threshold: Minimum number of occurrences to consider an error repeated
-            
+
         Returns:
             List of (error_signature, count) tuples for repeated errors
         """
-        return [(sig, count) for sig, count in self.error_patterns.items() 
+        return [(sig, count) for sig, count in self.error_patterns.items()
                 if count >= threshold]
 
+    # ==================== Text Truncation Methods ====================
+    def _truncate_middle(
+        self,
+        text: str,
+        max_lines: int = 100,
+        max_chars: int = 6000,
+        head_ratio: float = 0.4
+    ) -> str:
+        """Truncate text by keeping head and tail, omitting middle
+
+        For build errors, the head often contains the command and early warnings,
+        while the tail contains the actual error messages and summary.
+
+        Args:
+            text: Text to truncate
+            max_lines: Maximum number of lines to keep
+            max_chars: Maximum number of characters (fallback limit)
+            head_ratio: Ratio of lines to keep from head (default 0.4, so tail gets 0.6)
+
+        Returns:
+            Truncated text with middle omitted if necessary
+        """
+        if not text:
+            return text
+
+        lines = text.splitlines()
+
+        # Check if truncation is needed
+        if len(lines) <= max_lines and len(text) <= max_chars:
+            return text
+
+        # Calculate head/tail line counts
+        head_lines_count = int(max_lines * head_ratio)
+        tail_lines_count = max_lines - head_lines_count
+
+        # Truncate by lines first
+        if len(lines) > max_lines:
+            head_lines = lines[:head_lines_count]
+            tail_lines = lines[-tail_lines_count:]
+            omitted_count = len(lines) - max_lines
+            result = "\n".join(head_lines) + f"\n\n... [{omitted_count} lines omitted] ...\n\n" + "\n".join(tail_lines)
+        else:
+            result = text
+
+        # Apply character limit as fallback (truncate middle of the result)
+        if len(result) > max_chars:
+            head_chars = int(max_chars * head_ratio)
+            tail_chars = max_chars - head_chars - 50  # Reserve space for omission marker
+            result = result[:head_chars] + "\n... [truncated] ...\n" + result[-tail_chars:]
+
+        return result
 
     # ==================== Build Execution Methods ====================
     # These methods provide common build functionality for instrumentation agents
@@ -147,7 +198,7 @@ class BaseInstrAgent:
             self.record_error(error)
             
             # If we have more attempts and LLM is available, ask for help
-            if attempt < attempts and self.drill_agent.basic_llm:
+            if attempt < attempts:
                 self.logger.info("Analyzing build error with LLM...")
                 fixed_commands = self._diagnose_and_fix_build_error(
                     error=error,
@@ -249,13 +300,17 @@ class BaseInstrAgent:
         Returns:
             Updated build commands if fix found, None otherwise
         """
-        # Build the diagnostic prompt
+        # Build the diagnostic prompt with truncated outputs
+        # Use head-tail truncation to preserve both command context and final errors
+        truncated_error = self._truncate_middle(error, max_lines=80, max_chars=4000, head_ratio=0.3)
+        truncated_output = self._truncate_middle(output, max_lines=40, max_chars=2000, head_ratio=0.3)
+
         prompt = BA_diagnose_build_error_prompt.format(
             project_name=self.project_name,
             context=context,
             build_commands=build_commands,
-            error=error[:4000],  # Truncate very long errors
-            output=output[:2000]  # Truncate very long output
+            error=truncated_error,
+            output=truncated_output
         )
 
         try:
