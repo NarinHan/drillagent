@@ -33,12 +33,13 @@ class CrashTriggerAgent:
 
         # The outermost-loop counters.
         self.current_trigger_iteration = 0
-        self.max_trigger_iterations = 8
         # Control test case generation turns.
         if self.config.model_provider.lower() == "claude":
-            self.max_generation_turns = 4 # Larger turns will cause input context explosion.
+            self.max_trigger_iterations = 8
+            self.max_generation_turns   = 4 # Larger turns will cause input context explosion.
         else:
-            self.max_generation_turns = 6
+            self.max_trigger_iterations = 8
+            self.max_generation_turns   = 6
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.

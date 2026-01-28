@@ -319,6 +319,11 @@ Examples:
         action='store_true',
         help='Force clear VulnAnalysisAgent cache before analysis (re-run from scratch)'
     )
+    parser.add_argument(
+        '--no-skip-completed',
+        action='store_true',
+        help='Disable skipping tasks that have already been fully tested (by default, tasks with non-zero PEA or CTA tokens are skipped)'
+    )
 
     return parser.parse_args()
 
@@ -349,6 +354,40 @@ def parse_model_spec(model_spec):
         sys.exit(1)
 
     return (provider, model_name)
+
+
+def is_task_completed(instance_id: str, output_dir: Path) -> bool:
+    """
+    Check if a task has already been fully tested.
+
+    A task is considered completed if either PEA or CTA has non-zero total_tokens
+    in the tokens_overhead.json file.
+
+    Args:
+        instance_id: The task instance ID
+        output_dir: Base output directory
+
+    Returns:
+        True if the task has been completed (should be skipped), False otherwise
+    """
+    tokens_file = output_dir / instance_id / "tokens_overhead.json"
+
+    if not tokens_file.exists():
+        return False
+
+    try:
+        with open(tokens_file, 'r') as f:
+            data = json.load(f)
+
+        pea_tokens = data.get("PEA", {}).get("total_tokens", 0)
+        cta_tokens = data.get("CTA", {}).get("total_tokens", 0)
+
+        # If either PEA or CTA has non-zero tokens, the task has been run
+        return pea_tokens != 0 or cta_tokens != 0
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        # If there's an error reading the file, assume not completed
+        print(f"  Warning: Error reading tokens_overhead.json for {instance_id}: {e}")
+        return False
 
 
 def run_single_task(task: SecbTask, repo_path: Path, args, api_key: str, model_provider: str) -> Dict[str, Any]:
@@ -589,9 +628,20 @@ def main():
     results = []
     successful = 0
     failed = 0
+    skipped = 0
+
+    # Determine base output directory for completion check
+    base_output_dir = Path(args.output_dir or "./output")
 
     for i, task in enumerate(tasks, 1):
         print(f"\n[{i}/{len(tasks)}] Processing: {task.instance_id}")
+
+        # Check if task has already been completed (skip by default)
+        if not args.no_skip_completed:
+            if is_task_completed(task.instance_id, base_output_dir):
+                print(f"  ⏭ Skipping: task already completed (PEA or CTA has non-zero tokens)")
+                skipped += 1
+                continue
 
         # Determine repository path
         try:
@@ -641,9 +691,11 @@ def main():
     print("EXECUTION SUMMARY")
     print("=" * 70)
     print(f"Total Tasks: {len(tasks)}")
+    print(f"Skipped (already completed): {skipped}")
     print(f"Successful: {successful}")
     print(f"Failed: {failed}")
-    print(f"Completion Rate: {successful}/{len(tasks)} ({100*successful/len(tasks) if tasks else 0:.1f}%)")
+    executed = successful + failed
+    print(f"Completion Rate: {successful}/{executed} ({100*successful/executed if executed else 0:.1f}%)")
 
     # Print per-task results
     print("\nDetailed Results:")
