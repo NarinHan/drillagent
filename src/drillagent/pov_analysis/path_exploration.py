@@ -457,6 +457,7 @@ class PathExplorationAgent:
         # Substep 2.1: Extract function frames from vulnerable call trace
         # Check if we have a valid call trace
         if not self.vuln_crash_trace or len(self.vuln_crash_trace) == 0:
+            # 01.27: After our massive experiments, almost never happens here.
             self.logger.warning(f"  [PathExplorationAgent] No vulnerability call trace available for coverage analysis, returning empty results.")
             return "None", []
 
@@ -465,6 +466,7 @@ class PathExplorationAgent:
         for frame in self.vuln_crash_trace:
             # Skip external functions and frames without complete info
             if frame.get('is_external', False) or not frame.get('function_name') or not frame.get('file_path'):
+                # 01.27: After our massive experiments, almost never happens here.
                 self.logger.debug(f"  [PathExplorationAgent] Skipping frame #{frame.get('sequence_num', -1)}: external or incomplete info")
                 continue
             # Convert file_path to absolute path

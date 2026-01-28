@@ -176,11 +176,27 @@ LDFLAGS="${{LDFLAGS:-}}"
         
         # Inject flags based on build system (using contains_in_non_comment_lines to ignore comments)
         if contains_in_non_comment_lines(modified, 'configure'):
-            if '--cc-opt' in modified:
-                # Configure scripts with --cc-opt and --ld-opt (like njs)
+            # Check for custom configure flags patterns
+            has_extra_cflags = '--extra-cflags' in modified or '--extra-ldflags' in modified
+            if has_extra_cflags:
+                # Configure scripts with --extra-cflags and/or --extra-ldflags (like gpac, ffmpeg, qemu)
+                # Must inject COV_CFLAGS/COV_LDFLAGS directly into the flag values because
+                # shell variable expansion happens BEFORE env var assignment takes effect
+                # e.g., "CFLAGS=new ./cmd --extra-cflags=$CFLAGS" expands $CFLAGS with OLD value
                 modified = re.sub(
-                    r'(\n\s*)(\./configure\s)',
-                    r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CC=clang CFLAGS="$COV_CFLAGS $CFLAGS" LDFLAGS="$COV_LDFLAGS $LDFLAGS" ./configure --cc=clang --cc-opt="$COV_CFLAGS" --ld-opt="$COV_LDFLAGS" ',
+                    r'--extra-cflags=(["\'])([^"\']*)\1',
+                    r'--extra-cflags=\1$COV_CFLAGS \2\1',
+                    modified
+                )
+                modified = re.sub(
+                    r'--extra-ldflags=(["\'])([^"\']*)\1',
+                    r'--extra-ldflags=\1$COV_LDFLAGS \2\1',
+                    modified
+                )
+                # Set CC/CXX before configure
+                modified = re.sub(
+                    r'(\n\s*)(\./configure)',
+                    r'\1CC=clang CXX=clang++ \2',
                     modified
                 )
             else:

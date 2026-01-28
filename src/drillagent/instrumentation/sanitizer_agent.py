@@ -204,12 +204,29 @@ LDFLAGS="${{LDFLAGS:-}}"
 
         # Inject flags based on build system
         if contains_in_non_comment_lines(modified, 'configure'):
-            # Plain configure
-            modified = re.sub(
-                r'(\n\s*)(\./configure)(\s|$)',
-                r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CFLAGS="$SAN_CFLAGS $CFLAGS" CXXFLAGS="$SAN_CFLAGS $CXXFLAGS" LDFLAGS="$SAN_LDFLAGS $LDFLAGS" ./configure\3',
-                modified
-            )
+            # Check for custom configure flags patterns
+            has_extra_cflags = '--extra-cflags' in modified or '--extra-ldflags' in modified
+            if has_extra_cflags:
+                # Configure scripts with --extra-cflags and/or --extra-ldflags (like gpac, ffmpeg, qemu)
+                # Must inject SAN_CFLAGS/SAN_LDFLAGS directly into the flag values because
+                # shell variable expansion happens BEFORE env var assignment takes effect
+                modified = re.sub(
+                    r'--extra-cflags=(["\'])([^"\']*)\1',
+                    r'--extra-cflags=\1$SAN_CFLAGS \2\1',
+                    modified
+                )
+                modified = re.sub(
+                    r'--extra-ldflags=(["\'])([^"\']*)\1',
+                    r'--extra-ldflags=\1$SAN_LDFLAGS \2\1',
+                    modified
+                )
+            else:
+                # Plain configure without special flags
+                modified = re.sub(
+                    r'(\n\s*)(\./configure)(\s|$)',
+                    r'\nexport CFLAGS="${CFLAGS//-fno-use-cxa-atexit/}"\n\1CFLAGS="$SAN_CFLAGS $CFLAGS" CXXFLAGS="$SAN_CFLAGS $CXXFLAGS" LDFLAGS="$SAN_LDFLAGS $LDFLAGS" ./configure\3',
+                    modified
+                )
         elif contains_in_non_comment_lines(modified, 'autogen.sh'):
             # autogen.sh without explicit configure - inject flags before autogen.sh
             modified = re.sub(

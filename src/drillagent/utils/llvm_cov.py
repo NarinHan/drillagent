@@ -1,9 +1,10 @@
 import subprocess
+import signal
 import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 # llvm-cov: Either use this cli tool directly, or dump JSON data and parse it ourselves.
 class LLVMCovUtils:
@@ -39,6 +40,70 @@ class LLVMCovUtils:
         # Cache for exported JSON data (can be large, use clear_data() to free memory).
         self._coverage_data: Optional[Dict[str, Any]] = None
 
+    def _run_command_with_timeout(self, cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
+        """
+        Execute a command with timeout and proper resource cleanup.
+        Uses process groups to ensure all child processes are killed on timeout.
+
+        Args:
+            cmd: Command and arguments as a list
+            timeout: Timeout in seconds (default: 30)
+
+        Returns:
+            Tuple of (return_code, stdout, stderr)
+            return_code is -1 on timeout or error
+
+        Raises:
+            RuntimeError: If command fails (non-zero return code or timeout)
+        """
+        process = None
+        try:
+            # Use Popen with start_new_session to create a new process group
+            # This ensures we can kill all child processes on timeout
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True  # Create new process group to avoid zombie processes
+            )
+            stdout, stderr = process.communicate(timeout=timeout)
+            return process.returncode, stdout, stderr
+
+        except subprocess.TimeoutExpired:
+            # Kill the entire process group to prevent zombie processes
+            if process is not None:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=2)  # Give it 2 seconds to terminate gracefully
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)  # Force kill if still alive
+                        process.wait()
+                except (ProcessLookupError, OSError):
+                    pass  # Process already terminated
+            raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(cmd)}")
+
+        except Exception as e:
+            # Ensure process is cleaned up on any exception
+            if process is not None and process.poll() is None:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                    process.wait()
+                except (ProcessLookupError, OSError):
+                    pass
+            raise RuntimeError(f"Command execution failed: {e}")
+
+        finally:
+            # Explicitly close pipes to prevent resource leaks
+            if process is not None:
+                if process.stdout:
+                    process.stdout.close()
+                if process.stderr:
+                    process.stderr.close()
+
     def update_profile_data(self, profraw_path: str) -> None:
         # First clear self.profdata_path and self._coverage_data. Then re-generate these two fields from profraw_path.
         # Validate profraw_path format
@@ -65,9 +130,9 @@ class LLVMCovUtils:
             '-o',
             profdata_path
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to convert profraw to profdata: {result.stderr}")
+        returncode, _, stderr = self._run_command_with_timeout(cmd, timeout=30)
+        if returncode != 0:
+            raise RuntimeError(f"Failed to convert profraw to profdata: {stderr}")
         self.profdata_path = profdata_path
         # The cov json data will be parsed lazily when needed.
 
@@ -92,10 +157,10 @@ class LLVMCovUtils:
                 f'-instr-profile={self.profdata_path}',
                 '-format=text'
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                raise RuntimeError(f"llvm-cov command failed: {result.stderr}")
-            self._coverage_data = json.loads(result.stdout)
+            returncode, stdout, stderr = self._run_command_with_timeout(cmd, timeout=30)
+            if returncode != 0:
+                raise RuntimeError(f"llvm-cov export command failed: {stderr}")
+            self._coverage_data = json.loads(stdout)
 
         return self._coverage_data
 
@@ -243,13 +308,13 @@ class LLVMCovUtils:
             f'--name={function_name}'
         ]
 
-        # Execute the command
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"llvm-cov show command failed: {result.stderr}")
+        # Execute the command with timeout
+        returncode, stdout, stderr = self._run_command_with_timeout(cmd, timeout=30)
+        if returncode != 0:
+            raise RuntimeError(f"llvm-cov show command failed: {stderr}")
 
         # Return the output directly
-        return result.stdout
+        return stdout
 
 
     def get_line_coverage(self, file_path: str, line_number: int) -> Dict[str, Any]: # Based on llvm-cov show command
@@ -281,10 +346,10 @@ class LLVMCovUtils:
             file_path
         ]
 
-        # Execute the command
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"llvm-cov show command failed: {result.stderr}")
+        # Execute the command with timeout
+        returncode, stdout, stderr = self._run_command_with_timeout(cmd, timeout=30)
+        if returncode != 0:
+            raise RuntimeError(f"llvm-cov show command failed: {stderr}")
 
         # Parse the output to find the target line
         # Expected formats:
@@ -301,7 +366,7 @@ class LLVMCovUtils:
         #   \|             - separator
         pattern = re.compile(r'^\s*(\d+)\|\s*([0-9.]+[kKMGT]?)\|')
 
-        for line in result.stdout.split('\n'):
+        for line in stdout.split('\n'):
             match = pattern.match(line)
             if match:
                 current_line_num = int(match.group(1))
@@ -408,20 +473,20 @@ class LLVMCovUtils:
             self.binary_path,
             f'-instr-profile={self.profdata_path}'
         ]
-        # print(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"llvm-cov command failed: {result.stderr}")
+        # Execute the command with timeout
+        returncode, stdout, stderr = self._run_command_with_timeout(cmd, timeout=30)
+        if returncode != 0:
+            raise RuntimeError(f"llvm-cov report command failed: {stderr}")
 
         # Truncate output if exceeds max_lines
-        lines = result.stdout.splitlines()
+        lines = stdout.splitlines()
         if len(lines) > max_lines:
             truncated_lines = lines[:max_lines]
             omitted_count = len(lines) - max_lines
             truncated_lines.append(f"... ({omitted_count} lines omitted)")
             return '\n'.join(truncated_lines)
         # If not exceeding max_lines, return full output
-        return result.stdout
+        return stdout
 
     def generate_html_report(self, output_dir: str) -> str:
         """
@@ -442,9 +507,9 @@ class LLVMCovUtils:
             '-format=html',
             f'-output-dir={output_dir}'
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"llvm-cov command failed: {result.stderr}")
+        returncode, _, stderr = self._run_command_with_timeout(cmd, timeout=30)
+        if returncode != 0:
+            raise RuntimeError(f"llvm-cov html command failed: {stderr}")
 
         # Return main HTML file path
         index_path = os.path.join(output_dir, 'index.html')

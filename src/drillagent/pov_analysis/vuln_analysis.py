@@ -99,7 +99,7 @@ class VulnAnalysisAgent:
 
             # Load data into vuln_info using from_dict
             self.vuln_info = VulnInfo.from_dict(vuln_data)
-            self.logger.info(f"  [VulnAnalysisAgent] Successfully loaded cache from: {cache_filepath}")
+            self.logger.info(f"  [VulnAnalysisAgent] Loaded successfully cache from: {cache_filepath}")
             return True
 
         except json.JSONDecodeError as e:
