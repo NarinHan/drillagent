@@ -839,6 +839,7 @@ class LLMInterface:
                         "- `write_file`: to create the target file (or a Python script that generates it)\n"
                         "- `execute_bash`: to run the script if needed (e.g., run 'python3 /path/to/script.py' if you just created a python script)\n"
                         "- `finish`: to indicate task completion\n\n"
+                        "**IMPORTANT**: If you write a Python script with `write_file`, you MUST also call `execute_bash` to run it in this final iteration!\n\n"
                         "**Warning**: This is your LAST response. You will NOT see any tool execution results!"
                     )
                 elif next_iteration == max_iterations - 1:

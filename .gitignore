@@ -4,7 +4,12 @@
 logs/
 cache/
 output/
+output-gpt/
+output-sonnet/
+output.*
 workspace/
+workspace-gpt/
+workspace-sonnet/
 eval/
 gt_povs/
 success_povs/

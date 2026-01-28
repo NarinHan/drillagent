@@ -133,6 +133,7 @@ Actual repository path: {actual_repo_path}
      - Use `struct` module for binary packing, handle magic headers, checksums, etc.
    - Step 2: Execute the script using `execute_bash` tool
      - Example: `execute_bash(command="python3 /path/to/gen_testcase_round1.py")`
+     - **IMPORTANT**: Set `working_dir` parameter to the current round directory path so the script can find/write files correctly
    - The script should generate the binary PoV file at the TARGET PoV FILE PATH
 
 5. **Explain your PoV strategy** (briefly):
@@ -160,40 +161,27 @@ Generate the final PoV now and write it to the target file path.
 ## EXAMPLES
 
 **Example 1 - Text-based (Ruby interpreter like mruby):**
-```
-# Directly write Ruby code that triggers UAF
-write_file(
-    file_path="/workspace/triggering/round1/testcase-round1.rb",
-    content="obj = Object.new; weak = WeakRef.new(obj); obj = nil; GC.start; weak.__getobj__"
-)
+Directly write Ruby code using `write_file` tool:
+```json
+{{
+    "file_path": "testcase-round1.rb",
+    "content": "obj = Object.new; weak = WeakRef.new(obj); obj = nil; GC.start; weak.__getobj__"
+}}
 ```
 
 **Example 2 - Binary format (PDF parser):**
+Step 1: Write a Python script to generate malformed PDF using `write_file` tool:
+```json
+{{
+    "file_path": "gen_testcase_round1.py",
+    "content": "import struct\\n\\noutput_path = \\"testcase-round1.pdf\\"\\n\\nwith open(output_path, \\"wb\\") as f:\\n    f.write(b\\"%PDF-1.4\\\\n\\")\\n    f.write(b\\"1 0 obj\\\\n\\")\\n    f.write(b\\"<< /Length 999999999 >>\\\\n\\")\\n    f.write(b\\"stream\\\\n\\")\\n    f.write(b\\"A\\" * 1000)\\n    f.write(b\\"\\\\nendstream\\\\n\\")\\n    f.write(b\\"endobj\\\\n\\")\\n\\nprint(f\\"Generated PoV at {{output_path}}\\")"
+}}
 ```
-# Step 1: Write Python script to generate malformed PDF
-write_file(
-    file_path="/workspace/triggering/round1/gen_testcase_round1.py",
-    content='''
-import struct
-
-output_path = "/workspace/triggering/round1/testcase-round1.pdf"
-
-with open(output_path, "wb") as f:
-    # PDF header
-    f.write(b"%PDF-1.4\\n")
-    # Malformed object with oversized stream length
-    f.write(b"1 0 obj\\n")
-    f.write(b"<< /Length 999999999 >>\\n")
-    f.write(b"stream\\n")
-    f.write(b"A" * 1000)  # Actual content much smaller than declared
-    f.write(b"\\nendstream\\n")
-    f.write(b"endobj\\n")
-
-print(f"Generated PoV at {{output_path}}")
-'''
-)
-
-# Step 2: Execute the script
-execute_bash(command="python3 /workspace/triggering/round1/gen_testcase_round1.py", working_dir="/workspace/triggering/round1")
+Step 2: Execute the script using `execute_bash` tool (set `working_dir` to round directory):
+```json
+{{
+    "command": "python3 gen_testcase_round1.py",
+    "working_dir": "/workspace/triggering/round1"
+}}
 ```
 """

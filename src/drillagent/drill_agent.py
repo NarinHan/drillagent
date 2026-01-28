@@ -105,6 +105,9 @@ class DrillAgent:
         self._init_components()
 
         self.logger.info(f"DrillAgent initialized for target: {config.target_repo_path}")
+        self.logger.info(f"Workspace Dir: {self.work_dir}")
+        self.logger.info(f"Output    Dir: {self.output_dir}")
+        self.logger.info(f"Cache     Dir: {self.cache_dir}")
         # self.logger.info(f"Skip vulnerability analysis: {self.skip_vulnerability_analysis}")
         # self.logger.info(f"Skip code instrumentation:  {self.skip_code_instrumentation}")
         # self.logger.info(f"Skip path exploration: {self.skip_path_exploration}")
@@ -116,9 +119,9 @@ class DrillAgent:
         # Initialize basic agent tools for LLM
         try:
             self.basic_tools = [
-                ReadFileTool(self.config.target_repo_path),
-                WriteFileTool(self.config.target_repo_path),
-                BashTool(self.config.target_repo_path),
+                ReadFileTool(self.config.target_repo_path),  # If LLM returns tool call with relative file_path, it is relative to target_repo_path!
+                WriteFileTool(self.config.target_repo_path), # If LLM returns tool call with relative file_path, it is relative to target_repo_path!
+                BashTool(self.config.target_repo_path),      # If LLM doesn't specify working_dir, it is relative to target_repo_path!
                 FinishTool()
             ]
             self.logger.info(f"✓ Agent basic tools initialized: {len(self.basic_tools)} tools available")
@@ -252,6 +255,7 @@ class DrillAgent:
                     return self.generate_report()
 
             # Phase 3: Path Exploration with the coverage feedback
+            # Update: Seems that even ITA, PEA, CTA are skipped, this will still be executed.
             self._update_actual_binary_path(self.config.target_repo_path) # Necessary before PEA
             if not self.skip_path_exploration:
                 start_time = time.time()

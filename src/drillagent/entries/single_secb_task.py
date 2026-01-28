@@ -260,9 +260,11 @@ def parse_model_spec(model_spec):
 def main():
     args = parse_args()
 
-    # Set default directories if not specified
-    work_dir = args.work_dir or f"./workspace/{args.instance_id}"
-    output_dir = args.output_dir or f"./output/{args.instance_id}"
+    # Set up directories (always add instance_id subdirectory for consistency with multiple_secb_task.py)
+    base_work_dir = Path(args.work_dir or "./workspace")
+    base_output_dir = Path(args.output_dir or "./output")
+    work_dir = str(base_work_dir / args.instance_id)
+    output_dir = str(base_output_dir / args.instance_id)
 
     # Load API key
     api_key = load_api_key(args)

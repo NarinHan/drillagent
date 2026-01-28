@@ -2,6 +2,7 @@ import os
 import re
 import glob
 import shutil
+import signal
 import subprocess
 from datetime import datetime
 
@@ -10,6 +11,7 @@ if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
     from drillagent.tools.basic_tools import AgentTool
 
+from drillagent.tools.basic_tools import WriteFileTool
 from drillagent.prompts.CrashTriggerAgent_prompt import (
     CTA_system_prompt,
     CTA_useful_testcase_and_cov_template,
@@ -32,12 +34,13 @@ class CrashTriggerAgent:
 
         # The outermost-loop counters.
         self.current_trigger_iteration = 0
-        self.max_trigger_iterations = 8
         # Control test case generation turns.
         if self.config.model_provider.lower() == "claude":
-            self.max_generation_turns = 4 # Larger turns will cause input context explosion.
+            self.max_trigger_iterations = 6 # Also need to save money here...
+            self.max_generation_turns   = 4 # Larger turns will cause input context explosion.
         else:
-            self.max_generation_turns = 6
+            self.max_trigger_iterations = 8
+            self.max_generation_turns   = 6
 
         # Input files. (three files should be enough)
         self.useful_testcase_paths  = []  # List of file paths to useful test cases from path exploration.
@@ -114,6 +117,8 @@ class CrashTriggerAgent:
                         self.logger.info(f"  [CrashTriggerAgent] *** Variant PoV found from path exploration phase! Crash: {cur_crash_type} (expect {self.drill_agent.gt_crash_type}) ***")
                         self._record_variant_pov(PEA_pov_data, crash_pov_path)
                         self.logger.info("  [CrashTriggerAgent] Proceeding with crash triggering attempts to craft target-type PoV...")
+                        # Heuristic: Since we have a variant PoV, we reduce the max_trigger_iterations to speed up.
+                        self.max_trigger_iterations = max(1, self.max_trigger_iterations // 2)
                 else:
                     self.logger.info("  [CrashTriggerAgent] Crash input from path exploration failed to pass validation. Proceeding with crash triggering attempts...")
             else:
@@ -148,6 +153,10 @@ class CrashTriggerAgent:
                 elif os.path.isdir(item_path):
                     shutil.rmtree(item_path)
             # self.logger.debug(f"  [CrashTriggerAgent] Created and cleared round directory: {round_dir}")
+
+            # Clear previous coverage data to avoid memory leak (conservative operation)
+            if self.llvm_cov_utils:
+                self.llvm_cov_utils.clear_data()
 
             try:# Main operations!
                 # Step 1: Generate final PoV.
@@ -285,6 +294,14 @@ class CrashTriggerAgent:
 
         # For crash triggering, we also provide ast-grep and coverage tools.
         self.logger.info(f"  [CrashTriggerAgent] Using LLMInterface to generate final PoV candidate (max rounds={self.max_generation_turns})...")
+
+        # Update WriteFileTool's basic_dir to current round_dir before running agent loop
+        for tool in self.tools_for_generation:
+            if isinstance(tool, WriteFileTool):
+                tool.update_basic_dir(round_dir)
+                self.logger.debug(f"  [CrashTriggerAgent] Updated WriteFileTool basic_dir to: {round_dir}")
+                break
+
         try:
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,
@@ -364,38 +381,74 @@ class CrashTriggerAgent:
         env['LLVM_PROFILE_FILE'] = profraw_path 
 
         # Execute the command
+        # Use process group to ensure all child processes can be properly killed on timeout
         self.logger.info(f"  [CrashTriggerAgent] Executing command: {command}")
+        process = None
         try:
-            # Use subprocess to execute the command, set timeout to avoid hang
-            result = subprocess.run(
+            # Use Popen with start_new_session to create a new process group
+            # This ensures we can kill all child processes on timeout
+            process = subprocess.Popen(
                 command,
                 shell=True,
                 cwd=round_dir,
-                env=env, # Specify environment with LLVM_PROFILE_FILE
-                capture_output=True,
+                env=env,  # Specify environment with LLVM_PROFILE_FILE
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=30,  # 30 seconds timeout
+                start_new_session=True,      # Create new process group to avoid orphan processes
                 preexec_fn=set_memory_limit  # Apply memory limit to subprocess
             )
-            exit_code = result.returncode
-            stdout = result.stdout
-            stderr = result.stderr
+            stdout, stderr = process.communicate(timeout=30)
+            exit_code = process.returncode
             # Merge stdout and stderr as exec_output
             exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
             # Show the current round directory contents.
             _, output = list_directory(round_dir)
             self.logger.debug(f"  [CrashTriggerAgent] ls -lh {round_dir}:\n{output}")
-        except subprocess.TimeoutExpired as e:
-            self.logger.warning(f"  [CrashTriggerAgent] Command execution timeout after 30s")
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"  [CrashTriggerAgent] Command execution timeout after 30s, killing process group...")
             exit_code = -1
-            # Handle stdout/stderr that may be bytes or None
-            stdout_str = (e.stdout.decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or ''))
-            stderr_str = (e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or ''))
-            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{stdout_str}\n\n[STDERR]\n{stderr_str}"
+            partial_stdout, partial_stderr = "", ""
+            if process is not None:
+                # Kill the entire process group first to release pipe write ends
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=2)  # Give it 2 seconds to terminate gracefully
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)  # Force kill if still alive
+                        process.wait()
+                except (ProcessLookupError, OSError):
+                    pass  # Process already terminated
+                # Now read any remaining output from pipes (safe after process termination)
+                try:
+                    if process.stdout:
+                        partial_stdout = process.stdout.read() or ""
+                    if process.stderr:
+                        partial_stderr = process.stderr.read() or ""
+                except Exception:
+                    pass  # Ignore read errors
+            exec_output = f"[TIMEOUT] Command execution exceeded 30 seconds\n[STDOUT]\n{partial_stdout}\n[STDERR]\n{partial_stderr}"
         except Exception as e:
             self.logger.error(f"  [CrashTriggerAgent] Command execution failed: {e}")
             exit_code = -1
             exec_output = f"[ERROR] Command execution failed: {str(e)}"
+            # Ensure process is cleaned up on any exception
+            if process is not None and process.poll() is None:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                    process.wait()
+                except (ProcessLookupError, OSError):
+                    pass
+        finally:
+            # Explicitly close pipes to prevent resource leaks
+            if process is not None:
+                if process.stdout:
+                    process.stdout.close()
+                if process.stderr:
+                    process.stderr.close()
 
         # After execution finished, convert the profraw to profdata, and update the file path.
         if os.path.exists(profraw_path):

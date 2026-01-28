@@ -1,5 +1,6 @@
 import os
 import resource
+import signal
 import subprocess
 from pathlib import Path
 from typing import Tuple
@@ -266,26 +267,50 @@ def set_memory_limit(): # For subprocesses.run
 
 def execute_command(command: str, env: dict = None) -> Tuple[int, str]:
     # Execute a shell command and return exit code and output (stdout + stderr)
+    # Use process group to ensure all child processes can be properly killed on timeout
     if env is None:
         env = os.environ.copy()
+    process = None
     try:
-        result = subprocess.run(
+        # Use Popen with start_new_session to create a new process group
+        # This ensures we can kill all child processes on timeout
+        process = subprocess.Popen(
             command,
             shell=True,
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=30,
+            start_new_session=True,  # Create new process group to avoid orphan processes
             # preexec_fn=set_memory_limit # When running sanitizer-instrumented binaries, memory limit may cause issues!
         )
-        exit_code = result.returncode
-        stdout = result.stdout
-        stderr = result.stderr
+        stdout, stderr = process.communicate(timeout=30)
+        exit_code = process.returncode
         exec_output = f"[STDOUT]\n{stdout}\n[STDERR]\n{stderr}"
         return exit_code, exec_output
     except subprocess.TimeoutExpired:
+        # Kill the entire process group to avoid orphan processes
+        if process is not None:
+            try:
+                pgid = os.getpgid(process.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=2)  # Give it 2 seconds to terminate gracefully
+                except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGKILL)  # Force kill if still alive
+                    process.wait()
+            except (ProcessLookupError, OSError):
+                pass  # Process already terminated
         return -1, "[ERROR] Command execution timed out."
     except Exception as e:
+        # Ensure process is cleaned up on any exception
+        if process is not None and process.poll() is None:
+            try:
+                pgid = os.getpgid(process.pid)
+                os.killpg(pgid, signal.SIGKILL)
+                process.wait()
+            except (ProcessLookupError, OSError):
+                pass
         return -1, f"[ERROR] Command execution failed: {str(e)}"
     
 def list_directory(path: str) -> Tuple[int, str]:
