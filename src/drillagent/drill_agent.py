@@ -116,9 +116,9 @@ class DrillAgent:
         # Initialize basic agent tools for LLM
         try:
             self.basic_tools = [
-                ReadFileTool(self.config.target_repo_path),
-                WriteFileTool(self.config.target_repo_path),
-                BashTool(self.config.target_repo_path),
+                ReadFileTool(self.config.target_repo_path),  # If LLM returns tool call with relative file_path, it is relative to target_repo_path!
+                WriteFileTool(self.config.target_repo_path), # If LLM returns tool call with relative file_path, it is relative to target_repo_path!
+                BashTool(self.config.target_repo_path),      # If LLM doesn't specify working_dir, it is relative to target_repo_path!
                 FinishTool()
             ]
             self.logger.info(f"✓ Agent basic tools initialized: {len(self.basic_tools)} tools available")

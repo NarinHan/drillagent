@@ -460,11 +460,30 @@ class WriteFileTool(AgentTool):
             code_repo_path: Absolute path to the repository root
         """
         self.code_repo_path = Path(code_repo_path).resolve()
+        # basic_dir is the base directory for resolving relative paths.
+        # By default, it equals code_repo_path, but can be updated via update_basic_dir().
+        self.basic_dir = self.code_repo_path
 
         if not self.code_repo_path.exists():
             raise ValueError(f"Repository path does not exist: {code_repo_path}")
         if not self.code_repo_path.is_dir():
             raise ValueError(f"Repository path is not a directory: {code_repo_path}")
+
+    def update_basic_dir(self, new_basic_dir: str) -> None:
+        """
+        Update the basic directory for resolving relative file paths.
+
+        Args:
+            new_basic_dir: New base directory path (can be relative or absolute).
+                           If relative, it will be resolved relative to code_repo_path.
+        """
+        if os.path.isabs(new_basic_dir):
+            self.basic_dir = Path(new_basic_dir).resolve()
+        else:
+            self.basic_dir = (self.code_repo_path / new_basic_dir).resolve()
+
+        # Ensure the new basic_dir exists (create if necessary)
+        self.basic_dir.mkdir(parents=True, exist_ok=True)
 
     def name(self) -> str:
         return "write_file"
@@ -472,7 +491,7 @@ class WriteFileTool(AgentTool):
     def description(self) -> str:
         return (
             "Write content to a file in text mode or hex mode with different write strategies. "
-            "Supports both relative paths (from code repository root) and absolute paths (any location on the system). "
+            "Supports both relative paths (from current working directory) and absolute paths (any location on the system). "
             "\n\n"
             "IMPORTANT: Both 'file_path' and 'content' parameters are REQUIRED. You must provide both parameters when calling this tool."
             "\n\n"
@@ -507,8 +526,9 @@ class WriteFileTool(AgentTool):
                 "type": "string",
                 "description": (
                     "Path to the file. Can be either: "
-                    "1) Relative path from code repository root (e.g., 'output.txt', 'data/result.bin'), or "
-                    "2) Absolute path to any location on the system (e.g., '/tmp/poc.bin', '/var/data/output.txt')"
+                    "1) Relative path from current working directory (e.g., 'output.txt', 'testcase.bin'), or "
+                    "2) Absolute path to any location on the system (e.g., '/tmp/poc.bin', '/var/data/output.txt'). "
+                    "Prefer using relative paths or the absolute path provided in the task prompt."
                 ),
                 "required": True
             },
@@ -586,8 +606,8 @@ class WriteFileTool(AgentTool):
                 # Absolute path: use as-is
                 full_path = Path(file_path)
             else:
-                # Relative path: resolve relative to code_repo_path
-                full_path = self.code_repo_path / file_path
+                # Relative path: resolve relative to basic_dir (which defaults to code_repo_path)
+                full_path = self.basic_dir / file_path
 
             # Ensure parent directory exists
             full_path.parent.mkdir(parents=True, exist_ok=True)

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
     from drillagent.tools.basic_tools import AgentTool
 
+from drillagent.tools.basic_tools import WriteFileTool
 from drillagent.prompts.CrashTriggerAgent_prompt import (
     CTA_system_prompt,
     CTA_useful_testcase_and_cov_template,
@@ -116,6 +117,8 @@ class CrashTriggerAgent:
                         self.logger.info(f"  [CrashTriggerAgent] *** Variant PoV found from path exploration phase! Crash: {cur_crash_type} (expect {self.drill_agent.gt_crash_type}) ***")
                         self._record_variant_pov(PEA_pov_data, crash_pov_path)
                         self.logger.info("  [CrashTriggerAgent] Proceeding with crash triggering attempts to craft target-type PoV...")
+                        # Heuristic: Since we have a variant PoV, we reduce the max_trigger_iterations to speed up.
+                        self.max_trigger_iterations = max(1, self.max_trigger_iterations // 2)
                 else:
                     self.logger.info("  [CrashTriggerAgent] Crash input from path exploration failed to pass validation. Proceeding with crash triggering attempts...")
             else:
@@ -291,6 +294,14 @@ class CrashTriggerAgent:
 
         # For crash triggering, we also provide ast-grep and coverage tools.
         self.logger.info(f"  [CrashTriggerAgent] Using LLMInterface to generate final PoV candidate (max rounds={self.max_generation_turns})...")
+
+        # Update WriteFileTool's basic_dir to current round_dir before running agent loop
+        for tool in self.tools_for_generation:
+            if isinstance(tool, WriteFileTool):
+                tool.update_basic_dir(round_dir)
+                self.logger.debug(f"  [CrashTriggerAgent] Updated WriteFileTool basic_dir to: {round_dir}")
+                break
+
         try:
             result = self.drill_agent.basic_llm.run_agent_loop(
                 task=user_prompt,

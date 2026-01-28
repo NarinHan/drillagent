@@ -124,6 +124,7 @@ Actual repository path: {actual_repo_path}
      - Use `struct` module for binary packing, handle magic headers, checksums, etc.
    - Step 2: Execute the script using `execute_bash` tool
      - Example: `execute_bash(command="python3 /path/to/gen_testcase_round1.py")`
+     - **IMPORTANT**: Set `working_dir` parameter to the current round directory path so the script can find/write files correctly
    - The script should generate the binary testcase file at the TARGET TEST CASE FILE PATH
 
 5. **Explain your approach** (briefly):

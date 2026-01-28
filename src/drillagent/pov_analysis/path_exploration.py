@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from drillagent.drill_agent import DrillAgent
     from drillagent.tools.basic_tools import AgentTool
 
+from drillagent.tools.basic_tools import WriteFileTool
+
 from drillagent.prompts.PathExplorationAgent_prompt import (
     PEA_system_prompt,
     PEA_testcase_generation_prompt,
@@ -258,6 +260,14 @@ class PathExplorationAgent:
 
         # Substep 2: Use LLMInterface for automatic tool calling and conversation management
         self.logger.info(f"  [PathExplorationAgent] Using LLMInterface to generate test case (max rounds={self.max_generation_turns})...")
+
+        # Update WriteFileTool's basic_dir to current round_dir before running agent loop
+        for tool in self.tools_for_generation:
+            if isinstance(tool, WriteFileTool):
+                tool.update_basic_dir(round_dir)
+                self.logger.debug(f"  [PathExplorationAgent] Updated WriteFileTool basic_dir to: {round_dir}")
+                break
+
         try:
             # FIXED: We should not use cheaper model here, gpt-5-mini prefers to invoke only one tool call each time...
             result = self.drill_agent.basic_llm.run_agent_loop(
