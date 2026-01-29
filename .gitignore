@@ -13,7 +13,9 @@ workspace-sonnet/
 eval/
 gt_povs/
 success_povs/
+testcase-*
 tmp*
+fuzz_out
 
 # For debug
 src/drillagent/scripts/lhy_*
