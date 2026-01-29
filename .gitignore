@@ -1,7 +1,6 @@
 # Customized Items
 .env
 .claude/
-logs/
 cache/
 output/
 output-gpt/
@@ -107,6 +106,10 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+
+# Exception the logs (added by jet)
+!logs/
+!logs/*.log
 
 # Flask stuff:
 instance/
