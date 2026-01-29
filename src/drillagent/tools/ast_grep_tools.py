@@ -498,7 +498,7 @@ class AstGrepPatternSearchTool(AgentTool):
         self.manager = AstGrepManager(str(self.repo_path), ast_grep_path)
 
     def name(self) -> str:
-        return "ast_grep_pattern_search"
+        return "ast_grep_search_pattern"
 
     def description(self) -> str:
         return (

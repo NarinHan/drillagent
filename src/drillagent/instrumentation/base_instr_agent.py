@@ -318,7 +318,7 @@ class BaseInstrAgent:
             response = self.drill_agent.basic_llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                temperature=0.2,
+                temperature=0.1,
                 max_tokens=2048
             )
 

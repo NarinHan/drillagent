@@ -402,10 +402,10 @@ class RawSecbTaskLoader:
             "imagemagick.cve-2018-5246",
             "imagemagick.cve-2018-5247",
             "imagemagick.cve-2018-5248",
-            "imagemagick.cve-2019-13297",
-            "imagemagick.cve-2019-13301",
-            "imagemagick.cve-2019-13303",
-            "imagemagick.cve-2019-13306",
+            "imagemagick.cve-2019-13297",##
+            "imagemagick.cve-2019-13301",##
+            "imagemagick.cve-2019-13303",##
+            "imagemagick.cve-2019-13306",##
             "liblouis.cve-2023-26768",
             "libmodbus.cve-2022-0367",
             "libplist.cve-2017-5545",
@@ -448,8 +448,8 @@ class RawSecbTaskLoader:
             "imagemagick.cve-2017-14400",
             "imagemagick.cve-2017-18022",
             "imagemagick.cve-2018-5246",
-            "imagemagick.cve-2019-13306",
-            "imagemagick.cve-2019-13309",
+            "imagemagick.cve-2019-13306",##
+            "imagemagick.cve-2019-13309",##
             "imagemagick.cve-2022-48541",
             "libplist.cve-2017-5545",
             "libredwg.cve-2021-28237",

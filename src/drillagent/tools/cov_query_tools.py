@@ -31,13 +31,14 @@ class FunctionCovTool(AgentTool):
 
         # Strictly limited whitelist for coverage-related commands
         self.allowed_commands = {
-            'llvm-cov',   # Primary coverage tool
-            'cat',        # Read file contents
-            'head',       # Read first N lines
-            'tail',       # Read last N lines
-            'grep',       # Search/filter output
-            'wc',         # Count lines/words/bytes
-            'strings',    # Extract printable strings
+            'llvm-cov',      # Primary coverage tool
+            'llvm-profdata', # Profile data inspection tool
+            'cat',           # Read file contents
+            'head',          # Read first N lines
+            'tail',          # Read last N lines
+            'grep',          # Search/filter output
+            'wc',            # Count lines/words/bytes
+            'strings',       # Extract printable strings
         }
 
         # Timeout for command execution (seconds)
@@ -90,6 +91,10 @@ class FunctionCovTool(AgentTool):
             "  - '0|' means the line was NOT executed (uncovered)\n"
             "  - 'N|' (N>0) means the line was executed N times\n"
             "\n"
+            "LLVM-PROFDATA USAGE:\n"
+            "Use `llvm-profdata show <profdata_file>` to inspect profdata metadata (e.g., validate the file, check function count).\n"
+            "  Add --all-functions to list all recorded functions.\n"
+            "\n"
             "OUTPUT LIMIT:\n"
             f"Output is limited to {self.max_output_lines} lines. Use filters (grep, head, tail) if needed.\n"
             "If the output is truncated due to length limit, use the read_file tool to read the truncated content directly.\n"
@@ -106,7 +111,7 @@ class FunctionCovTool(AgentTool):
                 "type": "string",
                 "description": (
                     "The coverage query command to execute. "
-                    "MUST start with 'llvm-cov' (e.g., 'llvm-cov show ...'). "
+                    "MUST start with 'llvm-cov' or 'llvm-profdata' (e.g., 'llvm-cov show ...', 'llvm-profdata show ...'). "
                     f"You can pipe the output to text processing commands: {pipe_commands}. "
                     "Example: 'llvm-cov show /path/to/bin -instr-profile=cov.profdata | grep func_name'"
                 ),
@@ -195,16 +200,17 @@ class FunctionCovTool(AgentTool):
             # Extract base command (first token)
             base_command = tokens[0]
 
-            # Step 3: Validate that command starts with llvm-cov
-            if base_command != 'llvm-cov':
+            # Step 3: Validate that command starts with an allowed primary command
+            allowed_primary = {'llvm-cov', 'llvm-profdata'}
+            if base_command not in allowed_primary:
                 return {
                     "success": False,
                     "error": (
-                        f"Command must start with 'llvm-cov', got '{base_command}'. "
+                        f"Command must start with one of {sorted(allowed_primary)}, got '{base_command}'. "
                         f"Example: llvm-cov show <binary> -instr-profile=<profdata> [| grep/head/tail ...]"
                     ),
                     "command": command,
-                    "blocked_reason": "must_start_with_llvm_cov"
+                    "blocked_reason": "must_start_with_allowed_primary"
                 }
 
             # Step 4: Execute command

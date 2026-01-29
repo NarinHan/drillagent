@@ -10,8 +10,17 @@ or the older format:
 
 import argparse
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
+
+# Import RawSecbTaskLoader directly to avoid pulling in the full drillagent package
+import importlib.util
+_sec_bench_path = str(Path(__file__).parent.parent / "src" / "drillagent" / "task_loader" / "sec_bench.py")
+_spec = importlib.util.spec_from_file_location("sec_bench", _sec_bench_path)
+_sec_bench = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_sec_bench)
+RawSecbTaskLoader = _sec_bench.RawSecbTaskLoader
 
 
 def find_final_pov_files(task_dir: Path) -> list[Path]:
@@ -53,9 +62,10 @@ def analyze_output_dir(output_dir: Path) -> dict:
             - total_tasks: int
     """
     results = {
-        "successful_tasks": [],
+        "direct_success_tasks": [],    # only final-pov, no variant-pov
+        "indirect_success_tasks": [],  # both final-pov and variant-pov
+        "newfind_tasks": [],           # only variant-pov, no final-pov
         "failed_tasks": [],
-        "newfind_tasks": [],
         "total_tasks": 0,
     }
 
@@ -70,95 +80,129 @@ def analyze_output_dir(output_dir: Path) -> dict:
     for task_dir in task_dirs:
         task_name = task_dir.name
         pov_files = find_final_pov_files(task_dir)
+        variant_files = find_variant_pov_files(task_dir)
 
-        if pov_files:
-            # Find the latest POV file by modification time
+        has_final = len(pov_files) > 0
+        has_variant = len(variant_files) > 0
+
+        if has_final and has_variant:
+            # Indirect Success: both final-pov and variant-pov
             latest_pov = max(pov_files, key=lambda f: f.stat().st_mtime)
             mtime = get_file_mtime(latest_pov)
-
-            results["successful_tasks"].append({
+            results["indirect_success_tasks"].append({
+                "task_name": task_name,
+                "pov_path": str(latest_pov.resolve()),
+                "created_time": mtime.strftime("%Y-%m-%d %H:%M:%S"),
+                "variant_count": len(variant_files),
+            })
+        elif has_final:
+            # Direct Success: only final-pov
+            latest_pov = max(pov_files, key=lambda f: f.stat().st_mtime)
+            mtime = get_file_mtime(latest_pov)
+            results["direct_success_tasks"].append({
                 "task_name": task_name,
                 "pov_path": str(latest_pov.resolve()),
                 "created_time": mtime.strftime("%Y-%m-%d %H:%M:%S"),
             })
+        elif has_variant:
+            # New Find: only variant-pov
+            latest_variant = max(variant_files, key=lambda f: f.stat().st_mtime)
+            mtime = get_file_mtime(latest_variant)
+            results["newfind_tasks"].append({
+                "task_name": task_name,
+                "pov_path": str(latest_variant.resolve()),
+                "created_time": mtime.strftime("%Y-%m-%d %H:%M:%S"),
+                "variant_count": len(variant_files),
+            })
         else:
-            # Check for variant-pov files (newfind)
-            variant_files = find_variant_pov_files(task_dir)
-            if variant_files:
-                latest_variant = max(variant_files, key=lambda f: f.stat().st_mtime)
-                mtime = get_file_mtime(latest_variant)
-
-                results["newfind_tasks"].append({
-                    "task_name": task_name,
-                    "pov_path": str(latest_variant.resolve()),
-                    "created_time": mtime.strftime("%Y-%m-%d %H:%M:%S"),
-                    "variant_count": len(variant_files),
-                })
-            else:
-                results["failed_tasks"].append(task_name)
+            results["failed_tasks"].append(task_name)
 
     return results
 
 
+def load_united_solved_task_ids() -> set:
+    """Load the united solved task IDs from SEC-bench."""
+    try:
+        dataset_path = Path(__file__).parent.parent / "datasets" / "sec-bench" / "CVE-instances"
+        loader = RawSecbTaskLoader(dataset_path=str(dataset_path))
+        loader.load_cve_tasks()
+        united = loader.get_united_solved_tasks()
+        return set(united.keys())
+    except Exception as e:
+        print(f"[!] Warning: Could not load united solved tasks: {e}")
+        return set()
+
+
 def print_results(results: dict):
     """Print the analysis results."""
-    successful = results["successful_tasks"]
-    failed = results["failed_tasks"]
+    direct = results["direct_success_tasks"]
+    indirect = results["indirect_success_tasks"]
     newfind = results["newfind_tasks"]
+    failed = results["failed_tasks"]
     total = results["total_tasks"]
+
+    united_solved_ids = load_united_solved_task_ids()
 
     print("=" * 80)
     print("TASK RESULTS SUMMARY")
     print("=" * 80)
-    print(f"Total tasks: {total}")
-    print(f"Successful:  {len(successful)}")
-    print(f"Newfind:     {len(newfind)}")
-    # print(f"Failed:      {len(failed)}")
-    # print(f"Success rate: {len(successful) / total * 100:.1f}%" if total > 0 else "N/A")
+    print(f"Total tasks:      {total}")
+    print(f"Direct Success:   {len(direct)}  (only final-pov)")
+    print(f"Indirect Success: {len(indirect)}  (final-pov + variant-pov)")
+    print(f"New Find:         {len(newfind)}  (only variant-pov)")
     print()
 
-    successful_tasks_str = ""
-    if successful:
+    direct_tasks_str = ""
+    if direct:
         print("-" * 80)
-        print("SUCCESSFUL TASKS:")
+        print("DIRECT SUCCESS TASKS (only final-pov):")
         print("-" * 80)
-        for task in successful:
-            print(f"Task: {task['task_name']}")
+        for task in direct:
+            task_label = "Task" if task['task_name'] in united_solved_ids else "Task*"
+            print(f"{task_label}: {task['task_name']}")
             print(f"  POV file: {task['pov_path']}")
             print(f"  Created:  {task['created_time']}")
             print()
-            successful_tasks_str += f"{task['task_name']},"
+            direct_tasks_str += f"{task['task_name']}\n"
 
-    newfind_tasks_str = ""
-    if newfind:
+    indirect_tasks_str = ""
+    if indirect:
         print("-" * 80)
-        print("NEWFIND TASKS (variant-pov):")
+        print("INDIRECT SUCCESS TASKS (final-pov + variant-pov):")
         print("-" * 80)
-        for task in newfind:
-            print(f"Task: {task['task_name']}")
+        for task in indirect:
+            task_label = "Task" if task['task_name'] in united_solved_ids else "Task*"
+            print(f"{task_label}: {task['task_name']}")
             print(f"  POV file: {task['pov_path']}")
             print(f"  Created:  {task['created_time']}")
             print(f"  Variants: {task['variant_count']}")
             print()
-            newfind_tasks_str += f"{task['task_name']},"
+            indirect_tasks_str += f"{task['task_name']}\n"
+
+    newfind_tasks_str = ""
+    if newfind:
+        print("-" * 80)
+        print("NEW FIND TASKS (only variant-pov):")
+        print("-" * 80)
+        for task in newfind:
+            task_label = "Task" if task['task_name'] in united_solved_ids else "Task*"
+            print(f"{task_label}: {task['task_name']}")
+            print(f"  POV file: {task['pov_path']}")
+            print(f"  Created:  {task['created_time']}")
+            print(f"  Variants: {task['variant_count']}")
+            print()
+            newfind_tasks_str += f"{task['task_name']}\n"
 
     failed_tasks_str = ""
     if failed:
         for task_name in failed:
-            failed_tasks_str += f"{task_name},"
-
-    # if failed:
-    #     print()
-    #     print("-" * 80)
-    #     print("FAILED TASKS:")
-    #     print("-" * 80)
-    #     for task_name in failed:
-    #         print(f"  - {task_name}")
+            failed_tasks_str += f"{task_name}\n"
 
     print()
-    print("All successful tasks: " + successful_tasks_str + "\n")
-    print("All newfind tasks: " + newfind_tasks_str + "\n")
-    print("All failed tasks: " + failed_tasks_str)
+    print("All Direct Success tasks:\n" + direct_tasks_str)
+    print("All Indirect Success tasks:\n" + indirect_tasks_str)
+    print("All New Find tasks:\n" + newfind_tasks_str)
+    print("All failed tasks:\n" + failed_tasks_str)
     print("=" * 80)
 
 

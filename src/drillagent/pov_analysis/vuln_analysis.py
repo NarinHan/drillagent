@@ -515,7 +515,7 @@ class VulnAnalysisAgent:
                 tools=self.basic_tools,
                 system_prompt=VAA_system_prompt,
                 max_iterations=4,
-                temperature=0.2,
+                temperature=0.1,
                 max_tokens=4096,
                 continuation_prompt="Please continue exploring the repository and provide the final JSON output with the refined harness command."
             )
