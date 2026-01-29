@@ -1,0 +1,12 @@
+exiv2.cve-2018-19607
+gpac.cve-2021-32439
+gpac.cve-2023-4682
+gpac.cve-2023-4721
+imagemagick.cve-2019-13301
+libarchive.cve-2017-14503
+libredwg.cve-2020-21817
+libredwg.cve-2020-23861
+md4c.cve-2020-26148
+mruby.cve-2022-0326
+openjpeg.cve-2016-7445
+wabt.cve-2022-43282
