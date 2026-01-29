@@ -235,13 +235,27 @@ def print_statistics(task_dir: Path) -> Dict[str, Any]:
     print("\n[2] Time Overhead")
     time_data = load_time_overhead(task_dir)
     total_time = None
+    # Fixed display order for time phases
+    time_phase_order = [
+        "phase_vulnerability_analysis",
+        "phase_code_instrumentation",
+        "phase_path_exploration",
+        "phase_crash_triggering",
+    ]
     if time_data:
         total_time = 0.0
+        for phase in time_phase_order:
+            if phase in time_data:
+                seconds = time_data[phase]
+                total_time += seconds
+                phase_display = phase.replace("phase_", "").replace("_", " ").title()
+                print(f"  - {phase_display:25s}: {format_duration(seconds)}")
+        # Include any phases not in the predefined order
         for phase, seconds in time_data.items():
-            total_time += seconds
-            # Convert phase name to readable format
-            phase_display = phase.replace("phase_", "").replace("_", " ").title()
-            print(f"  - {phase_display:25s}: {format_duration(seconds)}")
+            if phase not in time_phase_order:
+                total_time += seconds
+                phase_display = phase.replace("phase_", "").replace("_", " ").title()
+                print(f"  - {phase_display:25s}: {format_duration(seconds)}")
         print(f"  Total: {format_duration(total_time)}")
     else:
         print("  No time_overhead.json found")
@@ -343,7 +357,15 @@ def print_aggregated_averages(all_stats: List[Dict[str, Any]]) -> None:
     # Print time averages
     print("[Time Overhead Averages]")
     if time_totals:
-        for phase in sorted(phase_times.keys()):
+        time_phase_order = [
+            "phase_vulnerability_analysis",
+            "phase_code_instrumentation",
+            "phase_path_exploration",
+            "phase_crash_triggering",
+        ]
+        ordered_phases = [p for p in time_phase_order if p in phase_times]
+        ordered_phases += [p for p in phase_times if p not in time_phase_order]
+        for phase in ordered_phases:
             times = phase_times[phase]
             avg_time = sum(times) / len(times)
             phase_display = phase.replace("phase_", "").replace("_", " ").title()
@@ -366,7 +388,18 @@ def print_aggregated_averages(all_stats: List[Dict[str, Any]]) -> None:
                 avg_output = sum(output_toks) / len(output_toks)
                 print(f"  Avg {phase}: input={avg_input:,.0f}, output={avg_output:,.0f}, cost=${avg_cost:.4f} (n={len(costs)})")
         avg_total_cost = sum(cost_totals) / len(cost_totals)
-        print(f"  Avg Total Cost/Task: ${avg_total_cost:.4f} (n={len(cost_totals)})")
+        # Compute average total input/output tokens across all phases
+        total_input_toks = []
+        total_output_toks = []
+        for s in all_stats:
+            if s["tokens_data"]:
+                task_input = sum(s["tokens_data"][p].get("input_tokens", 0) for p in ["VAA", "PEA", "CTA"] if p in s["tokens_data"])
+                task_output = sum(s["tokens_data"][p].get("output_tokens", 0) for p in ["VAA", "PEA", "CTA"] if p in s["tokens_data"])
+                total_input_toks.append(task_input)
+                total_output_toks.append(task_output)
+        avg_input_total = sum(total_input_toks) / len(total_input_toks) if total_input_toks else 0
+        avg_output_total = sum(total_output_toks) / len(total_output_toks) if total_output_toks else 0
+        print(f"  Avg Total Cost/Task: input={avg_input_total:,.0f}, output={avg_output_total:,.0f}, cost=${avg_total_cost:.4f} (n={len(cost_totals)})")
     else:
         print("  No cost data available")
 
@@ -383,8 +416,24 @@ def main():
         default=None,
         help="Path to the task output directory (default: ../output/ relative to script)",
     )
+    parser.add_argument(
+        "--task-scope",
+        default=None,
+        help="Path to a file containing task IDs (one per line) to limit statistics scope.",
+    )
 
     args = parser.parse_args()
+
+    # Load task scope if provided
+    task_scope = None
+    if args.task_scope:
+        scope_path = Path(args.task_scope)
+        if not scope_path.exists():
+            print(f"Error: Task scope file '{scope_path}' does not exist.")
+            return
+        with open(scope_path, "r", encoding="utf-8") as f:
+            task_scope = set(line.strip() for line in f if line.strip())
+        print(f"Task scope: {len(task_scope)} tasks loaded from {scope_path}")
 
     if args.output_dir:
         output_dir = Path(args.output_dir)
@@ -409,6 +458,8 @@ def main():
     else:
         # This is a parent directory containing multiple task directories
         task_dirs = sorted([d for d in output_dir.iterdir() if d.is_dir()])
+        if task_scope is not None:
+            task_dirs = [d for d in task_dirs if d.name in task_scope]
         if not task_dirs:
             print(f"No task directories found in '{output_dir}'")
             return
@@ -437,3 +488,6 @@ if __name__ == "__main__":
 
 #   # Use default (../output/ relative to script)
 #   python3 scripts/collect_result_statistics.py
+#
+#   # Analyze only tasks listed in a scope file
+#   python3 scripts/collect_result_statistics.py output/ --task-scope src/drillagent/task_loader/oh-subset.txt
