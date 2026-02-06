@@ -292,6 +292,8 @@ def print_statistics(task_dir: Path) -> Dict[str, Any]:
         llm_stats = analyze_llm_history(history_data)
         print(f"  Agent loops:       {llm_stats['agent_loop_by_phase']}")
         print(f"  LLM interactions:  {llm_stats['llm_interaction_by_phase']}")
+        total_llm_interactions = sum(llm_stats['llm_interaction_by_phase'])
+        print(f"  Total LLM interactions: {total_llm_interactions}")
         print(f"  Total tool calls:  {llm_stats['total_tool_calls']}")
 
         if llm_stats["tool_call_counts"]:
@@ -402,6 +404,36 @@ def print_aggregated_averages(all_stats: List[Dict[str, Any]]) -> None:
         print(f"  Avg Total Cost/Task: input={avg_input_total:,.0f}, output={avg_output_total:,.0f}, cost=${avg_total_cost:.4f} (n={len(cost_totals)})")
     else:
         print("  No cost data available")
+
+    # Print tool call averages
+    print("\n[Tool Call Averages]")
+    tool_call_totals = []
+    llm_interaction_totals = []
+    tool_call_by_name: Dict[str, List[int]] = {}
+    for s in all_stats:
+        if s["llm_stats"] is not None:
+            tool_call_totals.append(s["llm_stats"]["total_tool_calls"])
+            llm_interaction_totals.append(sum(s["llm_stats"]["llm_interaction_by_phase"]))
+            for tool_name, count in s["llm_stats"]["tool_call_counts"].items():
+                if tool_name not in tool_call_by_name:
+                    tool_call_by_name[tool_name] = []
+                tool_call_by_name[tool_name].append(count)
+
+    if tool_call_totals:
+        avg_llm_interactions = sum(llm_interaction_totals) / len(llm_interaction_totals)
+        print(f"  Avg LLM Interactions/Task: {avg_llm_interactions:.1f} (n={len(llm_interaction_totals)})")
+        avg_total_tool_calls = sum(tool_call_totals) / len(tool_call_totals)
+        print(f"  Avg Total Tool Calls/Task: {avg_total_tool_calls:.1f} (n={len(tool_call_totals)})")
+        # Sort by average count descending
+        tool_averages = []
+        for tool_name, counts in tool_call_by_name.items():
+            avg_count = sum(counts) / len(tool_call_totals)  # Divide by total tasks for true average
+            tool_averages.append((tool_name, avg_count, len(counts)))
+        tool_averages.sort(key=lambda x: x[1], reverse=True)
+        for tool_name, avg_count, task_count in tool_averages:
+            print(f"    {tool_name:20s}: {avg_count:.1f} (n={task_count})")
+    else:
+        print("  No tool call data available")
 
     print("=" * 70)
 
