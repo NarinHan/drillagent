@@ -1,5 +1,6 @@
 # DrillAgent
 
+> 📄 This `arxiv` branch holds the code accompanying our paper: **[DrillAgent (arXiv)](https://arxiv.org/pdf/2602.13574)**. For the latest development, see the [`main-dev`](https://github.com/learjet5/DrillAgent/tree/main-dev) branch. Paper result data lives in [`datasets/sec-bench/eval-results/`](datasets/sec-bench/eval-results/).
 
 ## About
 
