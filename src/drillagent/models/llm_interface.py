@@ -947,6 +947,8 @@ class LLMInterface:
         unsupported_models = [
             "gpt-5-mini",
             "gpt-5-mini-2025-08-07",
+            "gpt-5-2025-08-07",
+            "gpt-6-luna",
             "o3-2025-04-16",
             "o4-mini-2025-04-16",
             # Add more models here as needed
