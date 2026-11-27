@@ -937,6 +937,7 @@ class LLMInterface:
         # Models containing these keywords don't support custom temperature
         unsupported_keywords = [
             "chat-latest",  # e.g., gpt-4.1-chat-latest only supports temperature=1
+            "gpt-5",        # whole GPT-5 family (gpt-5, -mini, -nano, dated snapshots) only supports temperature=1
         ]
         for keyword in unsupported_keywords:
             if keyword in model_name_lower:

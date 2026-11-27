@@ -256,3 +256,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 src/instrumentation/
+
+# macOS
+.DS_Store
